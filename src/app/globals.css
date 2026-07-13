@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Superfícies */
+  --color-bg: #0e1512;
+  --color-surface: #141b18;
+  --color-surface-2: #1b241f;
+
+  /* Bordas */
+  --color-border: #1f2a25;
+  --color-border-strong: #2e3b34;
+
+  /* Texto */
+  --color-ink: #f2f5f3;
+  --color-muted: #c9d3ce;
+  --color-faint: #7fa394;
+
+  /* Marca / ação */
+  --color-accent: #1f8f5c;
+  --color-accent-hover: #2aa76d;
+  --color-accent-soft: #17352a;
+
+  /* Semântico */
+  --color-success: #3fcb82;
+  --color-success-soft: #133024;
+  --color-danger: #e4574f;
+  --color-danger-soft: #331917;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+@layer components {
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+  }
+
+  .label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-muted);
+    margin-bottom: 6px;
+  }
+
+  .input {
+    width: 100%;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 14px;
+    color: var(--color-ink);
+  }
+  .input::placeholder {
+    color: var(--color-faint);
+  }
+  .input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
+  .btn {
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.15s ease, opacity 0.15s ease;
+  }
+  .btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background: var(--color-accent);
+    color: #ffffff;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--color-ink);
+    border: 1px solid var(--color-border-strong);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--color-surface-2);
+  }
+
+  .error-box {
+    font-size: 13px;
+    color: var(--color-danger);
+    background: var(--color-danger-soft);
+    border: 1px solid var(--color-danger);
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+
+  .success-box {
+    font-size: 13px;
+    color: var(--color-success);
+    background: var(--color-success-soft);
+    border: 1px solid var(--color-success);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+
+  .field-error {
+    font-size: 12px;
+    color: var(--color-danger);
+    margin-top: 4px;
+  }
+}
