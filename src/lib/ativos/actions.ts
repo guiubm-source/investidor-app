@@ -84,7 +84,7 @@ type TransacaoCalc = {
  * bolsa no Brasil vão para a B3, cripto para a Binance, internacional para a
  * Nasdaq (o usuário pode corrigir a bolsa exata na página do ativo).
  */
-export function deriveTradingViewSymbol(tipo: TipoAtivo, ticker: string): string {
+function deriveTradingViewSymbol(tipo: TipoAtivo, ticker: string): string {
   const t = ticker.toUpperCase();
   switch (tipo) {
     case "acao":
