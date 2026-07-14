@@ -199,15 +199,15 @@ src/
       indicadores/              Selic, IPCA, Dólar, Fluxo estrangeiro (dado compartilhado) + Visão Geral
       imposto-renda/            relatório de IR (mensal + resumo anual) por categoria de ativo
       alocacao/                 árvore de desvio (classe > setor > ativo)
-      configuracoes/            dados pessoais, senha, suitability vigente, diretoria do Bacen e presidentes do Brasil (cadastros de referência)
+      configuracoes/            dados pessoais, senha, suitability vigente, diretoria do Bacen, presidentes do Brasil, pesos do IPCA e metas de inflação (cadastros de referência)
   components/                   Sidebar, TradingViewChart, suitability/*
   lib/
     ativos/       actions.ts (motor de posição/desvio), schema.ts (Zod)
     alocacao/     actions.ts (estrutura-alvo), constants.ts, schema.ts
     carteira/     actions.ts (livro-razão de compra/venda), schema.ts
     proventos/    actions.ts (CRUD + consolidações), schema.ts
-    indicadores/  actions.ts (CRUD + Visão Geral + motor Selic), schema.ts, selic-estatisticas.ts (cálculos puros, sem "use server" — usado no servidor e no gráfico client-side)
-    referencia/   actions.ts + schema.ts — CRUD de bacen_diretoria e brasil_presidentes (sem profile_id), consumido por Configurações (cadastro) e por Indicadores/Selic (filtros de mandato)
+    indicadores/  actions.ts (CRUD + Visão Geral + motores Selic/IPCA), schema.ts, selic-estatisticas.ts, ipca-estatisticas.ts (cálculos puros, sem "use server" — usados no servidor e nos gráficos client-side)
+    referencia/   actions.ts + schema.ts — CRUD de bacen_diretoria, brasil_presidentes, peso_ipca_grupo e meta_inflacao (sem profile_id), consumido por Configurações (cadastro) e por Indicadores/Selic/IPCA (filtros de mandato, pesos, metas)
     ir/           actions.ts (motor de apuração de IR por categoria, mensal + anual, só leitura da Carteira/Ativos)
     suitability/  actions.ts, schema.ts, score.ts
     supabase/     client.ts, server.ts, middleware.ts
@@ -498,6 +498,93 @@ direto pelo componente de gráfico no cliente).
   dados históricos é manual pelo Guilherme (ou por um pedido futuro
   explícito pra eu pesquisar e sugerir os valores) — não estou assumindo os
   nomes/datas sem confirmação.
+
+### 8.8 Decisões tomadas em 2026-07-14 (IPCA avançado + Pesos/Metas)
+
+Guilherme trouxe uma especificação detalhada pra reformular a sub-aba
+**IPCA** dentro de Indicadores, no mesmo espírito da Selic. Decisões de
+escopo confirmadas antes de codar:
+
+1. **Escopo**: implementar a especificação inteira de uma vez (cards,
+   gráfico com múltiplos tipos + heatmap, histórico, importação, Pesos e
+   Metas em Configurações) — não faseado, mesmo padrão de IR/Selic.
+2. **Impacto por grupo**: sempre calculado (`peso vigente × variação do
+   grupo`, metodologia oficial do IBGE), nunca armazenado nem
+   sobrescrevível manualmente. Reforça o princípio já usado em Selic/IR de
+   nunca guardar o que pode ser derivado — descartamos o campo de "impacto
+   oficial informado na importação + divergência" que o documento original
+   sugeria, pra manter schema e importação mais simples.
+3. **Redesenho de schema — tabela única**: o IPCA hoje vive em duas tabelas
+   (`indicador_ipca_mensal` só com o geral, `indicador_ipca_categoria` com
+   um lançamento por grupo). Isso não bate com o formato de importação
+   (uma linha por competência, geral + 9 grupos juntos) nem com o Bloco 3
+   (editar/duplicar/excluir uma competência inteira de uma vez). Redesenho:
+   `indicador_ipca_mensal` ganha as 9 colunas de grupo direto (mesmo padrão
+   de tabela larga usado em `indicador_selic_reunioes`); `indicador_ipca_categoria`
+   é migrada e aposentada (`drop table` depois de copiar os dados).
+4. **Acumulado no ano / 12 meses**: sempre calculado por juros compostos
+   (`((1+i1)×(1+i2)×...×(1+in))−1`) a partir das variações mensais já
+   armazenadas — nunca coluna própria (o schema antigo tinha
+   `acumulado_12m_pct` como campo editável manualmente; isso é removido).
+   Se o histórico carregado tiver menos de 12 meses, o acumulado 12m é
+   calculado sobre os meses disponíveis e a tela sinaliza que não é um
+   12 meses completo.
+5. **Pesos do IPCA** (`Configurações → Pesos do IPCA`): cadastro por grupo
+   com vigência (`peso_ipca_grupo`) — dado compartilhado, sem `profile_id`,
+   mesmo padrão de `bacen_diretoria`. Durante qualquer cálculo de impacto,
+   o sistema busca o peso vigente pra competência analisada (vigência que
+   cobre aquele mês).
+6. **Metas de Inflação** (`Configurações → Metas de Inflação`): cadastro
+   com vigência (`meta_inflacao`) — `meta_central`, `banda_inferior`,
+   `banda_superior` explícitos (não assumimos tolerância simétrica, mesmo
+   o Brasil historicamente usando banda simétrica — mais flexível e não
+   força suposição). Mesmo padrão de dado compartilhado sem `profile_id`.
+   Substitui as constantes hardcoded `META_IPCA_CENTRO`/`META_IPCA_TOLERANCIA`
+   que existiam antes.
+7. **Precisão**: percentuais armazenados com 4 casas decimais internamente
+   (`numeric(8,4)`), exibidos com 2 casas na UI — conforme pedido.
+
+#### Schema planejado (seção 8.8)
+
+- `indicador_ipca_mensal` (redesenhada — tabela já existe, ganha colunas
+  novas e perde `acumulado_12m_pct`): `id`, `ano_mes` (unique), `geral`
+  (variação do índice geral, numeric 8,4), `alimentacao_bebidas`,
+  `habitacao`, `artigos_residencia`, `vestuario`, `transportes`,
+  `saude_cuidados_pessoais`, `despesas_pessoais`, `educacao`,
+  `comunicacao` (variação de cada grupo, numeric 8,4, nullable — pode
+  faltar detalhamento por grupo mesmo com o geral lançado), `data_divulgacao`
+  (date, nullable), `fonte` (text, default `'IBGE'`), `observacoes` (text,
+  nullable).
+- `peso_ipca_grupo` (nova, sem `profile_id`): `id`, `grupo` (mesmo enum dos
+  9 grupos), `peso_pct` (numeric 6,4), `vigencia_inicio` (date),
+  `vigencia_fim` (date, nullable = vigente), `metodologia` (text, ex.
+  "POF 2017/2018").
+- `meta_inflacao` (nova, sem `profile_id`): `id`, `meta_central` (numeric
+  5,2), `banda_inferior` (numeric 5,2), `banda_superior` (numeric 5,2),
+  `vigencia_inicio` (date), `vigencia_fim` (date, nullable = vigente).
+
+RLS: mesmo padrão `auth.role() = 'authenticated'` das outras tabelas de
+Indicadores/Referência.
+
+#### Migração de dado existente
+
+`indicador_ipca_categoria` tem lançamentos reais possivelmente já feitos
+pelo Guilherme. A migração (dentro do próprio `schema.sql`, idempotente)
+copia cada linha de categoria pra coluna correspondente em
+`indicador_ipca_mensal` (fazendo upsert por `ano_mes` — cria a linha em
+`indicador_ipca_mensal` se só existir a categoria e não o geral ainda) e só
+então dropa `indicador_ipca_categoria`.
+
+#### Fora de escopo por enquanto
+
+- **Subgrupos/Itens/Subitens** do IPCA (nível 3+ da estrutura oficial do
+  IBGE): schema fica em nível 2 (grupo) só, mas o desenho não impede
+  adicionar uma tabela `indicador_ipca_subgrupo` depois sem quebrar nada
+  (mesmo princípio do documento original).
+- **Integração com CDI/Tesouro IPCA+/juro real da Carteira**: os cálculos
+  ficam prontos pra alimentar isso (acumulado 12m já é a base do juro
+  real), mas a integração de fato só acontece quando essas outras abas
+  forem trabalhadas.
 
 ## 9. Convenções a preservar
 

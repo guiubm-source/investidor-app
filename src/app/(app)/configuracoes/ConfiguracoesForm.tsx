@@ -19,21 +19,36 @@ import {
 import {
   bacenDiretorSchema,
   brasilPresidenteSchema,
+  metaInflacaoSchema,
+  pesoIpcaGrupoSchema,
   type BacenDiretorForm,
   type BrasilPresidenteForm,
+  type MetaInflacaoForm,
+  type PesoIpcaGrupoForm,
 } from "@/lib/referencia/schema";
 import {
   criarDiretorBacen,
+  criarMetaInflacao,
+  criarPesoIpca,
   criarPresidenteBrasil,
   editarDiretorBacen,
+  editarMetaInflacao,
+  editarPesoIpca,
   editarPresidenteBrasil,
   excluirDiretorBacen,
+  excluirMetaInflacao,
+  excluirPesoIpca,
   excluirPresidenteBrasil,
   obterDiretoriaBacen,
+  obterMetasInflacao,
+  obterPesosIpca,
   obterPresidentesBrasil,
   type DiretorBacen,
+  type MetaInflacao,
+  type PesoIpcaGrupo,
   type PresidenteBrasil,
 } from "@/lib/referencia/actions";
+import { CATEGORIAS_IPCA } from "@/lib/indicadores/schema";
 
 const NOMES_PERFIL: Record<string, string> = {
   conservador: "Conservador",
@@ -45,14 +60,20 @@ export default function ConfiguracoesForm({
   dadosIniciais,
   diretoriaBacenInicial,
   presidentesBrasilInicial,
+  pesosIpcaInicial,
+  metasInflacaoInicial,
 }: {
   dadosIniciais: DadosConfiguracoes;
   diretoriaBacenInicial: DiretorBacen[];
   presidentesBrasilInicial: PresidenteBrasil[];
+  pesosIpcaInicial: PesoIpcaGrupo[];
+  metasInflacaoInicial: MetaInflacao[];
 }) {
   const [dados, setDados] = useState(dadosIniciais);
   const [diretoriaBacen, setDiretoriaBacen] = useState(diretoriaBacenInicial);
   const [presidentesBrasil, setPresidentesBrasil] = useState(presidentesBrasilInicial);
+  const [pesosIpca, setPesosIpca] = useState(pesosIpcaInicial);
+  const [metasInflacao, setMetasInflacao] = useState(metasInflacaoInicial);
 
   return (
     <div className="space-y-6">
@@ -66,6 +87,11 @@ export default function ConfiguracoesForm({
       <SecaoPresidentesBrasil
         presidentes={presidentesBrasil}
         onAtualizar={async () => setPresidentesBrasil(await obterPresidentesBrasil())}
+      />
+      <SecaoPesosIpca pesos={pesosIpca} onAtualizar={async () => setPesosIpca(await obterPesosIpca())} />
+      <SecaoMetasInflacao
+        metas={metasInflacao}
+        onAtualizar={async () => setMetasInflacao(await obterMetasInflacao())}
       />
     </div>
   );
@@ -622,6 +648,351 @@ function FormPresidenteBrasil({
         <label className="label">Fim do mandato (vazio = atual)</label>
         <input type="date" {...register("mandato_fim")} className="input" />
         {errors.mandato_fim?.message && <p className="field-error">{errors.mandato_fim.message}</p>}
+      </div>
+
+      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
+
+      <div className="col-span-2 md:col-span-3 flex gap-2">
+        <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
+          Cancelar
+        </button>
+        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
+          {isSubmitting ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pesos do IPCA — cadastro de referência por grupo com vigência (ver
+// docs/MAPA-DE-DADOS.md §8.8 decisão 5). Usado pelo motor de cálculo do IPCA
+// pra achar o peso vigente na competência e calcular impacto = peso ×
+// variação. Não cadastrado mensalmente — só quando o IBGE muda a
+// metodologia (POF).
+// ---------------------------------------------------------------------------
+
+function labelGrupoIpca(grupo: string): string {
+  return CATEGORIAS_IPCA.find((c) => c.valor === grupo)?.label ?? grupo;
+}
+
+function SecaoPesosIpca({
+  pesos,
+  onAtualizar,
+}: {
+  pesos: PesoIpcaGrupo[];
+  onAtualizar: () => Promise<void>;
+}) {
+  const [modo, setModo] = useState<"lista" | "novo" | string>("lista");
+
+  const salvar = async (dadosForm: PesoIpcaGrupoForm, id?: string) => {
+    const resultado = id ? await editarPesoIpca(id, dadosForm) : await criarPesoIpca(dadosForm);
+    if (resultado.error) throw new Error(resultado.error);
+    setModo("lista");
+    await onAtualizar();
+  };
+
+  return (
+    <section className="card p-6">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="text-lg font-medium text-ink">Pesos do IPCA</h2>
+        {modo === "lista" && (
+          <button onClick={() => setModo("novo")} className="text-xs text-accent hover:underline">
+            + Cadastrar
+          </button>
+        )}
+      </div>
+      <p className="text-sm text-muted mb-5">
+        Peso (%) de cada grupo do IPCA por período de vigência (metodologia POF do IBGE). Usado pra
+        calcular o impacto de cada grupo na aba Indicadores → IPCA.
+      </p>
+
+      {modo === "novo" && (
+        <div className="mb-4">
+          <FormPesoIpca onSalvar={(d) => salvar(d)} onCancelar={() => setModo("lista")} />
+        </div>
+      )}
+
+      {pesos.length === 0 ? (
+        <p className="text-sm text-faint">Nenhum peso cadastrado ainda.</p>
+      ) : (
+        <div className="space-y-2">
+          {pesos.map((p) => (
+            <div key={p.id}>
+              {modo === p.id ? (
+                <FormPesoIpca
+                  inicial={p}
+                  onSalvar={(dadosForm) => salvar(dadosForm, p.id)}
+                  onCancelar={() => setModo("lista")}
+                />
+              ) : (
+                <div className="flex items-center justify-between rounded-md bg-surface-2 border border-border px-3 py-2 text-sm">
+                  <div>
+                    <p className="text-ink font-medium">
+                      {labelGrupoIpca(p.grupo)} — {p.pesoPct.toFixed(2)}%
+                    </p>
+                    <p className="text-xs text-faint">
+                      {formatarDataBr(p.vigenciaInicio)} a {formatarDataBr(p.vigenciaFim)}
+                      {p.metodologia ? ` — ${p.metodologia}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex gap-3 shrink-0">
+                    <button onClick={() => setModo(p.id)} className="text-xs text-accent hover:underline">
+                      Editar
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await excluirPesoIpca(p.id);
+                        await onAtualizar();
+                      }}
+                      className="text-xs text-faint hover:text-danger"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FormPesoIpca({
+  inicial,
+  onSalvar,
+  onCancelar,
+}: {
+  inicial?: PesoIpcaGrupo;
+  onSalvar: (dados: PesoIpcaGrupoForm) => void | Promise<void>;
+  onCancelar: () => void;
+}) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    setError,
+  } = useForm({
+    resolver: zodResolver(pesoIpcaGrupoSchema),
+    defaultValues: {
+      grupo: inicial?.grupo ?? CATEGORIAS_IPCA[0].valor,
+      peso_pct: inicial?.pesoPct ?? NaN,
+      vigencia_inicio: inicial?.vigenciaInicio ?? "",
+      vigencia_fim: inicial?.vigenciaFim ?? "",
+      metodologia: inicial?.metodologia ?? "",
+    },
+  });
+
+  const onSubmit = handleSubmit(async (data) => {
+    try {
+      await onSalvar(data);
+    } catch (e) {
+      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+    }
+  });
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="grid grid-cols-2 md:grid-cols-3 gap-3 rounded-md bg-surface-2 border border-border p-3"
+    >
+      <div>
+        <label className="label">Grupo</label>
+        <select {...register("grupo")} className="input">
+          {CATEGORIAS_IPCA.map((c) => (
+            <option key={c.valor} value={c.valor}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="label">Peso (%)</label>
+        <input type="number" step="0.0001" {...register("peso_pct", { valueAsNumber: true })} className="input" />
+        {errors.peso_pct?.message && <p className="field-error">{errors.peso_pct.message}</p>}
+      </div>
+      <div>
+        <label className="label">Metodologia (opcional)</label>
+        <input {...register("metodologia")} placeholder="POF 2017/2018" className="input" />
+      </div>
+      <div>
+        <label className="label">Início da vigência</label>
+        <input type="date" {...register("vigencia_inicio")} className="input" />
+        {errors.vigencia_inicio?.message && <p className="field-error">{errors.vigencia_inicio.message}</p>}
+      </div>
+      <div>
+        <label className="label">Fim da vigência (vazio = atual)</label>
+        <input type="date" {...register("vigencia_fim")} className="input" />
+        {errors.vigencia_fim?.message && <p className="field-error">{errors.vigencia_fim.message}</p>}
+      </div>
+
+      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
+
+      <div className="col-span-2 md:col-span-3 flex gap-2">
+        <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
+          Cancelar
+        </button>
+        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
+          {isSubmitting ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Metas de Inflação — cadastro de referência com vigência (ver
+// docs/MAPA-DE-DADOS.md §8.8 decisão 6). Substitui as constantes hardcoded
+// que existiam antes; banda informada explicitamente (não assume simetria).
+// ---------------------------------------------------------------------------
+
+function SecaoMetasInflacao({
+  metas,
+  onAtualizar,
+}: {
+  metas: MetaInflacao[];
+  onAtualizar: () => Promise<void>;
+}) {
+  const [modo, setModo] = useState<"lista" | "novo" | string>("lista");
+
+  const salvar = async (dadosForm: MetaInflacaoForm, id?: string) => {
+    const resultado = id ? await editarMetaInflacao(id, dadosForm) : await criarMetaInflacao(dadosForm);
+    if (resultado.error) throw new Error(resultado.error);
+    setModo("lista");
+    await onAtualizar();
+  };
+
+  return (
+    <section className="card p-6">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="text-lg font-medium text-ink">Metas de Inflação</h2>
+        {modo === "lista" && (
+          <button onClick={() => setModo("novo")} className="text-xs text-accent hover:underline">
+            + Cadastrar
+          </button>
+        )}
+      </div>
+      <p className="text-sm text-muted mb-5">
+        Meta central e banda (CMN) por período de vigência. Usado pra avaliar a situação do IPCA
+        acumulado em 12 meses na aba Indicadores → IPCA.
+      </p>
+
+      {modo === "novo" && (
+        <div className="mb-4">
+          <FormMetaInflacao onSalvar={(d) => salvar(d)} onCancelar={() => setModo("lista")} />
+        </div>
+      )}
+
+      {metas.length === 0 ? (
+        <p className="text-sm text-faint">Nenhuma meta cadastrada ainda.</p>
+      ) : (
+        <div className="space-y-2">
+          {metas.map((m) => (
+            <div key={m.id}>
+              {modo === m.id ? (
+                <FormMetaInflacao
+                  inicial={m}
+                  onSalvar={(dadosForm) => salvar(dadosForm, m.id)}
+                  onCancelar={() => setModo("lista")}
+                />
+              ) : (
+                <div className="flex items-center justify-between rounded-md bg-surface-2 border border-border px-3 py-2 text-sm">
+                  <div>
+                    <p className="text-ink font-medium">
+                      {m.metaCentral.toFixed(2)}% ({m.bandaInferior.toFixed(2)}%–{m.bandaSuperior.toFixed(2)}%)
+                    </p>
+                    <p className="text-xs text-faint">
+                      {formatarDataBr(m.vigenciaInicio)} a {formatarDataBr(m.vigenciaFim)}
+                    </p>
+                  </div>
+                  <div className="flex gap-3 shrink-0">
+                    <button onClick={() => setModo(m.id)} className="text-xs text-accent hover:underline">
+                      Editar
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await excluirMetaInflacao(m.id);
+                        await onAtualizar();
+                      }}
+                      className="text-xs text-faint hover:text-danger"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FormMetaInflacao({
+  inicial,
+  onSalvar,
+  onCancelar,
+}: {
+  inicial?: MetaInflacao;
+  onSalvar: (dados: MetaInflacaoForm) => void | Promise<void>;
+  onCancelar: () => void;
+}) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    setError,
+  } = useForm({
+    resolver: zodResolver(metaInflacaoSchema),
+    defaultValues: {
+      meta_central: inicial?.metaCentral ?? NaN,
+      banda_inferior: inicial?.bandaInferior ?? NaN,
+      banda_superior: inicial?.bandaSuperior ?? NaN,
+      vigencia_inicio: inicial?.vigenciaInicio ?? "",
+      vigencia_fim: inicial?.vigenciaFim ?? "",
+    },
+  });
+
+  const onSubmit = handleSubmit(async (data) => {
+    try {
+      await onSalvar(data);
+    } catch (e) {
+      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+    }
+  });
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="grid grid-cols-2 md:grid-cols-3 gap-3 rounded-md bg-surface-2 border border-border p-3"
+    >
+      <div>
+        <label className="label">Meta central (%)</label>
+        <input type="number" step="0.01" {...register("meta_central", { valueAsNumber: true })} className="input" />
+        {errors.meta_central?.message && <p className="field-error">{errors.meta_central.message}</p>}
+      </div>
+      <div>
+        <label className="label">Limite inferior (%)</label>
+        <input type="number" step="0.01" {...register("banda_inferior", { valueAsNumber: true })} className="input" />
+        {errors.banda_inferior?.message && <p className="field-error">{errors.banda_inferior.message}</p>}
+      </div>
+      <div>
+        <label className="label">Limite superior (%)</label>
+        <input type="number" step="0.01" {...register("banda_superior", { valueAsNumber: true })} className="input" />
+        {errors.banda_superior?.message && <p className="field-error">{errors.banda_superior.message}</p>}
+      </div>
+      <div>
+        <label className="label">Início da vigência</label>
+        <input type="date" {...register("vigencia_inicio")} className="input" />
+        {errors.vigencia_inicio?.message && <p className="field-error">{errors.vigencia_inicio.message}</p>}
+      </div>
+      <div>
+        <label className="label">Fim da vigência (vazio = atual)</label>
+        <input type="date" {...register("vigencia_fim")} className="input" />
+        {errors.vigencia_fim?.message && <p className="field-error">{errors.vigencia_fim.message}</p>}
       </div>
 
       {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}

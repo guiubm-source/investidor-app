@@ -5,13 +5,13 @@ import type {
   DecisaoSelicForm,
   DolarMensalForm,
   FluxoEstrangeiroMensalForm,
+  ImportarIpcaForm,
   ImportarSelicForm,
-  IpcaCategoriaForm,
-  IpcaMensalForm,
+  IpcaCompetenciaForm,
   NovaReuniaoSelicForm,
   SelicReuniaoEditForm,
 } from "./schema";
-import { CATEGORIAS_IPCA, META_IPCA_CENTRO, META_IPCA_TOLERANCIA } from "./schema";
+import { CATEGORIAS_IPCA } from "./schema";
 import {
   adicionarDias,
   calcularEstatisticas,
@@ -24,7 +24,43 @@ import {
   type SelicEstatisticas,
   type SelicReuniaoDerivada,
 } from "./selic-estatisticas";
-import { obterDiretoriaBacen, presidenteBcVigente, type DiretorBacen } from "@/lib/referencia/actions";
+import {
+  GRUPOS_IPCA,
+  calcularAcumulado12m,
+  calcularAcumuladoAno,
+  calcularDistanciaMeta,
+  calcularEstatisticasSerie,
+  calcularImpactosCompetencia,
+  calcularIndiceDifusao,
+  calcularSequenciaAceleracaoDesaceleracao,
+  calcularSituacaoBanda,
+  calcularTendenciaInflacionaria,
+  correlacaoGrupoComGeral,
+  encontrarMetaVigente,
+  grupoMaisVolatilEEstavel,
+  gruposPorImpactoHistorico,
+  parseImportacaoIpca,
+  rankingGruposNaCompetencia,
+  rankingImpactosNaCompetencia,
+  type EstatisticasSerie,
+  type GrupoIpca,
+  type ImpactosGrupo,
+  type MetaInflacaoVigente,
+  type PesoIpcaVigente,
+  type PontoIpca,
+  type SituacaoBanda,
+  type TendenciaInflacionaria,
+  type VariacoesGrupos,
+} from "./ipca-estatisticas";
+import {
+  obterDiretoriaBacen,
+  obterMetasInflacao,
+  obterPesosIpca,
+  presidenteBcVigente,
+  type DiretorBacen,
+  type MetaInflacao,
+  type PesoIpcaGrupo,
+} from "@/lib/referencia/actions";
 
 export type AcaoResultado = { error?: string };
 
@@ -257,65 +293,224 @@ export async function importarHistoricoSelic(input: ImportarSelicForm): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// IPCA
+// IPCA — ver docs/MAPA-DE-DADOS.md §8.8. Tabela única (geral + 9 grupos);
+// impacto por grupo, acumulados, tendência, rankings, correlação e demais
+// estatísticas são SEMPRE recalculados aqui (nunca armazenados) a partir de
+// `indicador_ipca_mensal` + Pesos do IPCA + Metas de Inflação vigentes —
+// cálculo puro fica em `ipca-estatisticas.ts`.
 // ---------------------------------------------------------------------------
 
-export type IpcaMensal = {
+export type IpcaCompetencia = {
   id: string;
   anoMes: string;
-  variacaoPct: number;
-  acumulado12mPct: number | null;
-};
-
-export type IpcaCategoria = {
-  id: string;
-  anoMes: string;
-  categoria: string;
-  categoriaLabel: string;
-  variacaoPct: number;
+  geral: number | null;
+  grupos: VariacoesGrupos;
+  impactos: ImpactosGrupo;
+  dataDivulgacao: string | null;
+  fonte: string;
+  observacoes: string | null;
 };
 
 export type IpcaView = {
-  mensal: IpcaMensal[];
-  categorias: IpcaCategoria[];
-  ultimoMes: IpcaMensal | null;
-  metaCentro: number;
-  metaBanda: [number, number];
-  dentroDaMeta: boolean | null;
+  competencias: IpcaCompetencia[]; // mais recente primeiro
+  ultimaCompetencia: IpcaCompetencia | null;
+  acumuladoAno: { valor: number | null; meses: number };
+  acumulado12m: { valor: number | null; meses: number; completo: boolean };
+  metaVigente: MetaInflacaoVigente | null;
+  distanciaMeta: number | null;
+  situacaoBanda: SituacaoBanda | null;
+  tendencia: TendenciaInflacionaria | null;
+  sequencia: { tipo: "aceleracao" | "desaceleracao"; quantidade: number } | null;
+  estatisticasGeral: EstatisticasSerie;
+  rankingGruposUltimaCompetencia: { grupo: GrupoIpca; variacao: number }[];
+  rankingImpactosUltimaCompetencia: { grupo: GrupoIpca; impacto: number }[];
+  maiorPressao: { grupo: GrupoIpca; variacao: number } | null;
+  menorPressao: { grupo: GrupoIpca; variacao: number } | null;
+  maiorImpacto: { grupo: GrupoIpca; impacto: number } | null;
+  maiorImpactoNegativo: { grupo: GrupoIpca; impacto: number } | null;
+  grupoMaisVolatil: { grupo: GrupoIpca; desvioPadrao: number } | null;
+  grupoMaisEstavel: { grupo: GrupoIpca; desvioPadrao: number } | null;
+  indiceDifusao: ReturnType<typeof calcularIndiceDifusao> | null;
+  correlacoesGrupos: { grupo: GrupoIpca; correlacao: number | null }[];
+  impactoHistoricoGrupos: { grupo: GrupoIpca; impactoMedio: number; impactoAcumulado: number }[];
+  pesos: PesoIpcaGrupo[];
+  metas: MetaInflacao[];
+  insights: string[];
 };
+
+function labelGrupo(grupo: GrupoIpca): string {
+  return CATEGORIAS_IPCA.find((c) => c.valor === grupo)?.label ?? grupo;
+}
+
+function gerarInsightsIpca(input: {
+  tendencia: TendenciaInflacionaria | null;
+  situacaoBanda: SituacaoBanda | null;
+  sequencia: { tipo: "aceleracao" | "desaceleracao"; quantidade: number } | null;
+  maiorPressao: { grupo: GrupoIpca; variacao: number } | null;
+  menorPressao: { grupo: GrupoIpca; variacao: number } | null;
+  grupoMaisVolatil: { grupo: GrupoIpca; desvioPadrao: number } | null;
+  indiceDifusao: ReturnType<typeof calcularIndiceDifusao> | null;
+  metaVigente: MetaInflacaoVigente | null;
+}): string[] {
+  const insights: string[] = [];
+
+  if (input.tendencia === "acelerando") {
+    insights.push("Tendência inflacionária de alta: a média móvel de 3 meses está acima da de 6 meses.");
+  } else if (input.tendencia === "desacelerando") {
+    insights.push("Tendência inflacionária de queda: a média móvel de 3 meses está abaixo da de 6 meses.");
+  }
+
+  if (input.situacaoBanda === "acima") {
+    insights.push("O IPCA acumulado em 12 meses está acima do teto da banda da meta de inflação vigente.");
+  } else if (input.situacaoBanda === "abaixo") {
+    insights.push("O IPCA acumulado em 12 meses está abaixo do piso da banda da meta de inflação vigente.");
+  } else if (input.situacaoBanda === "dentro") {
+    insights.push("O IPCA acumulado em 12 meses está dentro da banda da meta de inflação vigente.");
+  }
+
+  if (input.sequencia) {
+    const direcao = input.sequencia.tipo === "aceleracao" ? "em alta" : "em queda";
+    insights.push(`Variação mensal ${direcao} por ${input.sequencia.quantidade} mês(es) seguido(s).`);
+  }
+
+  if (input.maiorPressao) {
+    insights.push(
+      `${labelGrupo(input.maiorPressao.grupo)} foi o grupo com maior pressão no mês (${input.maiorPressao.variacao.toFixed(2)}%).`
+    );
+  }
+  if (input.menorPressao && input.menorPressao.variacao < 0) {
+    insights.push(
+      `${labelGrupo(input.menorPressao.grupo)} teve a maior queda de preços no mês (${input.menorPressao.variacao.toFixed(2)}%).`
+    );
+  }
+  if (input.grupoMaisVolatil) {
+    insights.push(
+      `${labelGrupo(input.grupoMaisVolatil.grupo)} é historicamente o grupo mais volátil (desvio padrão de ${input.grupoMaisVolatil.desvioPadrao.toFixed(2)} p.p.).`
+    );
+  }
+  if (input.indiceDifusao?.indice != null) {
+    insights.push(`${input.indiceDifusao.indice.toFixed(0)}% dos grupos com dado lançado tiveram alta de preços no mês.`);
+  }
+  if (!input.metaVigente) {
+    insights.push("Nenhuma meta de inflação vigente cadastrada — cadastre em Configurações → Metas de Inflação.");
+  }
+
+  return insights;
+}
+
+const COLUNAS_IPCA_MENSAL =
+  "id, ano_mes, geral, alimentacao_bebidas, habitacao, artigos_residencia, vestuario, transportes, saude_cuidados_pessoais, despesas_pessoais, educacao, comunicacao, data_divulgacao, fonte, observacoes";
 
 export async function obterIpca(): Promise<IpcaView> {
   const supabase = await createClient();
-  const [{ data: mensalRaw }, { data: categoriaRaw }] = await Promise.all([
-    supabase.from("indicador_ipca_mensal").select("id, ano_mes, variacao_pct, acumulado_12m_pct").order("ano_mes", { ascending: false }),
-    supabase.from("indicador_ipca_categoria").select("id, ano_mes, categoria, variacao_pct").order("ano_mes", { ascending: false }),
+  const [{ data: mensalRaw }, pesos, metas] = await Promise.all([
+    supabase.from("indicador_ipca_mensal").select(COLUNAS_IPCA_MENSAL).order("ano_mes", { ascending: true }),
+    obterPesosIpca(),
+    obterMetasInflacao(),
   ]);
 
-  const mensal: IpcaMensal[] = (mensalRaw ?? []).map((m) => ({
+  const pesosVigentes: PesoIpcaVigente[] = pesos.map((p) => ({
+    grupo: p.grupo as GrupoIpca,
+    pesoPct: p.pesoPct,
+    vigenciaInicio: p.vigenciaInicio,
+    vigenciaFim: p.vigenciaFim,
+  }));
+  const metasVigentes: MetaInflacaoVigente[] = metas.map((m) => ({
+    metaCentral: m.metaCentral,
+    bandaInferior: m.bandaInferior,
+    bandaSuperior: m.bandaSuperior,
+    vigenciaInicio: m.vigenciaInicio,
+    vigenciaFim: m.vigenciaFim,
+  }));
+
+  const pontosAsc: PontoIpca[] = (mensalRaw ?? []).map((m) => ({
     id: m.id,
     anoMes: m.ano_mes,
-    variacaoPct: Number(m.variacao_pct),
-    acumulado12mPct: m.acumulado_12m_pct === null ? null : Number(m.acumulado_12m_pct),
+    geral: m.geral === null ? null : Number(m.geral),
+    grupos: Object.fromEntries(
+      GRUPOS_IPCA.map((g) => [g, m[g] === null || m[g] === undefined ? null : Number(m[g])])
+    ) as VariacoesGrupos,
+    dataDivulgacao: m.data_divulgacao,
+    fonte: m.fonte,
+    observacoes: m.observacoes,
   }));
 
-  const categorias: IpcaCategoria[] = (categoriaRaw ?? []).map((c) => ({
-    id: c.id,
-    anoMes: c.ano_mes,
-    categoria: c.categoria,
-    categoriaLabel: CATEGORIAS_IPCA.find((cat) => cat.valor === c.categoria)?.label ?? c.categoria,
-    variacaoPct: Number(c.variacao_pct),
+  const competenciasAsc: IpcaCompetencia[] = pontosAsc.map((p) => ({
+    ...p,
+    impactos: calcularImpactosCompetencia(pesosVigentes, p),
   }));
+  const competencias = [...competenciasAsc].reverse();
 
-  const ultimoMes = mensal[0] ?? null;
-  const bandaMin = META_IPCA_CENTRO - META_IPCA_TOLERANCIA;
-  const bandaMax = META_IPCA_CENTRO + META_IPCA_TOLERANCIA;
-  const dentroDaMeta =
-    ultimoMes?.acumulado12mPct == null ? null : ultimoMes.acumulado12mPct >= bandaMin && ultimoMes.acumulado12mPct <= bandaMax;
+  const ultimaCompetencia = competenciasAsc.at(-1) ?? null;
+  const acumuladoAno = ultimaCompetencia
+    ? calcularAcumuladoAno(pontosAsc, ultimaCompetencia.anoMes.slice(0, 4))
+    : { valor: null, meses: 0 };
+  const acumulado12m = calcularAcumulado12m(pontosAsc);
+  const metaVigente = ultimaCompetencia ? encontrarMetaVigente(metasVigentes, ultimaCompetencia.anoMes) : null;
+  const distanciaMeta = calcularDistanciaMeta(acumulado12m.valor, metaVigente?.metaCentral ?? null);
+  const situacaoBanda = calcularSituacaoBanda(
+    acumulado12m.valor,
+    metaVigente?.bandaInferior ?? null,
+    metaVigente?.bandaSuperior ?? null
+  );
+  const tendencia = calcularTendenciaInflacionaria(pontosAsc.map((p) => p.geral));
+  const sequencia = calcularSequenciaAceleracaoDesaceleracao(pontosAsc);
+  const geralValores = pontosAsc.map((p) => p.geral).filter((v): v is number => v !== null);
+  const estatisticasGeral = calcularEstatisticasSerie(geralValores);
 
-  return { mensal, categorias, ultimoMes, metaCentro: META_IPCA_CENTRO, metaBanda: [bandaMin, bandaMax], dentroDaMeta };
+  const rankingGruposUltimaCompetencia = ultimaCompetencia ? rankingGruposNaCompetencia(ultimaCompetencia) : [];
+  const rankingImpactosUltimaCompetencia = ultimaCompetencia ? rankingImpactosNaCompetencia(ultimaCompetencia.impactos) : [];
+  const maiorPressao = rankingGruposUltimaCompetencia[0] ?? null;
+  const menorPressao = rankingGruposUltimaCompetencia.at(-1) ?? null;
+  const maiorImpacto = rankingImpactosUltimaCompetencia[0] ?? null;
+  const maiorImpactoNegativo = rankingImpactosUltimaCompetencia.at(-1) ?? null;
+
+  const { maisVolatil: grupoMaisVolatil, maisEstavel: grupoMaisEstavel } = grupoMaisVolatilEEstavel(pontosAsc);
+  const indiceDifusao = ultimaCompetencia ? calcularIndiceDifusao(ultimaCompetencia) : null;
+  const correlacoesGrupos = GRUPOS_IPCA.map((g) => ({ grupo: g, correlacao: correlacaoGrupoComGeral(pontosAsc, g) }));
+  const impactoHistoricoGrupos = gruposPorImpactoHistorico(pontosAsc, pesosVigentes);
+
+  const insights = gerarInsightsIpca({
+    tendencia,
+    situacaoBanda,
+    sequencia,
+    maiorPressao,
+    menorPressao,
+    grupoMaisVolatil,
+    indiceDifusao,
+    metaVigente,
+  });
+
+  return {
+    competencias,
+    ultimaCompetencia,
+    acumuladoAno,
+    acumulado12m,
+    metaVigente,
+    distanciaMeta,
+    situacaoBanda,
+    tendencia,
+    sequencia,
+    estatisticasGeral,
+    rankingGruposUltimaCompetencia,
+    rankingImpactosUltimaCompetencia,
+    maiorPressao,
+    menorPressao,
+    maiorImpacto,
+    maiorImpactoNegativo,
+    grupoMaisVolatil,
+    grupoMaisEstavel,
+    indiceDifusao,
+    correlacoesGrupos,
+    impactoHistoricoGrupos,
+    pesos,
+    metas,
+    insights,
+  };
 }
 
-export async function criarIpcaMensal(input: IpcaMensalForm): Promise<AcaoResultado> {
+/** Lançamento/edição de uma competência inteira (upsert por ano_mes — já é unique na tabela). */
+export async function criarIpcaCompetencia(input: IpcaCompetenciaForm): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -323,22 +518,29 @@ export async function criarIpcaMensal(input: IpcaMensalForm): Promise<AcaoResult
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
   const { error } = await supabase.from("indicador_ipca_mensal").upsert(
-    { ano_mes: input.ano_mes, variacao_pct: input.variacao_pct, acumulado_12m_pct: input.acumulado_12m_pct ?? null },
+    {
+      ano_mes: input.ano_mes,
+      geral: input.geral,
+      alimentacao_bebidas: input.alimentacao_bebidas,
+      habitacao: input.habitacao,
+      artigos_residencia: input.artigos_residencia,
+      vestuario: input.vestuario,
+      transportes: input.transportes,
+      saude_cuidados_pessoais: input.saude_cuidados_pessoais,
+      despesas_pessoais: input.despesas_pessoais,
+      educacao: input.educacao,
+      comunicacao: input.comunicacao,
+      data_divulgacao: input.data_divulgacao,
+      observacoes: input.observacoes,
+    },
     { onConflict: "ano_mes" }
   );
 
-  if (error) return { error: "Não foi possível registrar o IPCA do mês." };
+  if (error) return { error: "Não foi possível registrar a competência do IPCA." };
   return {};
 }
 
-export async function excluirIpcaMensal(id: string): Promise<AcaoResultado> {
-  const supabase = await createClient();
-  const { error } = await supabase.from("indicador_ipca_mensal").delete().eq("id", id);
-  if (error) return { error: "Não foi possível excluir o lançamento." };
-  return {};
-}
-
-export async function criarIpcaCategoria(input: IpcaCategoriaForm): Promise<AcaoResultado> {
+export async function editarIpcaCompetencia(id: string, input: IpcaCompetenciaForm): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -346,21 +548,116 @@ export async function criarIpcaCategoria(input: IpcaCategoriaForm): Promise<Acao
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
   const { error } = await supabase
-    .from("indicador_ipca_categoria")
-    .upsert(
-      { ano_mes: input.ano_mes, categoria: input.categoria, variacao_pct: input.variacao_pct },
-      { onConflict: "ano_mes,categoria" }
-    );
+    .from("indicador_ipca_mensal")
+    .update({
+      ano_mes: input.ano_mes,
+      geral: input.geral,
+      alimentacao_bebidas: input.alimentacao_bebidas,
+      habitacao: input.habitacao,
+      artigos_residencia: input.artigos_residencia,
+      vestuario: input.vestuario,
+      transportes: input.transportes,
+      saude_cuidados_pessoais: input.saude_cuidados_pessoais,
+      despesas_pessoais: input.despesas_pessoais,
+      educacao: input.educacao,
+      comunicacao: input.comunicacao,
+      data_divulgacao: input.data_divulgacao,
+      observacoes: input.observacoes,
+    })
+    .eq("id", id);
 
-  if (error) return { error: "Não foi possível registrar o IPCA da categoria." };
+  if (error) return { error: "Não foi possível salvar. Confira se a competência não está duplicada." };
   return {};
 }
 
-export async function excluirIpcaCategoria(id: string): Promise<AcaoResultado> {
+export async function excluirIpcaCompetencia(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
-  const { error } = await supabase.from("indicador_ipca_categoria").delete().eq("id", id);
+  const { error } = await supabase.from("indicador_ipca_mensal").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o lançamento." };
   return {};
+}
+
+export async function excluirIpcaCompetencias(ids: string[]): Promise<AcaoResultado> {
+  if (ids.length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("indicador_ipca_mensal").delete().in("id", ids);
+  if (error) return { error: "Não foi possível excluir as competências selecionadas." };
+  return {};
+}
+
+export type ImportacaoIpcaResultado = AcaoResultado & { importados?: number; avisos?: string[] };
+
+/**
+ * Importação em massa — cola texto "COMPETÊNCIA | GERAL | 9 grupos", faz
+ * upsert por `ano_mes`. Grupos ausentes na linha colada preservam o valor já
+ * gravado (mesma lógica de preservação usada em `importarHistoricoSelic`
+ * para `numero_reuniao` — evita apagar detalhamento por grupo já lançado por
+ * causa de uma reimportação parcial). Parser puro em `ipca-estatisticas.ts`.
+ */
+export async function importarHistoricoIpca(input: ImportarIpcaForm): Promise<ImportacaoIpcaResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { linhas, erros } = parseImportacaoIpca(input.texto);
+
+  if (linhas.length === 0) {
+    return { error: erros[0] ?? "Nenhuma linha válida encontrada para importar.", avisos: erros };
+  }
+
+  let importados = 0;
+  const errosGravacao: string[] = [...erros];
+  // Coluna montada em runtime a partir de GRUPOS_IPCA — widened para `string`
+  // (não template literal) de propósito: o parser de tipos do supabase-js
+  // tenta interpretar strings de `.select()` como literal type, e falha
+  // (ParserError) quando a lista de colunas é dinâmica.
+  const colunasComGrupos: string = ["id"].concat(GRUPOS_IPCA).join(", ");
+
+  for (const linha of linhas) {
+    const { data: existente } = await supabase
+      .from("indicador_ipca_mensal")
+      .select(colunasComGrupos)
+      .eq("ano_mes", linha.anoMes)
+      .maybeSingle();
+
+    const existenteRecord = existente as Record<string, number | string | null> | null;
+    const payloadGrupos: Record<string, number | null> = {};
+    for (const grupo of GRUPOS_IPCA) {
+      const daLinha = linha.grupos[grupo];
+      payloadGrupos[grupo] =
+        daLinha !== undefined ? daLinha : existenteRecord ? ((existenteRecord[grupo] as number | null) ?? null) : null;
+    }
+
+    if (existenteRecord) {
+      const { error } = await supabase
+        .from("indicador_ipca_mensal")
+        .update({ geral: linha.geral, ...payloadGrupos })
+        .eq("id", existenteRecord.id as string);
+      if (error) {
+        errosGravacao.push(`Competência ${linha.anoMes}: não foi possível atualizar (${error.message}).`);
+        continue;
+      }
+    } else {
+      const { error } = await supabase.from("indicador_ipca_mensal").insert({
+        ano_mes: linha.anoMes,
+        geral: linha.geral,
+        ...payloadGrupos,
+      });
+      if (error) {
+        errosGravacao.push(`Competência ${linha.anoMes}: não foi possível inserir (${error.message}).`);
+        continue;
+      }
+    }
+    importados++;
+  }
+
+  if (importados === 0) {
+    return { error: errosGravacao[0] ?? "Não foi possível importar nenhuma linha.", avisos: errosGravacao };
+  }
+
+  return { importados, avisos: errosGravacao.length > 0 ? errosGravacao : undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -490,7 +787,7 @@ export async function obterVisaoGeral(): Promise<VisaoGeralView> {
     },
     {
       label: "IPCA (12m)",
-      valor: ipca.ultimoMes?.acumulado12mPct != null ? `${ipca.ultimoMes.acumulado12mPct.toFixed(2)}%` : "—",
+      valor: ipca.acumulado12m.valor != null ? `${ipca.acumulado12m.valor.toFixed(2)}%` : "—",
       tendencia: null,
     },
     {
@@ -507,7 +804,8 @@ export async function obterVisaoGeral(): Promise<VisaoGeralView> {
 
   // Leitura interpretativa combinada — heurística simples e transparente,
   // não é recomendação de investimento (ver docs/MAPA-DE-DADOS.md §8.3.3).
-  const sinaisDados = [selic.tendencia, ipca.dentroDaMeta, dolar.tendencia, fluxo.tendencia].some((v) => v !== null);
+  const ipcaDentroDaMeta = ipca.situacaoBanda === null ? null : ipca.situacaoBanda === "dentro";
+  const sinaisDados = [selic.tendencia, ipcaDentroDaMeta, dolar.tendencia, fluxo.tendencia].some((v) => v !== null);
 
   if (!sinaisDados) {
     return {
@@ -529,12 +827,12 @@ export async function obterVisaoGeral(): Promise<VisaoGeralView> {
     observacoes.push("Selic em queda (juro mais estimulativo)");
   }
 
-  if (ipca.dentroDaMeta === false) {
+  if (ipcaDentroDaMeta === false) {
     pontosCautela++;
-    observacoes.push("IPCA acumulado em 12 meses fora da banda da meta (3% ± 1,5 p.p.)");
-  } else if (ipca.dentroDaMeta === true) {
+    observacoes.push("IPCA acumulado em 12 meses fora da banda da meta de inflação vigente");
+  } else if (ipcaDentroDaMeta === true) {
     pontosFavoraveis++;
-    observacoes.push("IPCA acumulado em 12 meses dentro da banda da meta");
+    observacoes.push("IPCA acumulado em 12 meses dentro da banda da meta de inflação vigente");
   }
 
   if (dolar.tendencia === "alta") {

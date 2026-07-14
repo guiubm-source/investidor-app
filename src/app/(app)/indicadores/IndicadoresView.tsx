@@ -4,25 +4,16 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
-  CATEGORIAS_IPCA,
   dolarMensalSchema,
   fluxoEstrangeiroMensalSchema,
-  ipcaCategoriaSchema,
-  ipcaMensalSchema,
   type DolarMensalForm,
   type FluxoEstrangeiroMensalForm,
-  type IpcaCategoriaForm,
-  type IpcaMensalForm,
 } from "@/lib/indicadores/schema";
 import {
   criarDolarMensal,
   criarFluxoEstrangeiroMensal,
-  criarIpcaCategoria,
-  criarIpcaMensal,
   excluirDolarMensal,
   excluirFluxoEstrangeiroMensal,
-  excluirIpcaCategoria,
-  excluirIpcaMensal,
   obterDolar,
   obterFluxoEstrangeiro,
   obterIpca,
@@ -36,6 +27,7 @@ import {
 } from "@/lib/indicadores/actions";
 import { obterDiretoriaBacen, obterPresidentesBrasil, type DiretorBacen, type PresidenteBrasil } from "@/lib/referencia/actions";
 import AbaSelic from "./AbaSelic";
+import AbaIpca from "./AbaIpca";
 
 const formatarMoeda = (valor: number) => valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -154,230 +146,6 @@ function AbaVisaoGeral({ visaoGeral }: { visaoGeral: VisaoGeralView }) {
       <div className="card p-4">
         <p className="text-xs text-faint mb-2">Leitura combinada</p>
         <p className="text-sm text-ink leading-relaxed">{visaoGeral.leitura}</p>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// IPCA
-// ---------------------------------------------------------------------------
-
-function AbaIpca({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: () => Promise<void> }) {
-  const [addMensal, setAddMensal] = useState(false);
-  const [addCategoria, setAddCategoria] = useState(false);
-
-  const formMensal = useForm<IpcaMensalForm>({ resolver: zodResolver(ipcaMensalSchema) });
-  const formCategoria = useForm<IpcaCategoriaForm>({
-    resolver: zodResolver(ipcaCategoriaSchema),
-    defaultValues: { categoria: CATEGORIAS_IPCA[0].valor },
-  });
-
-  const onSubmitMensal = formMensal.handleSubmit(async (data) => {
-    try {
-      const resultado = await criarIpcaMensal(data);
-      if (resultado.error) throw new Error(resultado.error);
-      setAddMensal(false);
-      formMensal.reset();
-      await onAtualizar();
-    } catch (e) {
-      formMensal.setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
-    }
-  });
-
-  const onSubmitCategoria = formCategoria.handleSubmit(async (data) => {
-    try {
-      const resultado = await criarIpcaCategoria(data);
-      if (resultado.error) throw new Error(resultado.error);
-      setAddCategoria(false);
-      formCategoria.reset();
-      await onAtualizar();
-    } catch (e) {
-      formCategoria.setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
-    }
-  });
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div className="card p-3">
-          <p className="text-xs text-faint">Último mês</p>
-          <p className="text-lg font-medium text-ink">
-            {ipca.ultimoMes ? `${ipca.ultimoMes.variacaoPct.toFixed(2)}%` : "—"}
-          </p>
-        </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint">Acumulado 12m</p>
-          <p className="text-lg font-medium text-ink">
-            {ipca.ultimoMes?.acumulado12mPct != null ? `${ipca.ultimoMes.acumulado12mPct.toFixed(2)}%` : "—"}
-          </p>
-        </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint">Meta contínua (banda)</p>
-          <p className="text-sm text-ink">
-            {ipca.metaCentro}% ({ipca.metaBanda[0]}%–{ipca.metaBanda[1]}%)
-            {ipca.dentroDaMeta === true && <span className="text-accent ml-1">dentro da meta</span>}
-            {ipca.dentroDaMeta === false && <span className="text-danger ml-1">fora da meta</span>}
-          </p>
-        </div>
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
-          <p className="text-xs text-faint">IPCA mensal consolidado</p>
-          {!addMensal && (
-            <button onClick={() => setAddMensal(true)} className="text-xs text-accent hover:underline">
-              + Lançar mês
-            </button>
-          )}
-        </div>
-        {addMensal && (
-          <form onSubmit={onSubmitMensal} className="grid grid-cols-2 md:grid-cols-4 gap-3 px-4 py-3 border-b border-border">
-            <div>
-              <label className="label">Mês (AAAA-MM)</label>
-              <input {...formMensal.register("ano_mes")} placeholder="2026-06" className="input" />
-              {formMensal.formState.errors.ano_mes?.message && (
-                <p className="field-error">{formMensal.formState.errors.ano_mes.message}</p>
-              )}
-            </div>
-            <div>
-              <label className="label">Variação no mês (%)</label>
-              <input
-                type="number"
-                step="0.01"
-                {...formMensal.register("variacao_pct", { valueAsNumber: true })}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">Acumulado 12m (%)</label>
-              <input
-                type="number"
-                step="0.01"
-                {...formMensal.register("acumulado_12m_pct", { valueAsNumber: true })}
-                className="input"
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <button type="button" onClick={() => setAddMensal(false)} className="btn btn-secondary flex-1">
-                Cancelar
-              </button>
-              <button type="submit" disabled={formMensal.formState.isSubmitting} className="btn btn-primary flex-1">
-                Salvar
-              </button>
-            </div>
-            {formMensal.formState.errors.root?.message && (
-              <p className="error-box col-span-2 md:col-span-4">{formMensal.formState.errors.root.message}</p>
-            )}
-          </form>
-        )}
-        <div className="grid grid-cols-[1fr_1fr_1fr_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
-          <span>Mês</span>
-          <span className="text-right">Variação</span>
-          <span className="text-right">Acumulado 12m</span>
-          <span></span>
-        </div>
-        {ipca.mensal.length === 0 && <p className="text-sm text-faint px-4 py-4">Nenhum lançamento ainda.</p>}
-        {ipca.mensal.map((m) => (
-          <div
-            key={m.id}
-            className="grid grid-cols-[1fr_1fr_1fr_60px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
-          >
-            <span className="text-ink">{m.anoMes}</span>
-            <span className="text-right text-ink">{m.variacaoPct.toFixed(2)}%</span>
-            <span className="text-right text-ink">{m.acumulado12mPct != null ? `${m.acumulado12mPct.toFixed(2)}%` : "—"}</span>
-            <button
-              onClick={async () => {
-                await excluirIpcaMensal(m.id);
-                await onAtualizar();
-              }}
-              className="text-faint hover:text-danger text-right"
-            >
-              Excluir
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
-          <p className="text-xs text-faint">IPCA por categoria (9 grupos IBGE)</p>
-          {!addCategoria && (
-            <button onClick={() => setAddCategoria(true)} className="text-xs text-accent hover:underline">
-              + Lançar categoria
-            </button>
-          )}
-        </div>
-        {addCategoria && (
-          <form
-            onSubmit={onSubmitCategoria}
-            className="grid grid-cols-2 md:grid-cols-4 gap-3 px-4 py-3 border-b border-border"
-          >
-            <div>
-              <label className="label">Mês (AAAA-MM)</label>
-              <input {...formCategoria.register("ano_mes")} placeholder="2026-06" className="input" />
-              {formCategoria.formState.errors.ano_mes?.message && (
-                <p className="field-error">{formCategoria.formState.errors.ano_mes.message}</p>
-              )}
-            </div>
-            <div>
-              <label className="label">Categoria</label>
-              <select {...formCategoria.register("categoria")} className="input">
-                {CATEGORIAS_IPCA.map((c) => (
-                  <option key={c.valor} value={c.valor}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Variação no mês (%)</label>
-              <input
-                type="number"
-                step="0.01"
-                {...formCategoria.register("variacao_pct", { valueAsNumber: true })}
-                className="input"
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <button type="button" onClick={() => setAddCategoria(false)} className="btn btn-secondary flex-1">
-                Cancelar
-              </button>
-              <button type="submit" disabled={formCategoria.formState.isSubmitting} className="btn btn-primary flex-1">
-                Salvar
-              </button>
-            </div>
-            {formCategoria.formState.errors.root?.message && (
-              <p className="error-box col-span-2 md:col-span-4">{formCategoria.formState.errors.root.message}</p>
-            )}
-          </form>
-        )}
-        <div className="grid grid-cols-[1fr_1fr_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
-          <span>Mês / categoria</span>
-          <span className="text-right">Variação</span>
-          <span></span>
-        </div>
-        {ipca.categorias.length === 0 && <p className="text-sm text-faint px-4 py-4">Nenhum lançamento ainda.</p>}
-        {ipca.categorias.map((c) => (
-          <div
-            key={c.id}
-            className="grid grid-cols-[1fr_1fr_60px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
-          >
-            <span className="text-ink">
-              {c.anoMes} — {c.categoriaLabel}
-            </span>
-            <span className="text-right text-ink">{c.variacaoPct.toFixed(2)}%</span>
-            <button
-              onClick={async () => {
-                await excluirIpcaCategoria(c.id);
-                await onAtualizar();
-              }}
-              className="text-faint hover:text-danger text-right"
-            >
-              Excluir
-            </button>
-          </div>
-        ))}
       </div>
     </div>
   );

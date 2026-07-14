@@ -48,29 +48,37 @@ export const importarSelicSchema = z.object({
 });
 export type ImportarSelicForm = z.infer<typeof importarSelicSchema>;
 
-export const ipcaMensalSchema = z.object({
-  ano_mes: anoMesSchema,
-  variacao_pct: z.number(),
-  acumulado_12m_pct: z.number().optional(),
-});
-export type IpcaMensalForm = z.infer<typeof ipcaMensalSchema>;
+/**
+ * Lançamento/edição de uma competência inteira do IPCA (geral + 9 grupos) —
+ * tabela única, ver docs/MAPA-DE-DADOS.md §8.8 decisão 3. Grupos são
+ * opcionais (pode faltar detalhamento por grupo mesmo com o geral lançado);
+ * impacto por grupo nunca é campo de formulário — é sempre calculado a
+ * partir dos Pesos do IPCA vigentes (decisão 2).
+ */
+const percentualGrupoSchema = z.union([z.number(), z.nan()]).transform((v) => (Number.isNaN(v) ? null : v));
 
-export const ipcaCategoriaSchema = z.object({
+export const ipcaCompetenciaSchema = z.object({
   ano_mes: anoMesSchema,
-  categoria: z.enum([
-    "alimentacao_bebidas",
-    "habitacao",
-    "artigos_residencia",
-    "vestuario",
-    "transportes",
-    "saude_cuidados_pessoais",
-    "despesas_pessoais",
-    "educacao",
-    "comunicacao",
-  ]),
-  variacao_pct: z.number(),
+  geral: z.number({ error: "Informe o índice geral do mês" }),
+  alimentacao_bebidas: percentualGrupoSchema,
+  habitacao: percentualGrupoSchema,
+  artigos_residencia: percentualGrupoSchema,
+  vestuario: percentualGrupoSchema,
+  transportes: percentualGrupoSchema,
+  saude_cuidados_pessoais: percentualGrupoSchema,
+  despesas_pessoais: percentualGrupoSchema,
+  educacao: percentualGrupoSchema,
+  comunicacao: percentualGrupoSchema,
+  data_divulgacao: z.union([z.string(), z.literal("")]).transform((v) => (v ? v : null)),
+  observacoes: z.union([z.string(), z.literal("")]).transform((v) => (v ? v : null)),
 });
-export type IpcaCategoriaForm = z.infer<typeof ipcaCategoriaSchema>;
+export type IpcaCompetenciaForm = z.infer<typeof ipcaCompetenciaSchema>;
+
+/** Importação em massa (colar texto) — bloco de importação da aba IPCA. */
+export const importarIpcaSchema = z.object({
+  texto: z.string().min(1, "Cole o histórico antes de importar"),
+});
+export type ImportarIpcaForm = z.infer<typeof importarIpcaSchema>;
 
 export const dolarMensalSchema = z.object({
   ano_mes: anoMesSchema,
@@ -84,6 +92,7 @@ export const fluxoEstrangeiroMensalSchema = z.object({
 });
 export type FluxoEstrangeiroMensalForm = z.infer<typeof fluxoEstrangeiroMensalSchema>;
 
-/** Meta contínua de inflação vigente desde 2025 (CMN). */
-export const META_IPCA_CENTRO = 3;
-export const META_IPCA_TOLERANCIA = 1.5;
+// META_IPCA_CENTRO/META_IPCA_TOLERANCIA (hardcoded) foram substituídas pelo
+// cadastro Configurações → Metas de Inflação (tabela meta_inflacao, com
+// vigência) — ver docs/MAPA-DE-DADOS.md §8.8 decisão 6 e
+// src/lib/referencia/schema.ts#metaInflacaoSchema.

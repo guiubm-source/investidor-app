@@ -595,3 +595,149 @@ create policy "bacen_diretoria_authenticated" on public.bacen_diretoria
 drop policy if exists "brasil_presidentes_authenticated" on public.brasil_presidentes;
 create policy "brasil_presidentes_authenticated" on public.brasil_presidentes
   for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- 12. IPCA avançado — tabela única (geral + 9 grupos), Pesos do IPCA e Metas
+--     de Inflação. Decisões em docs/MAPA-DE-DADOS.md §8.8 (2026-07-14):
+--     impacto por grupo é sempre calculado (peso vigente × variação), nunca
+--     armazenado; acumulado ano/12m é sempre calculado por juros compostos a
+--     partir das variações mensais, nunca coluna própria. peso_ipca_grupo e
+--     meta_inflacao seguem o mesmo padrão de dado compartilhado da seção 10
+--     (sem profile_id, RLS auth.role() = 'authenticated').
+-- ============================================================================
+
+-- 12.1 Redesenho de indicador_ipca_mensal: variacao_pct vira geral (mesmo
+--      dado, nome alinhado à tabela larga) e ganha as 9 colunas de grupo +
+--      metadados de importação. geral perde o not null só pelo cenário de
+--      migração abaixo (mês com categoria lançada mas geral ainda não) —
+--      todo fluxo novo (formulário/importação) sempre lança o geral.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'indicador_ipca_mensal' and column_name = 'variacao_pct'
+  ) then
+    alter table public.indicador_ipca_mensal rename column variacao_pct to geral;
+  end if;
+end $$;
+
+alter table public.indicador_ipca_mensal alter column geral type numeric(8,4);
+alter table public.indicador_ipca_mensal alter column geral drop not null;
+alter table public.indicador_ipca_mensal drop column if exists acumulado_12m_pct;
+
+alter table public.indicador_ipca_mensal add column if not exists alimentacao_bebidas numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists habitacao numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists artigos_residencia numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists vestuario numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists transportes numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists saude_cuidados_pessoais numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists despesas_pessoais numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists educacao numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists comunicacao numeric(8,4);
+alter table public.indicador_ipca_mensal add column if not exists data_divulgacao date;
+alter table public.indicador_ipca_mensal add column if not exists fonte text not null default 'IBGE';
+alter table public.indicador_ipca_mensal add column if not exists observacoes text;
+
+comment on table public.indicador_ipca_mensal is 'IPCA por competência: índice geral (geral) + variação dos 9 grupos oficiais do IBGE. Acumulado ano/12m e impacto por grupo são sempre calculados em lib/indicadores (nunca armazenados) — ver docs/MAPA-DE-DADOS.md §8.8.';
+comment on column public.indicador_ipca_mensal.geral is 'Variação % do índice geral do IPCA no mês (numeric 8,4, 2 casas exibidas). Nullable só pelo cenário de migração de indicador_ipca_categoria; todo fluxo novo sempre lança o geral.';
+
+-- 12.2 Migração de dado existente: indicador_ipca_categoria -> colunas em
+--      indicador_ipca_mensal, por ano_mes. Cria a linha em indicador_ipca_mensal
+--      se só existir a categoria e não o geral ainda (idempotente via
+--      on conflict + updates repetíveis).
+insert into public.indicador_ipca_mensal (ano_mes)
+select distinct ano_mes from public.indicador_ipca_categoria
+on conflict (ano_mes) do nothing;
+
+update public.indicador_ipca_mensal m set alimentacao_bebidas = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'alimentacao_bebidas';
+update public.indicador_ipca_mensal m set habitacao = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'habitacao';
+update public.indicador_ipca_mensal m set artigos_residencia = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'artigos_residencia';
+update public.indicador_ipca_mensal m set vestuario = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'vestuario';
+update public.indicador_ipca_mensal m set transportes = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'transportes';
+update public.indicador_ipca_mensal m set saude_cuidados_pessoais = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'saude_cuidados_pessoais';
+update public.indicador_ipca_mensal m set despesas_pessoais = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'despesas_pessoais';
+update public.indicador_ipca_mensal m set educacao = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'educacao';
+update public.indicador_ipca_mensal m set comunicacao = c.variacao_pct
+  from public.indicador_ipca_categoria c where c.ano_mes = m.ano_mes and c.categoria = 'comunicacao';
+
+drop trigger if exists trg_indicador_ipca_categoria_updated_at on public.indicador_ipca_categoria;
+drop table if exists public.indicador_ipca_categoria;
+
+-- 12.3 Pesos do IPCA (Configurações → Pesos do IPCA) — cadastro por grupo com
+--      vigência; usado para calcular impacto = peso vigente na competência ×
+--      variação do grupo. Sem seed: pesos oficiais (metodologia POF) não são
+--      inventados, ficam para o Guilherme cadastrar/confirmar.
+create table if not exists public.peso_ipca_grupo (
+  id              uuid primary key default gen_random_uuid(),
+  grupo           text not null check (grupo in (
+    'alimentacao_bebidas', 'habitacao', 'artigos_residencia', 'vestuario',
+    'transportes', 'saude_cuidados_pessoais', 'despesas_pessoais',
+    'educacao', 'comunicacao'
+  )),
+  peso_pct        numeric(6,4) not null check (peso_pct >= 0),
+  vigencia_inicio date not null,
+  vigencia_fim    date,
+  metodologia     text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  check (vigencia_fim is null or vigencia_fim >= vigencia_inicio)
+);
+
+comment on table public.peso_ipca_grupo is 'Peso (%) de cada grupo do IPCA por período de vigência (metodologia POF do IBGE muda de tempos em tempos). Usado para calcular impacto = peso vigente × variação do grupo. Dado compartilhado, sem profile_id.';
+
+drop trigger if exists trg_peso_ipca_grupo_updated_at on public.peso_ipca_grupo;
+create trigger trg_peso_ipca_grupo_updated_at
+  before update on public.peso_ipca_grupo
+  for each row execute function public.set_updated_at();
+
+-- 12.4 Metas de Inflação (Configurações → Metas de Inflação) — cadastro com
+--      vigência, substitui as constantes hardcoded META_IPCA_CENTRO/
+--      META_IPCA_TOLERANCIA. Banda informada explicitamente (não assume
+--      simetria em torno do centro, mesmo o Brasil historicamente usando
+--      banda simétrica).
+create table if not exists public.meta_inflacao (
+  id              uuid primary key default gen_random_uuid(),
+  meta_central    numeric(5,2) not null,
+  banda_inferior  numeric(5,2) not null,
+  banda_superior  numeric(5,2) not null,
+  vigencia_inicio date not null,
+  vigencia_fim    date,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  check (vigencia_fim is null or vigencia_fim >= vigencia_inicio),
+  check (banda_inferior <= meta_central and meta_central <= banda_superior)
+);
+
+comment on table public.meta_inflacao is 'Meta contínua de inflação (CMN) por período de vigência: centro + banda inferior/superior explícitos. Dado compartilhado, sem profile_id.';
+
+drop trigger if exists trg_meta_inflacao_updated_at on public.meta_inflacao;
+create trigger trg_meta_inflacao_updated_at
+  before update on public.meta_inflacao
+  for each row execute function public.set_updated_at();
+
+-- Seed: meta contínua vigente desde 2025 (centro 3%, banda 1,5%-4,5%) — já
+-- documentada em docs/MAPA-DE-DADOS.md §8.2, mesmo valor que estava hardcoded
+-- em META_IPCA_CENTRO/META_IPCA_TOLERANCIA. Só insere se não houver nenhuma
+-- meta cadastrada ainda (idempotente, não sobrescreve edição manual).
+insert into public.meta_inflacao (meta_central, banda_inferior, banda_superior, vigencia_inicio)
+select 3.00, 1.50, 4.50, '2025-01-01'
+where not exists (select 1 from public.meta_inflacao);
+
+alter table public.peso_ipca_grupo enable row level security;
+alter table public.meta_inflacao enable row level security;
+
+drop policy if exists "peso_ipca_grupo_authenticated" on public.peso_ipca_grupo;
+create policy "peso_ipca_grupo_authenticated" on public.peso_ipca_grupo
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "meta_inflacao_authenticated" on public.meta_inflacao;
+create policy "meta_inflacao_authenticated" on public.meta_inflacao
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
