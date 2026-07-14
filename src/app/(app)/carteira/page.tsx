@@ -13,7 +13,7 @@ export default async function CarteiraPage() {
   if (!user) redirect("/login");
 
   const [livro, ativosComPosicao] = await Promise.all([obterLivroRazao(), obterAtivosComPosicao()]);
-  const ativos = ativosComPosicao.map((a) => ({ id: a.id, ticker: a.ticker }));
+  const ativos = ativosComPosicao.map((a) => ({ id: a.id, ticker: a.ticker, tipo: a.tipo }));
 
   return (
     <div className="px-6 py-10">

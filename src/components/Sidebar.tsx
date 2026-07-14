@@ -10,6 +10,7 @@ const ITENS = [
   { href: "/carteira", label: "Carteira", icone: "wallet" },
   { href: "/proventos", label: "Proventos", icone: "trending-up" },
   { href: "/indicadores", label: "Indicadores", icone: "activity" },
+  { href: "/imposto-renda", label: "Imposto de Renda", icone: "file-text" },
   { href: "/alocacao", label: "Alocação", icone: "chart-pie" },
   { href: "/configuracoes", label: "Configurações", icone: "settings" },
 ] as const;
@@ -86,6 +87,7 @@ function Icone({ nome }: { nome: string }) {
     layers: "M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5",
     "trending-up": "M3 17l6-6 4 4 8-8M14 7h7v7",
     activity: "M22 12h-4l-3 9L9 3l-3 9H2",
+    "file-text": "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8",
   };
   return (
     <svg

@@ -1,14 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ativoSchema,
   classificacaoSchema,
+  EXCHANGES_CRIPTO,
   precoAtualSchema,
   simboloTradingviewSchema,
+  SUBTIPOS_RENDA_FIXA,
   TIPOS_ATIVO,
   type AtivoForm,
   type ClassificacaoForm,
@@ -89,15 +92,21 @@ export default function AtivoDetalheView({
   return (
     <div className="space-y-5">
       <div>
-        <a href="/ativos" className="text-xs text-faint hover:text-ink">
+        <Link href="/ativos" className="text-xs text-faint hover:text-ink">
           ← Voltar para Ativos
-        </a>
+        </Link>
       </div>
 
       <div className="card p-5">
         {editandoIdentidade ? (
           <FormIdentidade
-            valoresIniciais={{ ticker: ativo.ticker, nome: ativo.nome ?? undefined, tipo: ativo.tipo }}
+            valoresIniciais={{
+              ticker: ativo.ticker,
+              nome: ativo.nome ?? undefined,
+              tipo: ativo.tipo,
+              subtipo_renda_fixa: ativo.subtipoRendaFixa as AtivoForm["subtipo_renda_fixa"],
+              cripto_exchange: ativo.criptoExchange as AtivoForm["cripto_exchange"],
+            }}
             onCancelar={() => setEditandoIdentidade(false)}
             onSalvo={async (dados) => {
               const resultado = await editarAtivo(ativo.id, dados);
@@ -321,6 +330,7 @@ export default function AtivoDetalheView({
         {addTransacao && (
           <FormTransacao
             ativoId={ativo.id}
+            tipoAtivo={ativo.tipo}
             corretoras={corretoras}
             onCancelar={() => setAddTransacao(false)}
             onSalvo={async (dados) => {
@@ -366,9 +376,9 @@ export default function AtivoDetalheView({
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-ink">Proventos</h2>
-          <a href="/proventos" className="text-xs text-faint hover:text-ink">
+          <Link href="/proventos" className="text-xs text-faint hover:text-ink">
             Cadastrar na aba Proventos →
-          </a>
+          </Link>
         </div>
 
         {ativo.proventos.length === 0 ? (
@@ -438,16 +448,21 @@ function FormIdentidade({
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
     setError,
-  } = useForm<AtivoForm>({
+  } = useForm({
     resolver: zodResolver(ativoSchema),
     defaultValues: {
       ticker: valoresIniciais.ticker ?? "",
       nome: valoresIniciais.nome ?? "",
       tipo: valoresIniciais.tipo ?? "acao",
+      subtipo_renda_fixa: valoresIniciais.subtipo_renda_fixa || "",
+      cripto_exchange: valoresIniciais.cripto_exchange || "",
     },
   });
+
+  const tipoSelecionado = watch("tipo");
 
   const onSubmit = handleSubmit(async (data) => {
     try {
@@ -478,6 +493,32 @@ function FormIdentidade({
           ))}
         </select>
       </div>
+      {tipoSelecionado === "renda_fixa" && (
+        <div className="col-span-2">
+          <label className="label">Subtipo (para o relatório de IR)</label>
+          <select {...register("subtipo_renda_fixa")} className="input" defaultValue="">
+            <option value="">Não informar agora</option>
+            {SUBTIPOS_RENDA_FIXA.map((s) => (
+              <option key={s.valor} value={s.valor}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {tipoSelecionado === "cripto" && (
+        <div className="col-span-2">
+          <label className="label">Exchange (para o relatório de IR)</label>
+          <select {...register("cripto_exchange")} className="input" defaultValue="">
+            <option value="">Não informar agora</option>
+            {EXCHANGES_CRIPTO.map((e) => (
+              <option key={e.valor} value={e.valor}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {errors.root?.message && <p className="error-box col-span-2">{errors.root.message}</p>}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
@@ -698,11 +739,13 @@ function FormPrecoAtual({
 
 function FormTransacao({
   ativoId,
+  tipoAtivo,
   corretoras,
   onSalvo,
   onCancelar,
 }: {
   ativoId: string;
+  tipoAtivo: string;
   corretoras: Corretora[];
   onSalvo: (dados: TransacaoForm) => void | Promise<void>;
   onCancelar: () => void;
@@ -712,16 +755,17 @@ function FormTransacao({
     handleSubmit,
     formState: { errors, isSubmitting },
     setError,
-  } = useForm<TransacaoForm>({
+  } = useForm({
     resolver: zodResolver(transacaoSchema),
     defaultValues: {
       ativo_id: ativoId,
-      corretora_id: null,
-      tipo: "compra",
+      corretora_id: null as string | null,
+      tipo: "compra" as const,
       data: new Date().toISOString().slice(0, 10),
       quantidade: 0,
       preco_unitario: 0,
       custos: 0,
+      cambio: NaN,
     },
   });
 
@@ -799,6 +843,19 @@ function FormTransacao({
         {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
       </div>
 
+      {tipoAtivo === "internacional" && (
+        <div>
+          <label className="label">Câmbio do dia (para IR)</label>
+          <input
+            type="number"
+            step="0.0001"
+            {...register("cambio", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.cambio?.message && <p className="field-error">{errors.cambio.message}</p>}
+        </div>
+      )}
+
       {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-3 flex gap-2">
@@ -812,4 +869,3 @@ function FormTransacao({
     </form>
   );
 }
-

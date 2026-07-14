@@ -253,6 +253,14 @@ alter table public.ativos add column if not exists preco_atual numeric(14,4) not
 alter table public.ativos add column if not exists preco_atualizado_em timestamptz;
 alter table public.ativos add column if not exists simbolo_tradingview text;
 
+-- Campos usados só pelo relatório de Imposto de Renda (aba Indicadores/IR,
+-- ver docs/MAPA-DE-DADOS.md §8.5). Nulos = ainda não informado; sem efeito
+-- em nenhum outro cálculo do app (posição, alocação, etc.) além do IR.
+alter table public.ativos add column if not exists subtipo_renda_fixa text
+  check (subtipo_renda_fixa in ('cdb','tesouro','debenture','lci','lca','cri','cra'));
+alter table public.ativos add column if not exists cripto_exchange text
+  check (cripto_exchange in ('nacional','estrangeira'));
+
 create index if not exists idx_ativos_setor_id on public.ativos (setor_id);
 
 drop trigger if exists trg_ativos_updated_at on public.ativos;
@@ -305,6 +313,11 @@ create table if not exists public.transacoes (
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
+
+-- Câmbio do dia da operação — só relevante para ativos.tipo = 'internacional'
+-- (apuração de ganho de capital em Lei 14.754/2023 usa câmbio da compra e da
+-- venda). Nulo para todo o resto (ver docs/MAPA-DE-DADOS.md §8.5.4).
+alter table public.transacoes add column if not exists cambio numeric(10,4) check (cambio > 0);
 
 comment on table public.transacoes is 'Lançamentos de compra/venda por ativo. Base para cálculo de quantidade, preço médio (custo médio ponderado) e lucro realizado.';
 

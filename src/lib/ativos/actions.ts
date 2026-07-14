@@ -42,6 +42,8 @@ export type AtivoResumo = {
   ticker: string;
   nome: string | null;
   tipo: TipoAtivo;
+  subtipoRendaFixa: string | null;
+  criptoExchange: string | null;
   precoAtual: number;
   precoAtualizadoEm: string | null;
   simboloTradingview: string;
@@ -155,7 +157,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     supabase
       .from("ativos")
       .select(
-        "id, ticker, nome, tipo, preco_atual, preco_atualizado_em, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
+        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, preco_atual, preco_atualizado_em, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
       )
       .eq("profile_id", user.id)
       .order("ticker"),
@@ -208,6 +210,8 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       ticker: ativo.ticker,
       nome: ativo.nome,
       tipo: ativo.tipo as TipoAtivo,
+      subtipoRendaFixa: ativo.subtipo_renda_fixa,
+      criptoExchange: ativo.cripto_exchange,
       precoAtual,
       precoAtualizadoEm: ativo.preco_atualizado_em,
       simboloTradingview: ativo.simbolo_tradingview || deriveTradingViewSymbol(ativo.tipo as TipoAtivo, ativo.ticker),
@@ -349,7 +353,14 @@ export async function criarAtivo(input: AtivoForm): Promise<AcaoResultado & { id
 
   const { data, error } = await supabase
     .from("ativos")
-    .insert({ profile_id: user.id, ticker: input.ticker, nome: input.nome || null, tipo: input.tipo })
+    .insert({
+      profile_id: user.id,
+      ticker: input.ticker,
+      nome: input.nome || null,
+      tipo: input.tipo,
+      subtipo_renda_fixa: input.subtipo_renda_fixa || null,
+      cripto_exchange: input.cripto_exchange || null,
+    })
     .select("id")
     .single();
 
@@ -370,7 +381,13 @@ export async function editarAtivo(id: string, input: AtivoForm): Promise<AcaoRes
 
   const { error } = await supabase
     .from("ativos")
-    .update({ ticker: input.ticker, nome: input.nome || null, tipo: input.tipo })
+    .update({
+      ticker: input.ticker,
+      nome: input.nome || null,
+      tipo: input.tipo,
+      subtipo_renda_fixa: input.subtipo_renda_fixa || null,
+      cripto_exchange: input.cripto_exchange || null,
+    })
     .eq("id", id)
     .eq("profile_id", user.id);
 

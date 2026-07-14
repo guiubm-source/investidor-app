@@ -179,6 +179,7 @@ export async function criarTransacao(input: TransacaoForm): Promise<AcaoResultad
     quantidade: input.quantidade,
     preco_unitario: input.preco_unitario,
     custos: input.custos,
+    cambio: input.cambio || null,
   });
 
   if (error) return { error: "Não foi possível registrar a transação." };

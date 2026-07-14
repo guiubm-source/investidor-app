@@ -41,6 +41,7 @@ export async function updateSession(request: NextRequest) {
     "/carteira",
     "/proventos",
     "/indicadores",
+    "/imposto-renda",
     "/ativos",
     "/cadastro/perfil",
   ];

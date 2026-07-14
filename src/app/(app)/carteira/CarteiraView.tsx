@@ -25,7 +25,7 @@ const formatarData = (iso: string) => {
 
 const rotuloProvento = (valor: string) => TIPOS_PROVENTO.find((t) => t.valor === valor)?.label ?? valor;
 
-export type AtivoOpcao = { id: string; ticker: string };
+export type AtivoOpcao = { id: string; ticker: string; tipo: string };
 
 export default function CarteiraView({
   livroInicial,
@@ -165,20 +165,25 @@ function FormTransacao({
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
     setError,
-  } = useForm<TransacaoForm>({
+  } = useForm({
     resolver: zodResolver(transacaoSchema),
     defaultValues: {
       ativo_id: ativos[0]?.id ?? "",
-      corretora_id: null,
-      tipo: "compra",
+      corretora_id: null as string | null,
+      tipo: "compra" as const,
       data: new Date().toISOString().slice(0, 10),
       quantidade: 0,
       preco_unitario: 0,
       custos: 0,
+      cambio: NaN,
     },
   });
+
+  const ativoIdSelecionado = watch("ativo_id");
+  const tipoAtivoSelecionado = ativos.find((a) => a.id === ativoIdSelecionado)?.tipo;
 
   const onSubmit = handleSubmit(async (data) => {
     try {
@@ -263,6 +268,19 @@ function FormTransacao({
         />
         {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
       </div>
+
+      {tipoAtivoSelecionado === "internacional" && (
+        <div>
+          <label className="label">Câmbio do dia (para IR)</label>
+          <input
+            type="number"
+            step="0.0001"
+            {...register("cambio", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.cambio?.message && <p className="field-error">{errors.cambio.message}</p>}
+        </div>
+      )}
 
       {errors.root?.message && <p className="error-box col-span-2 md:col-span-4">{errors.root.message}</p>}
 

@@ -173,8 +173,8 @@ para o próprio dono da linha.
    chama `updateSession()` (`lib/supabase/middleware.ts`), que renova o
    token via `supabase.auth.getUser()` e redireciona para `/login` se a rota
    é protegida (`/dashboard`, `/configuracoes`, `/alocacao`, `/carteira`,
-   `/proventos`, `/indicadores`, `/ativos`, `/cadastro/perfil`) e não há
-   usuário autenticado.
+   `/proventos`, `/indicadores`, `/imposto-renda`, `/ativos`,
+   `/cadastro/perfil`) e não há usuário autenticado.
 5. Três clientes Supabase distintos, cada um para seu contexto:
    `lib/supabase/client.ts` (browser), `lib/supabase/server.ts` (Server
    Components/Actions, via cookies do Next), `lib/supabase/middleware.ts`
@@ -197,6 +197,7 @@ src/
       carteira/                 livro-razão de compra/venda (+ proventos, só leitura) e gestão de corretoras
       proventos/                cadastro de dividendo/JCP/rendimento + consolidações
       indicadores/              Selic, IPCA, Dólar, Fluxo estrangeiro (dado compartilhado) + Visão Geral
+      imposto-renda/            relatório de IR (mensal + resumo anual) por categoria de ativo
       alocacao/                 árvore de desvio (classe > setor > ativo)
       configuracoes/            dados pessoais, senha, suitability vigente
   components/                   Sidebar, TradingViewChart, suitability/*
@@ -206,6 +207,7 @@ src/
     carteira/     actions.ts (livro-razão de compra/venda), schema.ts
     proventos/    actions.ts (CRUD + consolidações), schema.ts
     indicadores/  actions.ts (CRUD + Visão Geral), schema.ts (sem profile_id — dado compartilhado)
+    ir/           actions.ts (motor de apuração de IR por categoria, mensal + anual, só leitura da Carteira/Ativos)
     suitability/  actions.ts, schema.ts, score.ts
     supabase/     client.ts, server.ts, middleware.ts
   proxy.ts                      sessão + proteção de rotas (Next 16)
@@ -347,15 +349,44 @@ Módulo `lib/indicadores/` será o único lugar que cadastra/edita/exclui
 esses quatro indicadores (mesma regra de fonte única de verdade da seção 3).
 A sub-aba Visão Geral só lê os quatro conjuntos de dados, nunca escreve.
 
-### 8.5 Perguntas em aberto (Imposto de Renda — ainda não decididas)
+### 8.5 Decisões tomadas em 2026-07-13 (Imposto de Renda)
 
-Ficam para quando a construção do IR começar, depois de Indicadores:
+1. **Escopo**: cobrir todos os tipos de ativo de uma vez (ação/fundo, FII,
+   renda fixa, cripto, internacional) — não faseado.
+2. **Renda fixa isenta**: novo campo `ativos.subtipo_renda_fixa` (cdb,
+   tesouro, debenture, lci, lca, cri, cra), preenchido no cadastro do ativo.
+   `lci`/`lca`/`cri`/`cra` são isentos; os demais seguem a tabela regressiva.
+3. **Cripto exchange**: novo campo `ativos.cripto_exchange` (nacional,
+   estrangeira) — nacional tem isenção de R$35.000/mês em vendas;
+   estrangeira não tem isenção, 15% fixo sobre o lucro anual.
+4. **Câmbio de ativo internacional**: novo campo `transacoes.cambio`
+   (nullable, só relevante quando `ativos.tipo = 'internacional'`) — o
+   usuário informa o câmbio do dia ao lançar a compra/venda na Carteira.
+5. **Formato do relatório**: detalhe mês a mês (lucro/prejuízo apurado,
+   isenção aplicada, imposto devido, por categoria) **e** resumo anual
+   consolidado no topo.
 
-1. Começar só por um tipo de ativo (ex. ações swing trade, o caso mais
-   comum) e expandir depois, ou já cobrir todos os tipos de uma vez?
-2. Como detectar day trade (mesmo ativo comprado e vendido na mesma data) e
-   como marcar renda fixa isenta (LCI/LCA) dentro do `tipo` `renda_fixa`
-   atual.
+### 8.6 Motor de cálculo — desenho antes de codar
+
+Day trade: mesmo `ativo_id` com compra E venda na mesma `data` — o volume
+`min(qtd comprada no dia, qtd vendida no dia)` é tratado como day trade
+(20%, sem isenção); o excedente da venda (se houver) é swing trade, usando o
+preço médio ponderado que já vinha acumulado antes daquele dia. **Isso é uma
+aproximação razoável, não um motor de casamento de ordens real** — documentar
+esse limite na tela do relatório (é auxiliar, não substitui contador).
+
+Prazo de renda fixa (pra tabela regressiva) não dá pra derivar do custo
+médio ponderado (ele funde os lotes). Mantemos uma fila FIFO auxiliar *só*
+para renda fixa, em paralelo ao cálculo de custo médio — consome lotes mais
+antigos primeiro pra saber quantos dias aquela venda específica ficou
+aplicada, sem alterar o cálculo de ganho (que continua usando custo médio,
+igual ao resto do app).
+
+Cálculo é sempre reaproveitando a mesma passada cronológica por transação já
+usada em `lib/ativos/actions.ts#calcularPosicao` (fonte única de verdade,
+seção 3) — o módulo `lib/ir` não reimplementa o algoritmo de custo médio, só
+estende a mesma passada para também emitir o detalhe de cada venda (data,
+ganho, se foi day trade).
 
 ## 9. Convenções a preservar
 

@@ -10,6 +10,27 @@ export const TIPOS_ATIVO = [
   { valor: "outro", label: "Outro" },
 ] as const;
 
+/**
+ * Só usados pelo relatório de Imposto de Renda (ver docs/MAPA-DE-DADOS.md
+ * §8.5) — distinguem, dentro de `renda_fixa` e `cripto`, subtipos que mudam
+ * a tributação (LCI/LCA/CRI/CRA isentos; cripto em exchange estrangeira sem
+ * isenção de piso). Sem efeito em nenhum outro cálculo do app.
+ */
+export const SUBTIPOS_RENDA_FIXA = [
+  { valor: "cdb", label: "CDB" },
+  { valor: "tesouro", label: "Tesouro Direto" },
+  { valor: "debenture", label: "Debênture" },
+  { valor: "lci", label: "LCI (isento)" },
+  { valor: "lca", label: "LCA (isento)" },
+  { valor: "cri", label: "CRI (isento)" },
+  { valor: "cra", label: "CRA (isento)" },
+] as const;
+
+export const EXCHANGES_CRIPTO = [
+  { valor: "nacional", label: "Exchange nacional" },
+  { valor: "estrangeira", label: "Exchange estrangeira" },
+] as const;
+
 export const ativoSchema = z.object({
   ticker: z
     .string()
@@ -18,6 +39,16 @@ export const ativoSchema = z.object({
     .transform((v) => v.toUpperCase()),
   nome: z.string().trim().optional(),
   tipo: z.enum(["acao", "fii", "renda_fixa", "fundo", "internacional", "cripto", "outro"]),
+  // Selects de formulário mandam "" quando "não informado" — union com
+  // z.literal("") (em vez de z.preprocess) mantém o tipo de entrada
+  // explícito, o que evita conflito de tipos entre zodResolver e o generic
+  // do useForm (preprocess deixa o tipo de entrada como `unknown`).
+  subtipo_renda_fixa: z
+    .union([z.enum(["cdb", "tesouro", "debenture", "lci", "lca", "cri", "cra"]), z.literal("")])
+    .transform((v) => (v ? v : null)),
+  cripto_exchange: z
+    .union([z.enum(["nacional", "estrangeira"]), z.literal("")])
+    .transform((v) => (v ? v : null)),
 });
 export type AtivoForm = z.infer<typeof ativoSchema>;
 

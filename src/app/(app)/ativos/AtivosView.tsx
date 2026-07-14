@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ativoSchema, TIPOS_ATIVO, type AtivoForm } from "@/lib/ativos/schema";
+import { ativoSchema, EXCHANGES_CRIPTO, SUBTIPOS_RENDA_FIXA, TIPOS_ATIVO, type AtivoForm } from "@/lib/ativos/schema";
 import { criarAtivo, obterAtivosComPosicao, type AtivoResumo } from "@/lib/ativos/actions";
 
 const rotuloTipo = (valor: string) => TIPOS_ATIVO.find((t) => t.valor === valor)?.label ?? valor;
@@ -95,12 +95,15 @@ function FormNovoAtivo({
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
     setError,
-  } = useForm<AtivoForm>({
+  } = useForm({
     resolver: zodResolver(ativoSchema),
-    defaultValues: { ticker: "", nome: "", tipo: "acao" },
+    defaultValues: { ticker: "", nome: "", tipo: "acao" as const, subtipo_renda_fixa: "" as const, cripto_exchange: "" as const },
   });
+
+  const tipoSelecionado = watch("tipo");
 
   const onSubmit = handleSubmit(async (data) => {
     try {
@@ -131,6 +134,32 @@ function FormNovoAtivo({
           ))}
         </select>
       </div>
+      {tipoSelecionado === "renda_fixa" && (
+        <div className="col-span-2">
+          <label className="label">Subtipo (para o relatório de IR)</label>
+          <select {...register("subtipo_renda_fixa")} className="input" defaultValue="">
+            <option value="">Não informar agora</option>
+            {SUBTIPOS_RENDA_FIXA.map((s) => (
+              <option key={s.valor} value={s.valor}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {tipoSelecionado === "cripto" && (
+        <div className="col-span-2">
+          <label className="label">Exchange (para o relatório de IR)</label>
+          <select {...register("cripto_exchange")} className="input" defaultValue="">
+            <option value="">Não informar agora</option>
+            {EXCHANGES_CRIPTO.map((e) => (
+              <option key={e.valor} value={e.valor}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <p className="col-span-2 text-xs text-faint">
         Depois de criado, abra o ativo para classificá-lo (classe/setor/peso-alvo) e lançar
         transações.
