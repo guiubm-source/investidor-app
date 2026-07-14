@@ -230,3 +230,251 @@ export function calcularChecklistFii(
     valorM2Aluguel: ultimo?.valorM2Aluguel ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Painel de monitoramento (2026-07-14): série histórica dos índices do
+// checklist que NÃO dependem do preço atual, + insights automáticos em texto
+// (regras simples, sem IA). Reaproveita calcularChecklistAcao/Fii chamando-as
+// repetidamente com uma janela de trimestres encolhendo (do mais recente pra
+// trás) e precoAtual: null — nenhuma fórmula nova. Índices dependentes de
+// preço (P/L, P/VP, PEG Ratio, Dividend Yield) ficam de fora: só temos o
+// preço de HOJE, não o de cada trimestre passado, então entram null
+// naturalmente e são excluídos da série (ver docs/MAPA-DE-DADOS.md §8.10
+// decisão 11). Continuam disponíveis como valor atual único na seção de
+// Checklist já existente.
+// ---------------------------------------------------------------------------
+
+export type PontoSerieAcao = {
+  anoTrimestre: string;
+  roePct: number | null;
+  roaPct: number | null;
+  roicPct: number | null;
+  margemBrutaPct: number | null;
+  margemLucroPct: number | null;
+  dlPl: number | null;
+  dividaBrutaEbitda: number | null;
+  liquidezCorrente: number | null;
+};
+
+/** Evolução trimestral dos índices independentes de preço. Ordem cronológica (mais antigo primeiro) — pronta pra gráfico. */
+export function calcularSerieChecklistAcao(pontos: PontoTrimestralAcao[]): PontoSerieAcao[] {
+  const desc = ordenarDesc(pontos);
+  return desc
+    .map((ponto, i) => {
+      const c = calcularChecklistAcao(desc.slice(i), null);
+      return {
+        anoTrimestre: ponto.anoTrimestre,
+        roePct: c.roePct,
+        roaPct: c.roaPct,
+        roicPct: c.roicPct,
+        margemBrutaPct: c.margemBrutaPct,
+        margemLucroPct: c.margemLucroPct,
+        dlPl: c.dlPl,
+        dividaBrutaEbitda: c.dividaBrutaEbitda,
+        liquidezCorrente: c.liquidezCorrente,
+      };
+    })
+    .reverse();
+}
+
+export type PontoSerieFii = {
+  anoTrimestre: string;
+  numeroNegociosMes: number | null;
+  vacanciaFinanceiraPct: number | null;
+  vacanciaFisicaPct: number | null;
+  capRatePct: number | null;
+};
+
+/** Evolução trimestral dos índices de FII (todos já independentes de preço). Ordem cronológica. */
+export function calcularSerieChecklistFii(pontos: PontoTrimestralFii[]): PontoSerieFii[] {
+  const desc = ordenarDesc(pontos);
+  return desc
+    .map((ponto, i) => {
+      const c = calcularChecklistFii(desc.slice(i), null, 0);
+      return {
+        anoTrimestre: ponto.anoTrimestre,
+        numeroNegociosMes: c.numeroNegociosMes,
+        vacanciaFinanceiraPct: c.vacanciaFinanceiraPct,
+        vacanciaFisicaPct: c.vacanciaFisicaPct,
+        capRatePct: c.capRatePct,
+      };
+    })
+    .reverse();
+}
+
+export type Insight = { texto: string; tom: "positivo" | "negativo" | "neutro" };
+
+type PontoValor = { anoTrimestre: string; valor: number | null };
+
+/** Sequência de altas/baixas consecutivas terminando no ponto mais recente (série cronológica). Null se não houver ao menos 2 seguidos na mesma direção. */
+function streakFinal(serieCronologica: PontoValor[]): { direcao: "alta" | "baixa"; tamanho: number } | null {
+  const valores = serieCronologica.filter((p) => p.valor !== null).map((p) => p.valor as number);
+  if (valores.length < 2) return null;
+  const ultimo = valores.length - 1;
+  if (valores[ultimo] === valores[ultimo - 1]) return null;
+  const direcao: "alta" | "baixa" = valores[ultimo] > valores[ultimo - 1] ? "alta" : "baixa";
+  let tamanho = 1;
+  for (let i = ultimo; i > 0; i--) {
+    const subiu = valores[i] > valores[i - 1];
+    const desceu = valores[i] < valores[i - 1];
+    if ((direcao === "alta" && subiu) || (direcao === "baixa" && desceu)) tamanho++;
+    else break;
+  }
+  return tamanho >= 2 ? { direcao, tamanho } : null;
+}
+
+/** Recorde (máximo ou mínimo) do histórico lançado, se o ponto mais recente for ele. Exige ao menos 3 pontos pra fazer sentido. */
+function ehRecorde(serieCronologica: PontoValor[]): "maximo" | "minimo" | null {
+  const valores = serieCronologica.filter((p) => p.valor !== null).map((p) => p.valor as number);
+  if (valores.length < 3) return null;
+  const ultimo = valores[valores.length - 1];
+  if (ultimo === Math.max(...valores)) return "maximo";
+  if (ultimo === Math.min(...valores)) return "minimo";
+  return null;
+}
+
+function formatarPctInsight(v: number): string {
+  return `${v.toFixed(1)}%`;
+}
+
+function formatarRatioInsight(v: number): string {
+  return `${v.toFixed(2)}x`;
+}
+
+function formatarCompactoInsight(v: number): string {
+  return v.toLocaleString("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
+}
+
+function gerarInsightsMetrica(
+  serieCronologica: PontoValor[],
+  rotulo: string,
+  maiorEhMelhor: boolean,
+  formatar: (v: number) => string
+): Insight[] {
+  const insights: Insight[] = [];
+  const valoresValidos = serieCronologica.filter((p) => p.valor !== null);
+  const ultimoValor = valoresValidos.length > 0 ? (valoresValidos[valoresValidos.length - 1].valor as number) : null;
+  if (ultimoValor === null) return insights;
+
+  const streak = streakFinal(serieCronologica);
+  if (streak) {
+    const bom = (streak.direcao === "alta") === maiorEhMelhor;
+    insights.push({
+      texto: `${rotulo} em ${streak.direcao} há ${streak.tamanho} trimestres seguidos (atual: ${formatar(ultimoValor)})`,
+      tom: bom ? "positivo" : "negativo",
+    });
+  }
+
+  const recorde = ehRecorde(serieCronologica);
+  if (recorde) {
+    const bom = (recorde === "maximo") === maiorEhMelhor;
+    insights.push({
+      texto: `${rotulo} no ${recorde === "maximo" ? "maior" : "menor"} nível do histórico lançado (${formatar(ultimoValor)})`,
+      tom: bom ? "positivo" : "neutro",
+    });
+  }
+
+  return insights;
+}
+
+/** Insights automáticos pra Ações/ETF/Internacional. Combina receita/lucro (dados brutos) com os índices do checklist independentes de preço. Limitado a 6 pra não poluir a tela. */
+export function gerarInsightsAcao(pontos: PontoTrimestralAcao[]): Insight[] {
+  const cronologica = [...ordenarDesc(pontos)].reverse();
+  const serie = calcularSerieChecklistAcao(pontos);
+
+  return [
+    ...gerarInsightsMetrica(
+      cronologica.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.receitaLiquida })),
+      "Receita Líquida",
+      true,
+      formatarCompactoInsight
+    ),
+    ...gerarInsightsMetrica(
+      cronologica.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.lucroLiquido })),
+      "Lucro Líquido",
+      true,
+      formatarCompactoInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roePct })),
+      "ROE",
+      true,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roicPct })),
+      "ROIC",
+      true,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.margemLucroPct })),
+      "Margem Líquida",
+      true,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.margemBrutaPct })),
+      "Margem Bruta",
+      true,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dlPl })),
+      "Dívida Líquida/PL",
+      false,
+      formatarRatioInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dividaBrutaEbitda })),
+      "Dívida Bruta/EBITDA",
+      false,
+      formatarRatioInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.liquidezCorrente })),
+      "Liquidez Corrente",
+      true,
+      formatarRatioInsight
+    ),
+  ].slice(0, 6);
+}
+
+/** Insights automáticos pra FIIs. Mesma lógica de streak/recorde, limitado a 6. */
+export function gerarInsightsFii(pontos: PontoTrimestralFii[]): Insight[] {
+  const cronologica = [...ordenarDesc(pontos)].reverse();
+  const serie = calcularSerieChecklistFii(pontos);
+
+  return [
+    ...gerarInsightsMetrica(
+      cronologica.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.receitaImobiliaria })),
+      "Receita Imobiliária",
+      true,
+      formatarCompactoInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.capRatePct })),
+      "Cap Rate",
+      true,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.vacanciaFinanceiraPct })),
+      "Vacância Financeira",
+      false,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.vacanciaFisicaPct })),
+      "Vacância Física",
+      false,
+      formatarPctInsight
+    ),
+    ...gerarInsightsMetrica(
+      serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.numeroNegociosMes })),
+      "Número de Negócios/mês",
+      true,
+      (v) => v.toFixed(0)
+    ),
+  ].slice(0, 6);
+}

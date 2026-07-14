@@ -46,6 +46,13 @@ import { criarTransacao, excluirTransacao, type Corretora } from "@/lib/carteira
 import DesvioBar from "@/components/DesvioBar";
 import TradingViewChart from "@/components/TradingViewChart";
 import { TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
+import {
+  calcularSerieChecklistAcao,
+  calcularSerieChecklistFii,
+  gerarInsightsAcao,
+  gerarInsightsFii,
+  type Insight,
+} from "@/lib/ativos/checklist-estatisticas";
 
 const rotuloTipo = (valor: string) => TIPOS_ATIVO.find((t) => t.valor === valor)?.label ?? valor;
 const rotuloProvento = (valor: string) => TIPOS_PROVENTO.find((t) => t.valor === valor)?.label ?? valor;
@@ -189,8 +196,8 @@ export default function AtivoDetalheView({
             onSalvo={async (dados) => {
               const resultado = await editarAtivo(ativo.id, dados);
               if (resultado.error) throw new Error(resultado.error);
-              setEditandoIdentidade(false);
               await atualizarTudo();
+              setEditandoIdentidade(false);
             }}
           />
         ) : (
@@ -268,8 +275,8 @@ export default function AtivoDetalheView({
                   onSalvo={async (dados) => {
                     const resultado = await atualizarSimboloTradingview(ativo.id, dados);
                     if (resultado.error) throw new Error(resultado.error);
-                    setEditandoSimbolo(false);
                     await atualizar();
+                    setEditandoSimbolo(false);
                   }}
                 />
               ) : (
@@ -297,8 +304,8 @@ export default function AtivoDetalheView({
                 onSalvo={async (dados) => {
                   const resultado = await classificarAtivo(ativo.id, dados);
                   if (resultado.error) throw new Error(resultado.error);
-                  setEditandoClassificacao(false);
                   await atualizar();
+                  setEditandoClassificacao(false);
                 }}
               />
             ) : (
@@ -401,8 +408,8 @@ export default function AtivoDetalheView({
                 onSalvo={async (dados) => {
                   const resultado = await atualizarPrecoAtual(ativo.id, dados);
                   if (resultado.error) throw new Error(resultado.error);
-                  setEditandoPreco(false);
                   await atualizarTudo();
+                  setEditandoPreco(false);
                 }}
               />
             ) : (
@@ -419,12 +426,13 @@ export default function AtivoDetalheView({
                       setErroCotacao(null);
                       setAtualizandoCotacao(true);
                       const resultado = await atualizarCotacaoAgora(ativo.id);
-                      setAtualizandoCotacao(false);
                       if (resultado.error) {
+                        setAtualizandoCotacao(false);
                         setErroCotacao(resultado.error);
                         return;
                       }
                       await atualizarTudo();
+                      setAtualizandoCotacao(false);
                     }}
                     className="text-xs text-accent hover:underline disabled:opacity-50"
                   >
@@ -459,8 +467,8 @@ export default function AtivoDetalheView({
                 onSalvo={async (dados) => {
                   const resultado = await criarTransacao(dados);
                   if (resultado.error) throw new Error(resultado.error);
-                  setAddTransacao(false);
                   await atualizar();
+                  setAddTransacao(false);
                 }}
               />
             )}
@@ -525,12 +533,15 @@ export default function AtivoDetalheView({
       )}
 
       {aba === "trimestrais" && checklist && checklist.grupo && (
-        <SecaoResultadosTrimestrais
-          ativoId={ativo.id}
-          grupo={checklist.grupo}
-          resultados={checklist.resultados}
-          onAtualizado={atualizarChecklist}
-        />
+        <>
+          <SecaoResultadosTrimestrais
+            ativoId={ativo.id}
+            grupo={checklist.grupo}
+            resultados={checklist.resultados}
+            onAtualizado={atualizarChecklist}
+          />
+          <PainelMonitoramento grupo={checklist.grupo} resultados={checklist.resultados} />
+        </>
       )}
     </div>
   );
@@ -649,8 +660,8 @@ function SecaoChecklist({
             onSalvo={async (dados) => {
               const resultado = await salvarSaldoAcionistas(ativoId, dados);
               if (resultado.error) throw new Error(resultado.error);
-              setEditandoSaldo(false);
               await onAtualizado();
+              setEditandoSaldo(false);
             }}
           />
         ) : (
@@ -770,8 +781,8 @@ function SecaoResultadosTrimestrais({
           onSalvo={async (dados) => {
             const resultado = await salvarResultadoTrimestral(ativoId, dados);
             if (resultado.error) throw new Error(resultado.error);
-            setEditando(null);
             await onAtualizado();
+            setEditando(null);
           }}
         />
       )}
@@ -878,6 +889,135 @@ function SecaoResultadosTrimestrais({
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Painel de monitoramento (ver docs/MAPA-DE-DADOS.md §8.10 decisão 11) —
+// evolução histórica dos índices do checklist que não dependem do preço
+// atual (gráficos de linha simples, sem lib externa, no padrão de
+// components/DesvioBar.tsx) + insights automáticos em texto (regras
+// transparentes de streak/recorde, sem IA). Cálculo 100% client-side a
+// partir de `resultados` (já carregado), reaproveitando
+// calcularSerieChecklistAcao/Fii e gerarInsightsAcao/Fii.
+// ---------------------------------------------------------------------------
+type GraficoMetrica = {
+  label: string;
+  dados: { anoTrimestre: string; valor: number | null }[];
+  formatar: (v: number) => string;
+};
+
+function PainelMonitoramento({
+  grupo,
+  resultados,
+}: {
+  grupo: "acoes" | "fiis";
+  resultados: ResultadoTrimestralItem[];
+}) {
+  if (resultados.length < 2) return null;
+
+  const insights = grupo === "acoes" ? gerarInsightsAcao(resultados) : gerarInsightsFii(resultados);
+
+  const graficos: GraficoMetrica[] =
+    grupo === "acoes"
+      ? (() => {
+          const serie = calcularSerieChecklistAcao(resultados);
+          return [
+            { label: "ROE", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roePct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "ROA", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roaPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "ROIC", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roicPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "Margem Bruta", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.margemBrutaPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "Margem Líquida", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.margemLucroPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "Dívida Líquida/PL", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dlPl })), formatar: (v: number) => `${v.toFixed(2)}x` },
+            { label: "Dívida Bruta/EBITDA", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dividaBrutaEbitda })), formatar: (v: number) => `${v.toFixed(2)}x` },
+            { label: "Liquidez Corrente", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.liquidezCorrente })), formatar: (v: number) => `${v.toFixed(2)}x` },
+          ];
+        })()
+      : (() => {
+          const serie = calcularSerieChecklistFii(resultados);
+          return [
+            { label: "Cap Rate", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.capRatePct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "Vacância Financeira", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.vacanciaFinanceiraPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "Vacância Física", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.vacanciaFisicaPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
+            { label: "Nº Negócios/mês", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.numeroNegociosMes })), formatar: (v: number) => v.toFixed(0) },
+          ];
+        })();
+
+  return (
+    <div className="card p-5">
+      <h2 className="text-sm font-medium text-ink mb-1">Painel de monitoramento</h2>
+      <p className="text-xs text-muted mb-3">
+        Evolução dos índices independentes de preço + insights automáticos gerados a partir do histórico
+        lançado (sequências de alta/baixa e recordes). P/L, P/VP, PEG Ratio e Dividend Yield ficam de
+        fora por dependerem do preço atual, sem histórico de preço por trimestre.
+      </p>
+
+      {insights.length > 0 && (
+        <ul className="space-y-1.5 mb-4">
+          {insights.map((insight, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              <span
+                className={`mt-1 h-1.5 w-1.5 rounded-full shrink-0 ${
+                  insight.tom === "positivo" ? "bg-success" : insight.tom === "negativo" ? "bg-danger" : "bg-faint"
+                }`}
+              />
+              <span className="text-muted">{insight.texto}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {graficos.map((g) => (
+          <MiniLineChart key={g.label} label={g.label} dados={g.dados} formatar={g.formatar} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MiniLineChart({ label, dados, formatar }: GraficoMetrica) {
+  const validos = dados.filter((p): p is { anoTrimestre: string; valor: number } => p.valor !== null);
+
+  if (validos.length < 2) {
+    return (
+      <div className="rounded-md border border-border bg-surface-2 p-3">
+        <p className="text-xs text-faint mb-1">{label}</p>
+        <p className="text-xs text-faint">Dados insuficientes</p>
+      </div>
+    );
+  }
+
+  const valores = validos.map((p) => p.valor);
+  const minV = Math.min(...valores);
+  const maxV = Math.max(...valores);
+  const span = maxV - minV || 1;
+  const largura = 200;
+  const altura = 48;
+  const passo = largura / (validos.length - 1);
+
+  const pontosSvg = validos.map((p, i) => `${i * passo},${altura - ((p.valor - minV) / span) * altura}`).join(" ");
+
+  const ultimo = validos[validos.length - 1].valor;
+  const penultimo = validos[validos.length - 2].valor;
+  const positivo = ultimo >= penultimo;
+
+  return (
+    <div className="rounded-md border border-border bg-surface-2 p-3">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-xs text-faint">{label}</p>
+        <p className={`text-xs font-medium ${positivo ? "text-success" : "text-danger"}`}>{formatar(ultimo)}</p>
+      </div>
+      <svg viewBox={`0 0 ${largura} ${altura}`} className="w-full h-12" preserveAspectRatio="none">
+        <polyline
+          points={pontosSvg}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className={positivo ? "text-success" : "text-danger"}
+        />
+      </svg>
     </div>
   );
 }

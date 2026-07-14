@@ -47,7 +47,7 @@ export default function TradingViewChart({ symbol }: { symbol: string }) {
     <div
       className="tradingview-widget-container rounded-md overflow-hidden border border-border"
       ref={containerRef}
-      style={{ height: 480 }}
+      style={{ height: 640 }}
     />
   );
 }

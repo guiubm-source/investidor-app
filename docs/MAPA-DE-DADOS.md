@@ -831,6 +831,41 @@ resolvem as ambiguidades levantadas antes de codar.
     (`ComparativoView.tsx`) deixa escolher até 3 ativos do mesmo grupo e
     ver o checklist lado a lado, lendo os mesmos dados de
     `obterChecklistAtivo`/`obterChecklistsPorGrupo` (nunca duplica cálculo).
+11. **Painel de monitoramento (2026-07-14)**: dentro da sub-aba "Resultados
+    trimestrais", abaixo da tabela histórica, um "Painel de monitoramento"
+    (`PainelMonitoramento` em `AtivoDetalheView.tsx`) mostra, pro mesmo
+    ativo (nunca cross-ativo — ver decisão 6 e a distinção com a tela
+    `/ativos/comparar`, que é cross-ativo mas só compara os índices atuais,
+    nunca a série histórica):
+    - **Gráficos de evolução**: as mesmas métricas do checklist comparativo
+      (decisão do usuário: "as mesmas do checklist"), mas só as que
+      **não dependem do preço atual** — ROE, ROA, ROIC, Mg. Bruta,
+      Mg. Lucro, DL/PL, Dívida Bruta/EBITDA, Liq. Corrente (Ações/ETF);
+      Cap Rate, Vacância Financeira, Vacância Física, Nº Negócios/mês
+      (FIIs). P/L, P/VP, PEG Ratio e Dividend Yield ficam de fora do
+      gráfico histórico (decisão do usuário) porque só temos o preço de
+      HOJE, não o de cada trimestre passado — aplicar o preço atual
+      retroativamente distorceria a série; continuam disponíveis como
+      valor atual único na seção Checklist já existente. Implementado como
+      SVG hand-rolled (`MiniLineChart`, sem lib de gráfico — segue o
+      padrão sem-dependência de `components/DesvioBar.tsx`), calculado via
+      `calcularSerieChecklistAcao`/`Fii` em `checklist-estatisticas.ts`:
+      chama `calcularChecklistAcao`/`Fii` repetidamente com uma janela de
+      trimestres encolhendo (do mais recente pra trás) e `precoAtual: null`
+      — reaproveita 100% as fórmulas existentes, nenhuma fórmula nova.
+    - **Insights automáticos em texto** (decisão do usuário: "sim, com
+      frases automáticas"): regras simples e transparentes, sem IA —
+      sequência de altas/baixas consecutivas ("ROE em alta há 3 trimestres
+      seguidos") e recordes do histórico lançado ("Margem Líquida no maior
+      nível do histórico lançado"), geradas por `gerarInsightsAcao`/`Fii`
+      em cima da mesma série + Receita Líquida/Lucro Líquido (Ações) ou
+      Receita Imobiliária (FIIs). Limitado a 6 insights pra não poluir a
+      tela, priorizando receita/lucro primeiro, depois rentabilidade,
+      depois alavancagem/liquidez.
+    - Painel só aparece com 2+ trimestres lançados (mínimo pra qualquer
+      tendência fazer sentido); cálculo 100% client-side a partir de
+      `checklist.resultados` (já carregado, sem round-trip novo ao
+      servidor).
 
 #### Schema planejado (seção 8.10)
 
