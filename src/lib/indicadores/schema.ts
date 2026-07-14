@@ -23,9 +23,30 @@ const anoMesSchema = z
 
 export const decisaoSelicSchema = z.object({
   reuniao_id: z.string().uuid(),
+  numero_reuniao: z.union([z.number(), z.nan()]).transform((v) => (Number.isNaN(v) ? null : v)),
   taxa_definida: z.number().min(0, "Informe uma taxa válida"),
 });
 export type DecisaoSelicForm = z.infer<typeof decisaoSelicSchema>;
+
+/** Edição de uma reunião já existente na tabela (histórico — bloco 4). */
+export const selicReuniaoEditSchema = z.object({
+  id: z.string().uuid(),
+  numero_reuniao: z.union([z.number(), z.nan()]).transform((v) => (Number.isNaN(v) ? null : v)),
+  data_inicio: z.string().min(1, "Informe a data de início"),
+  data_fim: z.string().min(1, "Informe a data de fim"),
+  taxa_definida: z.union([z.number(), z.nan()]).transform((v) => (Number.isNaN(v) ? null : v)),
+});
+export type SelicReuniaoEditForm = z.infer<typeof selicReuniaoEditSchema>;
+
+/** Criação manual de uma reunião nova (histórico — bloco 4, botão "+ Nova reunião" e "Duplicar"). */
+export const novaReuniaoSelicSchema = selicReuniaoEditSchema.omit({ id: true });
+export type NovaReuniaoSelicForm = z.infer<typeof novaReuniaoSelicSchema>;
+
+/** Importação em massa (colar texto) — bloco 5. */
+export const importarSelicSchema = z.object({
+  texto: z.string().min(1, "Cole o histórico antes de importar"),
+});
+export type ImportarSelicForm = z.infer<typeof importarSelicSchema>;
 
 export const ipcaMensalSchema = z.object({
   ano_mes: anoMesSchema,

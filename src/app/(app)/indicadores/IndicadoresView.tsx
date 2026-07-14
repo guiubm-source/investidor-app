@@ -5,12 +5,10 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   CATEGORIAS_IPCA,
-  decisaoSelicSchema,
   dolarMensalSchema,
   fluxoEstrangeiroMensalSchema,
   ipcaCategoriaSchema,
   ipcaMensalSchema,
-  type DecisaoSelicForm,
   type DolarMensalForm,
   type FluxoEstrangeiroMensalForm,
   type IpcaCategoriaForm,
@@ -25,7 +23,6 @@ import {
   excluirFluxoEstrangeiroMensal,
   excluirIpcaCategoria,
   excluirIpcaMensal,
-  lancarDecisaoSelic,
   obterDolar,
   obterFluxoEstrangeiro,
   obterIpca,
@@ -37,11 +34,8 @@ import {
   type SelicView,
   type VisaoGeralView,
 } from "@/lib/indicadores/actions";
-
-const formatarData = (iso: string) => {
-  const [ano, mes, dia] = iso.split("-");
-  return `${dia}/${mes}/${ano}`;
-};
+import { obterDiretoriaBacen, obterPresidentesBrasil, type DiretorBacen, type PresidenteBrasil } from "@/lib/referencia/actions";
+import AbaSelic from "./AbaSelic";
 
 const formatarMoeda = (valor: number) => valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -68,12 +62,16 @@ export default function IndicadoresView({
   ipcaInicial,
   dolarInicial,
   fluxoInicial,
+  diretoriaBacenInicial,
+  presidentesBrasilInicial,
 }: {
   visaoGeralInicial: VisaoGeralView;
   selicInicial: SelicView;
   ipcaInicial: IpcaView;
   dolarInicial: DolarView;
   fluxoInicial: FluxoEstrangeiroView;
+  diretoriaBacenInicial: DiretorBacen[];
+  presidentesBrasilInicial: PresidenteBrasil[];
 }) {
   const [aba, setAba] = useState<AbaId>("geral");
   const [visaoGeral, setVisaoGeral] = useState(visaoGeralInicial);
@@ -81,20 +79,26 @@ export default function IndicadoresView({
   const [ipca, setIpca] = useState(ipcaInicial);
   const [dolar, setDolar] = useState(dolarInicial);
   const [fluxo, setFluxo] = useState(fluxoInicial);
+  const [diretoriaBacen, setDiretoriaBacen] = useState(diretoriaBacenInicial);
+  const [presidentesBrasil, setPresidentesBrasil] = useState(presidentesBrasilInicial);
 
   const atualizarTudo = async () => {
-    const [vg, s, i, d, f] = await Promise.all([
+    const [vg, s, i, d, f, db, pb] = await Promise.all([
       obterVisaoGeral(),
       obterSelic(),
       obterIpca(),
       obterDolar(),
       obterFluxoEstrangeiro(),
+      obterDiretoriaBacen(),
+      obterPresidentesBrasil(),
     ]);
     setVisaoGeral(vg);
     setSelic(s);
     setIpca(i);
     setDolar(d);
     setFluxo(f);
+    setDiretoriaBacen(db);
+    setPresidentesBrasil(pb);
   };
 
   return (
@@ -114,7 +118,14 @@ export default function IndicadoresView({
       </div>
 
       {aba === "geral" && <AbaVisaoGeral visaoGeral={visaoGeral} />}
-      {aba === "selic" && <AbaSelic selic={selic} onAtualizar={atualizarTudo} />}
+      {aba === "selic" && (
+        <AbaSelic
+          selic={selic}
+          diretoriaBacen={diretoriaBacen}
+          presidentesBrasil={presidentesBrasil}
+          onAtualizar={atualizarTudo}
+        />
+      )}
       {aba === "ipca" && <AbaIpca ipca={ipca} onAtualizar={atualizarTudo} />}
       {aba === "fluxo" && <AbaFluxo fluxo={fluxo} onAtualizar={atualizarTudo} />}
       {aba === "dolar" && <AbaDolar dolar={dolar} onAtualizar={atualizarTudo} />}
@@ -143,113 +154,6 @@ function AbaVisaoGeral({ visaoGeral }: { visaoGeral: VisaoGeralView }) {
       <div className="card p-4">
         <p className="text-xs text-faint mb-2">Leitura combinada</p>
         <p className="text-sm text-ink leading-relaxed">{visaoGeral.leitura}</p>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Selic
-// ---------------------------------------------------------------------------
-
-function AbaSelic({ selic, onAtualizar }: { selic: SelicView; onAtualizar: () => Promise<void> }) {
-  const [lancando, setLancando] = useState<string | null>(null);
-
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors, isSubmitting },
-    setError,
-  } = useForm<DecisaoSelicForm>({ resolver: zodResolver(decisaoSelicSchema) });
-
-  const onSubmit = handleSubmit(async (data) => {
-    try {
-      const resultado = await lancarDecisaoSelic(data);
-      if (resultado.error) throw new Error(resultado.error);
-      setLancando(null);
-      reset();
-      await onAtualizar();
-    } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
-    }
-  });
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div className="card p-3">
-          <p className="text-xs text-faint">Taxa vigente</p>
-          <p className="text-lg font-medium text-ink flex items-center gap-1.5">
-            {selic.ultimaTaxa !== null ? `${selic.ultimaTaxa.toFixed(2)}% a.a.` : "—"}
-            <SetaTendencia tendencia={selic.tendencia} />
-          </p>
-        </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint">Próxima reunião</p>
-          <p className="text-sm text-ink">
-            {selic.proximaReuniao
-              ? `${formatarData(selic.proximaReuniao.dataInicio)} a ${formatarData(selic.proximaReuniao.dataFim)}`
-              : "Todas as reuniões conhecidas já têm decisão lançada"}
-          </p>
-        </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint">Presidente do BC</p>
-          <p className="text-sm text-ink">{selic.presidenteBc}</p>
-        </div>
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="grid grid-cols-[1fr_100px_100px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
-          <span>Reunião</span>
-          <span className="text-right">Taxa</span>
-          <span></span>
-        </div>
-        {selic.reunioes.map((r) => (
-          <div key={r.id}>
-            <div className="grid grid-cols-[1fr_100px_100px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0">
-              <span className="text-ink">
-                {formatarData(r.dataInicio)} – {formatarData(r.dataFim)}
-              </span>
-              <span className="text-right text-ink">{r.taxaDefinida !== null ? `${r.taxaDefinida.toFixed(2)}%` : "—"}</span>
-              {r.taxaDefinida === null ? (
-                <button
-                  onClick={() => {
-                    reset({ reuniao_id: r.id, taxa_definida: undefined });
-                    setLancando(r.id);
-                  }}
-                  className="text-accent hover:underline text-right"
-                >
-                  Lançar decisão
-                </button>
-              ) : (
-                <span className="text-faint text-right">Decidido</span>
-              )}
-            </div>
-            {lancando === r.id && (
-              <form onSubmit={onSubmit} className="flex items-end gap-2 px-4 pb-3 pt-1">
-                <input type="hidden" {...register("reuniao_id")} value={r.id} />
-                <div>
-                  <label className="label">Taxa definida (% a.a.)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    {...register("taxa_definida", { valueAsNumber: true })}
-                    className="input"
-                  />
-                  {errors.taxa_definida?.message && <p className="field-error">{errors.taxa_definida.message}</p>}
-                </div>
-                <button type="button" onClick={() => setLancando(null)} className="btn btn-secondary">
-                  Cancelar
-                </button>
-                <button type="submit" disabled={isSubmitting} className="btn btn-primary">
-                  {isSubmitting ? "Salvando..." : "Salvar"}
-                </button>
-                {errors.root?.message && <p className="field-error">{errors.root.message}</p>}
-              </form>
-            )}
-          </div>
-        ))}
       </div>
     </div>
   );

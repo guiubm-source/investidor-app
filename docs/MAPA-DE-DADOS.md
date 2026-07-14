@@ -199,14 +199,15 @@ src/
       indicadores/              Selic, IPCA, Dólar, Fluxo estrangeiro (dado compartilhado) + Visão Geral
       imposto-renda/            relatório de IR (mensal + resumo anual) por categoria de ativo
       alocacao/                 árvore de desvio (classe > setor > ativo)
-      configuracoes/            dados pessoais, senha, suitability vigente
+      configuracoes/            dados pessoais, senha, suitability vigente, diretoria do Bacen e presidentes do Brasil (cadastros de referência)
   components/                   Sidebar, TradingViewChart, suitability/*
   lib/
     ativos/       actions.ts (motor de posição/desvio), schema.ts (Zod)
     alocacao/     actions.ts (estrutura-alvo), constants.ts, schema.ts
     carteira/     actions.ts (livro-razão de compra/venda), schema.ts
     proventos/    actions.ts (CRUD + consolidações), schema.ts
-    indicadores/  actions.ts (CRUD + Visão Geral), schema.ts (sem profile_id — dado compartilhado)
+    indicadores/  actions.ts (CRUD + Visão Geral + motor Selic), schema.ts, selic-estatisticas.ts (cálculos puros, sem "use server" — usado no servidor e no gráfico client-side)
+    referencia/   actions.ts + schema.ts — CRUD de bacen_diretoria e brasil_presidentes (sem profile_id), consumido por Configurações (cadastro) e por Indicadores/Selic (filtros de mandato)
     ir/           actions.ts (motor de apuração de IR por categoria, mensal + anual, só leitura da Carteira/Ativos)
     suitability/  actions.ts, schema.ts, score.ts
     supabase/     client.ts, server.ts, middleware.ts
@@ -387,6 +388,116 @@ usada em `lib/ativos/actions.ts#calcularPosicao` (fonte única de verdade,
 seção 3) — o módulo `lib/ir` não reimplementa o algoritmo de custo médio, só
 estende a mesma passada para também emitir o detalhe de cada venda (data,
 ganho, se foi day trade).
+
+### 8.7 Decisões tomadas em 2026-07-14 (Selic avançada + cadastros de referência)
+
+Guilherme trouxe uma especificação detalhada (recebida de fonte externa) para
+reformular a sub-aba **Selic** dentro de Indicadores. Decisões de escopo já
+confirmadas antes de codar:
+
+1. **Escopo**: implementar a especificação inteira de uma vez (cards,
+   Banco Central, gráfico, histórico, importação) — não faseado.
+2. **Entrada de dados**: os dois modelos convivem. O lançamento manual linha
+   a linha (botão "Lançar decisão" já existente, um registro por vez) continua
+   existindo — útil pro dia a dia, já que só sai 1 reunião nova a cada ~45
+   dias. A importação em massa (colar texto no formato `REUNIÃO / DATA /
+   SELIC`) é um caminho adicional, pensado pra carregar/corrigir histórico
+   grande de uma vez (ex. anos de dados colados do Excel ou de um site
+   oficial). Nenhum dos dois é removido.
+3. **Diretoria do Banco Central**: em vez de simplificar pra só "presidente
+   vigente" (que é o que já existe hoje, hardcoded em `obterSelic()`), o
+   Guilherme quer a diretoria completa (presidente + diretores, todos os
+   mandatos históricos) cadastrável de verdade. Esse cadastro **não vive
+   dentro da aba Indicadores** — vive em **duas novas sub-abas dentro de
+   Configurações**:
+   - **Configurações → Diretoria do Bacen**: CRUD de `bacen_diretoria`
+     (nome, cargo, início/fim de mandato, nomeado por, data de posse).
+   - **Configurações → Presidentes do Brasil**: CRUD de `brasil_presidentes`
+     (nome, início/fim de mandato).
+   Motivo de ficar em Configurações: é dado de referência/cadastro
+   administrativo, não um lançamento periódico como Selic/IPCA — e o
+   Guilherme foi explícito que essas duas listas **vão alimentar mais de uma
+   aba** (Selic agora, IPCA depois — os filtros "mandato do presidente do
+   BC" e "mandato presidencial" do gráfico de evolução).
+4. **Arquitetura de dado compartilhado**: `bacen_diretoria` e
+   `brasil_presidentes` seguem exatamente o mesmo padrão já estabelecido pra
+   Indicadores (seção 8.3.8) — **sem `profile_id`**, RLS
+   `auth.role() = 'authenticated'` pra todo CRUD. É dado histórico/público,
+   igual pra qualquer usuário do app, não dado pessoal.
+5. **Dados derivados nunca são armazenados** (reforça o princípio já usado
+   em Indicadores/IR): taxa vigente, última decisão, direção, sequência de
+   decisões consecutivas, tempo da taxa atual, variação, tendência,
+   estatísticas (máx/mín/média/mediana/desvio padrão/amplitude, contagens de
+   altas/reduções/manutenções, maior alta, maior redução, tempo médio entre
+   reuniões, tempo médio de vigência) e média móvel são **sempre recalculados
+   em `lib/indicadores/actions.ts`** a partir de `indicador_selic_reunioes`,
+   nunca gravados em coluna. Qualquer edição/exclusão/importação recalcula
+   tudo automaticamente porque nada fica "desatualizado" em cache.
+6. **Numeração oficial da reunião** ("277ª reunião"): não dá pra derivar só
+   contando linhas (a numeração oficial do Copom começa em 1996 e o app pode
+   não ter o histórico completo carregado). Por isso ganha campo próprio
+   `numero_reuniao` (nullable, preenchido via importação ou manualmente) em
+   vez de ser calculado.
+
+#### Schema planejado (seção 8.7)
+
+- `indicador_selic_reunioes` (tabela já existe — só ganha coluna nova):
+  `alter table ... add column if not exists numero_reuniao integer` (unique
+  quando não nulo). Segue sem `profile_id` (já documentado em 8.3/8.4).
+- `bacen_diretoria` (nova, sem `profile_id`): `id`, `nome`, `cargo` (texto
+  livre — cargo/diretoria do Bacen mudou de nome várias vezes ao longo das
+  décadas, não vale a pena travar num enum fixo), **`presidente` (boolean,
+  default false)** — flag separada do texto livre de `cargo` pra saber com
+  certeza qual linha é presidência (usado pro card "Presidente do BC" e pro
+  filtro de mandato presidencial do BC no gráfico, sem precisar parsear
+  `cargo`), `mandato_inicio` (date), `mandato_fim` (date, nullable = mandato
+  vigente), `nomeado_por` (texto, nullable), `data_posse` (date, nullable).
+- `brasil_presidentes` (nova, sem `profile_id`): `id`, `nome`,
+  `mandato_inicio` (date), `mandato_fim` (date, nullable = mandato vigente).
+
+RLS: mesmo padrão `auth.role() = 'authenticated'` das outras tabelas de
+Indicadores (ver 8.3.8 pro racional da exceção à regra geral de
+`profile_id`).
+
+#### Importação (parser) — desenho antes de codar
+
+Cola de texto multi-linha, colunas separadas por TAB ou por 2+ espaços.
+Cada linha vira um upsert em `indicador_selic_reunioes` **por `data_inicio`**
+(já é `unique` na tabela): se a data já existe, atualiza `numero_reuniao` e
+`taxa_definida`; se não existe, insere uma reunião nova com
+`decidido_em = now()`. `data_fim` (reunião de 2 dias) não vem no texto colado
+— assumimos `data_fim = data_inicio + 1 dia` quando a importação cria uma
+reunião nova (ajustável manualmente depois, como qualquer outro registro).
+Validação antes de gravar: número de reunião e data não podem se repetir
+dentro do lote colado, Selic não pode ser negativa, datas não podem ser
+futuras. Depois do upsert, todo o recálculo de decisão/variação/sequência
+acontece na leitura (`obterSelic()`), não em cima do dado gravado — não tem
+"recalcular e salvar", é sempre "recalcular ao exibir" (ver decisão 5).
+
+#### Gráfico — sem nova dependência
+
+O app não tem nenhuma lib de gráficos (o `TradingViewChart` é um embed de
+iframe externo, não uma lib npm). Pra evitar dependência nova (risco de
+instalação falhar neste sandbox por falta de rede, ver seção 3) o gráfico de
+evolução da Selic é **SVG artesanal** (componente próprio), não
+recharts/chart.js/etc. "Zoom" do pedido original vira, na prática, o filtro
+de período (todo histórico / 12m / 24m / 5 anos / 10 anos / personalizado
+com datas) — sem arrastar-para-selecionar no canvas. Média móvel (3/5/8/12
+reuniões ou personalizado) é calculada em `lib/indicadores/selic-estatisticas.ts`
+(módulo comum, sem `"use server"`, importável tanto pela action quanto
+direto pelo componente de gráfico no cliente).
+
+#### Fora de escopo por enquanto
+
+- **IPCA reutilizar os mesmos filtros de mandato**: os cadastros de
+  `bacen_diretoria`/`brasil_presidentes` já nascem prontos pra isso, mas a
+  integração no gráfico de IPCA fica pra quando essa sub-aba for trabalhada
+  (Guilherme pediu Selic primeiro).
+- **Preenchimento histórico dos cadastros** (quem foi presidente do Bacen em
+  1999, etc.): a tela fica pronta pra cadastro, mas o preenchimento dos
+  dados históricos é manual pelo Guilherme (ou por um pedido futuro
+  explícito pra eu pesquisar e sugerir os valores) — não estou assumindo os
+  nomes/datas sem confirmação.
 
 ## 9. Convenções a preservar
 

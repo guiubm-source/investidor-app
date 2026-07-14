@@ -5,10 +5,26 @@ import type {
   DecisaoSelicForm,
   DolarMensalForm,
   FluxoEstrangeiroMensalForm,
+  ImportarSelicForm,
   IpcaCategoriaForm,
   IpcaMensalForm,
+  NovaReuniaoSelicForm,
+  SelicReuniaoEditForm,
 } from "./schema";
 import { CATEGORIAS_IPCA, META_IPCA_CENTRO, META_IPCA_TOLERANCIA } from "./schema";
+import {
+  adicionarDias,
+  calcularEstatisticas,
+  calcularSequenciaConsecutiva,
+  derivarReunioes,
+  diasEntre,
+  parseImportacaoSelic,
+  type DecisaoTipo,
+  type PontoSelic,
+  type SelicEstatisticas,
+  type SelicReuniaoDerivada,
+} from "./selic-estatisticas";
+import { obterDiretoriaBacen, presidenteBcVigente, type DiretorBacen } from "@/lib/referencia/actions";
 
 export type AcaoResultado = { error?: string };
 
@@ -33,52 +49,88 @@ function calcularTendencia(atual: number | null, anterior: number | null): Tende
 // Selic / Copom
 // ---------------------------------------------------------------------------
 
-export type SelicReuniao = {
-  id: string;
-  dataInicio: string;
-  dataFim: string;
-  taxaDefinida: number | null;
-  decidido: boolean;
-};
+export type SelicReuniao = SelicReuniaoDerivada;
 
 export type SelicView = {
   reunioes: SelicReuniao[];
   proximaReuniao: SelicReuniao | null;
   ultimaTaxa: number | null;
+  dataVigenciaAtual: string | null;
+  diasVigente: number | null;
   tendencia: Tendencia;
-  presidenteBc: string;
+  ultimaDecisao: { tipo: DecisaoTipo; variacao: number } | null;
+  decisoesConsecutivas: { tipo: DecisaoTipo; quantidade: number } | null;
+  presidenteBc: DiretorBacen | null;
+  estatisticas: SelicEstatisticas;
 };
 
+/**
+ * Motor da Selic — ver docs/MAPA-DE-DADOS.md §8.7. Todo campo derivado
+ * (variação, decisão, sequência, tendência, dias vigente, estatísticas) é
+ * SEMPRE recalculado aqui a partir de `indicador_selic_reunioes`, nunca lido
+ * de coluna própria — cálculo puro fica em `selic-estatisticas.ts`.
+ */
 export async function obterSelic(): Promise<SelicView> {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("indicador_selic_reunioes")
-    .select("id, data_inicio, data_fim, taxa_definida")
-    .order("data_inicio", { ascending: true });
+  const [{ data }, diretoria] = await Promise.all([
+    supabase
+      .from("indicador_selic_reunioes")
+      .select("id, numero_reuniao, data_inicio, data_fim, taxa_definida")
+      .order("data_inicio", { ascending: true }),
+    obterDiretoriaBacen(),
+  ]);
 
-  const reunioes: SelicReuniao[] = (data ?? []).map((r) => ({
+  const pontos: PontoSelic[] = (data ?? []).map((r) => ({
     id: r.id,
+    numeroReuniao: r.numero_reuniao,
     dataInicio: r.data_inicio,
     dataFim: r.data_fim,
     taxaDefinida: r.taxa_definida === null ? null : Number(r.taxa_definida),
-    decidido: r.taxa_definida !== null,
   }));
 
+  const reunioes = derivarReunioes(pontos);
   const decididas = reunioes.filter((r) => r.decidido);
   const ultima = decididas.at(-1) ?? null;
   const penultima = decididas.at(-2) ?? null;
   const proximaReuniao = reunioes.find((r) => !r.decidido) ?? null;
+  const hoje = new Date().toISOString().slice(0, 10);
 
   return {
     reunioes,
     proximaReuniao,
     ultimaTaxa: ultima?.taxaDefinida ?? null,
+    dataVigenciaAtual: ultima?.dataVigencia ?? null,
+    diasVigente: ultima?.dataVigencia ? diasEntre(ultima.dataVigencia, hoje) : null,
     tendencia: calcularTendencia(ultima?.taxaDefinida ?? null, penultima?.taxaDefinida ?? null),
-    presidenteBc: "Gabriel Galípolo (mandato 2025–2028)",
+    ultimaDecisao: ultima?.decisaoTipo ? { tipo: ultima.decisaoTipo, variacao: ultima.variacao! } : null,
+    decisoesConsecutivas: calcularSequenciaConsecutiva(reunioes),
+    presidenteBc: await presidenteBcVigente(diretoria),
+    estatisticas: calcularEstatisticas(reunioes),
   };
 }
 
+/** Lançamento manual linha a linha (fluxo original, continua existindo ao lado da importação em massa). */
 export async function lancarDecisaoSelic(input: DecisaoSelicForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const payload: Record<string, unknown> = {
+    taxa_definida: input.taxa_definida,
+    decidido_em: new Date().toISOString(),
+  };
+  if (input.numero_reuniao !== null) payload.numero_reuniao = input.numero_reuniao;
+
+  const { error } = await supabase.from("indicador_selic_reunioes").update(payload).eq("id", input.reuniao_id);
+
+  if (error) return { error: "Não foi possível registrar a decisão do Copom." };
+  return {};
+}
+
+/** Edição completa de uma reunião existente (bloco 4 — histórico). */
+export async function editarReuniaoSelic(input: SelicReuniaoEditForm): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -87,11 +139,121 @@ export async function lancarDecisaoSelic(input: DecisaoSelicForm): Promise<AcaoR
 
   const { error } = await supabase
     .from("indicador_selic_reunioes")
-    .update({ taxa_definida: input.taxa_definida, decidido_em: new Date().toISOString() })
-    .eq("id", input.reuniao_id);
+    .update({
+      numero_reuniao: input.numero_reuniao,
+      data_inicio: input.data_inicio,
+      data_fim: input.data_fim,
+      taxa_definida: input.taxa_definida,
+    })
+    .eq("id", input.id);
 
-  if (error) return { error: "Não foi possível registrar a decisão do Copom." };
+  if (error) return { error: "Não foi possível salvar. Confira se a data ou o número da reunião não estão duplicados." };
   return {};
+}
+
+/** Criação manual de uma reunião nova (bloco 4 — "+ Nova reunião" e "Duplicar"). */
+export async function criarReuniaoSelic(input: NovaReuniaoSelicForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase.from("indicador_selic_reunioes").insert({
+    numero_reuniao: input.numero_reuniao,
+    data_inicio: input.data_inicio,
+    data_fim: input.data_fim,
+    taxa_definida: input.taxa_definida,
+    decidido_em: input.taxa_definida !== null ? new Date().toISOString() : null,
+  });
+
+  if (error) return { error: "Não foi possível criar a reunião. Confira se a data ou o número não estão duplicados." };
+  return {};
+}
+
+export async function excluirReuniaoSelic(id: string): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("indicador_selic_reunioes").delete().eq("id", id);
+  if (error) return { error: "Não foi possível excluir a reunião." };
+  return {};
+}
+
+export async function excluirReunioesSelic(ids: string[]): Promise<AcaoResultado> {
+  if (ids.length === 0) return {};
+  const supabase = await createClient();
+  const { error } = await supabase.from("indicador_selic_reunioes").delete().in("id", ids);
+  if (error) return { error: "Não foi possível excluir as reuniões selecionadas." };
+  return {};
+}
+
+export type ImportacaoSelicResultado = AcaoResultado & { importados?: number; avisos?: string[] };
+
+/**
+ * Importação em massa (bloco 5) — cola texto "REUNIÃO / DATA / SELIC" (ou só
+ * "DATA / SELIC"), faz upsert por `data_inicio` (já é unique na tabela).
+ * `data_fim` é sempre `data_inicio + 1 dia` quando cria uma reunião nova
+ * (ajustável manualmente depois). Parser puro em `selic-estatisticas.ts`.
+ */
+export async function importarHistoricoSelic(input: ImportarSelicForm): Promise<ImportacaoSelicResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { linhas, erros } = parseImportacaoSelic(input.texto);
+
+  if (linhas.length === 0) {
+    return { error: erros[0] ?? "Nenhuma linha válida encontrada para importar.", avisos: erros };
+  }
+
+  // Upsert linha a linha (não em lote): se a data já existe, preserva o
+  // numero_reuniao gravado quando a linha colada não trouxe número (evita
+  // apagar um número já lançado antes por causa de uma reimportação parcial).
+  let importados = 0;
+  const errosGravacao: string[] = [...erros];
+
+  for (const linha of linhas) {
+    const { data: existente } = await supabase
+      .from("indicador_selic_reunioes")
+      .select("id, numero_reuniao")
+      .eq("data_inicio", linha.data)
+      .maybeSingle();
+
+    if (existente) {
+      const { error } = await supabase
+        .from("indicador_selic_reunioes")
+        .update({
+          taxa_definida: linha.taxa,
+          numero_reuniao: linha.numeroReuniao ?? existente.numero_reuniao,
+          decidido_em: new Date().toISOString(),
+        })
+        .eq("id", existente.id);
+      if (error) {
+        errosGravacao.push(`Data ${linha.data}: não foi possível atualizar (${error.message}).`);
+        continue;
+      }
+    } else {
+      const { error } = await supabase.from("indicador_selic_reunioes").insert({
+        data_inicio: linha.data,
+        data_fim: adicionarDias(linha.data, 1),
+        taxa_definida: linha.taxa,
+        numero_reuniao: linha.numeroReuniao,
+        decidido_em: new Date().toISOString(),
+      });
+      if (error) {
+        errosGravacao.push(`Data ${linha.data}: não foi possível inserir (${error.message}).`);
+        continue;
+      }
+    }
+    importados++;
+  }
+
+  if (importados === 0) {
+    return { error: errosGravacao[0] ?? "Não foi possível importar nenhuma linha.", avisos: errosGravacao };
+  }
+
+  return { importados, avisos: errosGravacao.length > 0 ? errosGravacao : undefined };
 }
 
 // ---------------------------------------------------------------------------

@@ -520,3 +520,78 @@ create policy "indicador_dolar_mensal_authenticated" on public.indicador_dolar_m
 drop policy if exists "indicador_fluxo_estrangeiro_mensal_authenticated" on public.indicador_fluxo_estrangeiro_mensal;
 create policy "indicador_fluxo_estrangeiro_mensal_authenticated" on public.indicador_fluxo_estrangeiro_mensal
   for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- 11. Selic avançada (numeração oficial da reunião) + cadastros de
+--     referência (diretoria do Bacen, presidentes do Brasil) — decisões em
+--     docs/MAPA-DE-DADOS.md §8.7 (2026-07-14). bacen_diretoria e
+--     brasil_presidentes seguem o mesmo padrão de dado compartilhado da
+--     seção 10 (sem profile_id, RLS auth.role() = 'authenticated') — são
+--     cadastrados em Configurações, mas lidos pela aba Indicadores (Selic
+--     hoje, IPCA depois) para os filtros de mandato do gráfico.
+-- ============================================================================
+
+-- 11.1 Numeração oficial da reunião do Copom ("277ª reunião"). Não dá pra
+--      derivar contando linhas (numeração oficial começa em 1996 e o app
+--      pode não ter o histórico completo carregado) — por isso é campo
+--      próprio, preenchido via importação ou lançamento manual.
+alter table public.indicador_selic_reunioes add column if not exists numero_reuniao integer;
+
+create unique index if not exists indicador_selic_reunioes_numero_reuniao_key
+  on public.indicador_selic_reunioes (numero_reuniao)
+  where numero_reuniao is not null;
+
+-- 11.2 Diretoria do Banco Central — histórico completo (presidente +
+--      diretores), todos os mandatos. `presidente` é uma flag separada do
+--      texto livre de `cargo` (que muda de nome ao longo das décadas) pra
+--      identificar com certeza qual linha é presidência, sem parsear texto.
+create table if not exists public.bacen_diretoria (
+  id              uuid primary key default gen_random_uuid(),
+  nome            text not null,
+  cargo           text not null,
+  presidente      boolean not null default false,
+  mandato_inicio  date not null,
+  mandato_fim     date,
+  nomeado_por     text,
+  data_posse      date,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  check (mandato_fim is null or mandato_fim >= mandato_inicio)
+);
+
+comment on table public.bacen_diretoria is 'Diretoria completa do Bacen (presidente + diretores), todos os mandatos históricos. Dado compartilhado, sem profile_id — cadastrado em Configurações, lido pelos filtros de mandato da aba Indicadores.';
+
+drop trigger if exists trg_bacen_diretoria_updated_at on public.bacen_diretoria;
+create trigger trg_bacen_diretoria_updated_at
+  before update on public.bacen_diretoria
+  for each row execute function public.set_updated_at();
+
+-- 11.3 Presidentes do Brasil — usado no filtro "mandato presidencial" do
+--      gráfico de evolução da Selic (e futuramente do IPCA).
+create table if not exists public.brasil_presidentes (
+  id              uuid primary key default gen_random_uuid(),
+  nome            text not null,
+  mandato_inicio  date not null,
+  mandato_fim     date,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  check (mandato_fim is null or mandato_fim >= mandato_inicio)
+);
+
+comment on table public.brasil_presidentes is 'Presidentes do Brasil e período de mandato. Dado compartilhado, sem profile_id — cadastrado em Configurações, lido pelos filtros de mandato da aba Indicadores.';
+
+drop trigger if exists trg_brasil_presidentes_updated_at on public.brasil_presidentes;
+create trigger trg_brasil_presidentes_updated_at
+  before update on public.brasil_presidentes
+  for each row execute function public.set_updated_at();
+
+alter table public.bacen_diretoria enable row level security;
+alter table public.brasil_presidentes enable row level security;
+
+drop policy if exists "bacen_diretoria_authenticated" on public.bacen_diretoria;
+create policy "bacen_diretoria_authenticated" on public.bacen_diretoria
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "brasil_presidentes_authenticated" on public.brasil_presidentes;
+create policy "brasil_presidentes_authenticated" on public.brasil_presidentes
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');

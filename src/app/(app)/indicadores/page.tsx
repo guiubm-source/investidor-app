@@ -7,6 +7,7 @@ import {
   obterSelic,
   obterVisaoGeral,
 } from "@/lib/indicadores/actions";
+import { obterDiretoriaBacen, obterPresidentesBrasil } from "@/lib/referencia/actions";
 import IndicadoresView from "./IndicadoresView";
 
 export default async function IndicadoresPage() {
@@ -17,17 +18,19 @@ export default async function IndicadoresPage() {
 
   if (!user) redirect("/login");
 
-  const [visaoGeral, selic, ipca, dolar, fluxo] = await Promise.all([
+  const [visaoGeral, selic, ipca, dolar, fluxo, diretoriaBacen, presidentesBrasil] = await Promise.all([
     obterVisaoGeral(),
     obterSelic(),
     obterIpca(),
     obterDolar(),
     obterFluxoEstrangeiro(),
+    obterDiretoriaBacen(),
+    obterPresidentesBrasil(),
   ]);
 
   return (
     <div className="px-6 py-10">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <h1 className="text-2xl font-medium text-ink mb-1">Indicadores</h1>
         <p className="text-sm text-muted mb-8">
           Selic, IPCA, Dólar e Fluxo estrangeiro — dado compartilhado (igual para qualquer usuário do
@@ -39,6 +42,8 @@ export default async function IndicadoresPage() {
           ipcaInicial={ipca}
           dolarInicial={dolar}
           fluxoInicial={fluxo}
+          diretoriaBacenInicial={diretoriaBacen}
+          presidentesBrasilInicial={presidentesBrasil}
         />
       </div>
     </div>
