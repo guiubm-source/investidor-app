@@ -924,6 +924,185 @@ resolvem as ambiguidades levantadas antes de codar.
 - **Cotação automática pra `renda_fixa`/`fundo`/`outro`**: continuam 100%
   manuais (ver decisão 4).
 
+### 8.11 Correções tomadas em 2026-07-14 (revisão geral: IR, Carteira, Proventos, Alocação)
+
+Decorrentes da revisão de lógica de negócio de 2026-07-14 (documento
+`docs/REVISAO-MELHORIAS-2026-07-14.md`), quatro correções confirmadas pelo
+Guilherme e já implementadas:
+
+1. **Compensação de prejuízo no IR atravessa anos-calendário, sem
+   prescrição.** Confirmado por pesquisa (Receita Federal, gov.br): na
+   renda variável, prejuízo apurado em qualquer mês/ano pode abater lucro
+   de qualquer mês/ano seguinte, indefinidamente, desde que informado
+   anualmente na Ficha de Renda Variável — não existe prazo de validade.
+   Antes, `lib/ir/actions.ts#obterRelatorioIR` filtrava as vendas pro ano
+   selecionado **antes** de rodar o ledger de prejuízo por categoria, então
+   um prejuízo de dezembro/2025 não abatia um lucro de janeiro/2026. Agora
+   o ledger (`prejuizoAcumuladoPorCategoria`) roda sobre `todasVendas` (todo
+   o histórico, todos os anos), mês a mês, cronologicamente; só a decisão
+   de **emitir** a linha em `mensal[]` é filtrada pelo `ano` pedido
+   (`emitirLinha = anoMes.startsWith(String(ano))`) — o estado do ledger
+   continua sendo atualizado mesmo nos meses não emitidos. O mesmo
+   princípio foi replicado num ledger **anual** separado (não mensal) para
+   as categorias de apuração anual (`cripto_estrangeira`, `internacional`).
+   Campo novo `LinhaMensal.prejuizoAnteriorAplicado` deixa explícito, linha
+   a linha, quanto de prejuízo de meses/anos anteriores foi usado naquele
+   mês (redundância de informação proposital — ver seção 3).
+
+2. **Venda validada contra a posição no ponto do tempo, não a posição final
+   agregada.** Antes, `lib/carteira/actions.ts#criarTransacao` validava uma
+   venda contra `obterAtivosComPosicao()` (posição final, somando TODAS as
+   transações já lançadas, inclusive as com data posterior à da venda). Isso
+   permitia lançar uma venda retroativa que ficava negativa naquele ponto da
+   linha do tempo, desde que uma compra futura (também lançada
+   retroativamente) "cobrisse" o buraco no total. Correção: nova função
+   `lib/ativos/actions.ts#obterQuantidadeDisponivelEmData(ativoId,
+   dataLimite)` recalcula a posição usando só as transações com
+   `data <= dataLimite`, reaproveitando as mesmas `calcularPosicao`/
+   `ordenarTransacoes` privadas (fonte única, seção 3) em vez de duplicar o
+   cálculo. `criarTransacao` agora valida a venda contra esse número.
+
+3. **Proventos ganharam edição e seleção múltipla.** `lib/proventos/actions.ts`
+   ganhou `editarProvento(id, input)` e `excluirProventosEmLote(ids[])`
+   (a exclusão individual já existia). UI (`ProventosView.tsx`) ganhou
+   checkbox por linha + "selecionar todos", barra de ação em lote com
+   confirmação em duas etapas, e edição inline (troca a linha pelo form
+   preenchido, mesmo padrão usado em Alocação).
+
+4. **Validação redundante (client + server) de soma de peso-alvo em 100%.**
+   Pedido explícito do Guilherme foi "buscar um app redundante evitando
+   esses erros" — interpretado como duas camadas independentes, não
+   mutuamente substituíveis: (a) `lib/alocacao/actions.ts` agora calcula a
+   soma dos pesos-alvo dos irmãos (outras classes, ou outros setores dentro
+   da mesma classe) antes de qualquer `criarClasse`/`editarClasse`/
+   `criarSetor`/`editarSetor`, e recusa com erro descritivo se a soma
+   passaria de `100 + TOLERANCIA_SOMA_PESO` (0.01pp de tolerância pra ponto
+   flutuante); (b) `AlocacaoView.tsx`/`ClasseRow.tsx` mostram um indicador
+   textual sempre visível (não só no momento do erro) com a soma atual dos
+   pesos-alvo em cada nível, verde quando fecha ~100%, vermelho quando
+   excede. As duas camadas ficam desacopladas de propósito: a validação do
+   servidor é a que realmente impede dado inconsistente; o indicador visual
+   é só uma leitura auxiliar (mesma filosofia de redundância de informação
+   da seção 3), útil mesmo quando o usuário ainda não tentou salvar.
+
+Também corrigido, junto dessas quatro (mesmo lote de commits): em
+`AlocacaoView.tsx`/`ClasseRow.tsx`/`SetorRow.tsx`/`ProventosView.tsx`, os
+handlers de criar/editar que fecham um formulário após salvar agora
+`await`am o refetch (`onChange()`/`atualizar()`) **antes** de fechar o
+formulário (`setEditando(false)` etc.), nunca depois — fechar antes do
+refetch resolver deixava a tela parecendo travada/desatualizada em cold
+starts da Vercel.
+
+### 8.12 Histórico de preço diário por ativo + rentabilidade histórica real (2026-07-14)
+
+Item "Investimento #3" da revisão de 2026-07-14, confirmado pelo Guilherme
+como "SIM, de extrema importância". Antes desta decisão, a única noção de
+retorno de um ativo era pontual — `lib/ativos/actions.ts#obterAtivosComPosicao`
+compara só o `preco_atual` (um único número, sobrescrito a cada atualização)
+contra o custo médio ATUAL, ou seja, dava pra saber "quanto rendi até agora",
+nunca "quanto eu tinha rendido há 3 meses". As decisões abaixo foram
+tomadas via perguntas objetivas ao Guilherme antes de codar (protocolo da
+seção 1):
+
+1. **Backfill completo via Yahoo, não só acúmulo dia a dia a partir de
+   hoje.** O endpoint não-oficial do Yahoo Finance já usado para cotação
+   atual (`lib/ativos/yahoo-finance.ts#buscarCotacaoYahoo`, `range=1d`)
+   aceita ranges maiores no mesmo endpoint — nova função
+   `buscarHistoricoYahoo(symbol, range)` reaproveita a mesma URL só trocando
+   o parâmetro. No primeiro cron após um ativo virar `cotacao_automatica`,
+   busca `range=10y` de uma vez; escolhido em vez de "só daqui pra frente"
+   porque a rentabilidade histórica só fica útil imediatamente com dados
+   retroativos, não depois de meses de uso.
+
+2. **Duas tabelas com escopos diferentes, não uma só.** Ao decidir o
+   desenho da tabela, ficou claro que preço de mercado (ação/FII/ETF/
+   internacional/cripto) é um dado OBJETIVO — PETR4 vale o mesmo pra
+   qualquer usuário — enquanto o preço de tipos manuais (`renda_fixa`,
+   `fundo`, `outro`) é subjetivo: o "ticker" desses é só um rótulo que cada
+   usuário inventa (dois "CDB-ITAU" de pessoas diferentes são instrumentos
+   diferentes), não um símbolo de mercado público. Por isso:
+   - `ativo_preco_diario_mercado` — chave `(tipo, ticker, data)`, **sem**
+     `profile_id`, mesmo padrão de dado compartilhado de
+     `indicador_dolar_diario` (seção 13): 1 fetch no cron serve todo mundo
+     que tem aquele ticker, e RLS é só-leitura pra `authenticated` (escrita
+     só via cron, service role).
+   - `ativo_preco_diario_manual` — chave `(ativo_id, data)`, **com**
+     `profile_id`, RLS padrão "all own". Um ponto por dia: sempre que
+     `atualizarPrecoAtual` salva um preço manual, faz upsert do snapshot do
+     dia (não acumula intraday — a segunda atualização no mesmo dia
+     sobrescreve a primeira).
+
+3. **Cron de cotações ganhou uma segunda fase, sem duplicar trabalho por
+   usuário.** `src/app/api/cron/cotacoes/route.ts` já varria `ativos` de
+   todos os usuários pra atualizar `preco_atual` (fase 1, inalterada). Fase
+   2 nova: agrupa os ativos varridos em combinações únicas de `(tipo,
+   ticker)` antes de tocar `ativo_preco_diario_mercado` — processa cada
+   combinação uma vez só por execução, mesmo que N usuários tenham o mesmo
+   ticker. Decide `range=10y` (backfill) ou `range=5d` (manutenção
+   incremental, cobre feriado/fim de semana sem furo) checando se já existe
+   alguma linha pra aquela combinação.
+
+4. **Motor de rentabilidade histórica cruza preço × posição dia a dia, sem
+   duplicar a fórmula de custo médio.** O corpo do loop de
+   `calcularPosicao` (fonte única de verdade, seção 3) foi extraído pra uma
+   função pura exportada, `lib/ativos/actions.ts#aplicarTransacaoNaPosicao`
+   (um "passo" que recebe `EstadoPosicao` + uma transação e devolve o novo
+   estado) — `calcularPosicao` virou só um fold dessa função sobre a lista
+   inteira, comportamento idêntico a antes. Novo módulo
+   `lib/ativos/preco-historico.ts` anda pela série de preço em ordem
+   cronológica aplicando `aplicarTransacaoNaPosicao` conforme a linha do
+   tempo avança, obtendo quantidade e custo médio EM CADA DATA da série de
+   preço (não só hoje) — daí `rentabilidadePct = (preço do dia − custo
+   médio naquele dia) / custo médio naquele dia`. Mesmo princípio de reuso
+   já usado pela decisão 2 da seção 8.11 (`obterQuantidadeDisponivelEmData`).
+
+5. **Escopo de UI: por ativo E patrimônio agregado (não só um dos dois).**
+   Perguntado explicitamente, o Guilherme pediu ambos: (a) gráfico de
+   rentabilidade % na página do ativo (`AtivoDetalheView.tsx`, seção
+   "Rentabilidade histórica", só aparece se o ativo já tem transação
+   lançada); (b) evolução do patrimônio total investido — soma, dia a dia,
+   de `preço histórico × quantidade` de todos os ativos do usuário — na
+   página `/dashboard` (que antes era só um placeholder "as próximas abas
+   serão construídas aqui", agora vira o Painel de fato). Função
+   `obterEvolucaoPatrimonio()` reaproveita `obterRentabilidadeHistoricaAtivo`
+   por ativo (não recalcula a fórmula) e faz *forward-fill* entre ativos com
+   calendários de preço diferentes (ex. um ativo com histórico mais curto
+   que outro).
+
+6. **Gráfico próprio em SVG puro, sem lib externa.** Não havia nenhuma
+   dependência de charting no projeto (`recharts` etc. não instalados) — em
+   vez de adicionar uma dependência nova, `src/components/SerieLinhaChart.tsx`
+   extrai e generaliza o padrão de gráfico de linha já usado em
+   `AbaDolar.tsx` (`GraficoDolarSvg`, indicadores macro), reaproveitável por
+   qualquer série `{ data, valor }[]` — usado tanto pela rentabilidade por
+   ativo quanto pela evolução de patrimônio.
+
+#### Schema (seção 8.12)
+
+```sql
+-- Compartilhada por (tipo, ticker) — igual pra todo mundo, sem profile_id.
+ativo_preco_diario_mercado (id, tipo, ticker, data, preco, created_at)
+  unique (tipo, ticker, data)
+  RLS: só SELECT para authenticated; escrita só via service role (cron).
+
+-- Por ativo do usuário — profile_id + ativo_id, RLS padrão.
+ativo_preco_diario_manual (id, profile_id, ativo_id, data, preco, created_at)
+  unique (ativo_id, data)
+  RLS: all own (auth.uid() = profile_id).
+```
+
+#### Fora de escopo por enquanto
+
+- Preço intraday/tick a tick — só fechamento diário, mesma granularidade do
+  resto do app (Dólar, IPCA, Selic).
+- Rentabilidade ajustada por proventos reinvestidos (a rentabilidade aqui é
+  só variação de preço vs. custo médio; proventos recebidos continuam
+  contabilizados separadamente em `retornoTotal`, sem se misturar à curva).
+- Backfill retroativo pra tipos manuais (`renda_fixa`/`fundo`/`outro`) — não
+  existe fonte de preço histórico pra esses, então o histórico só começa a
+  existir a partir da primeira vez que o usuário salva um preço manual
+  depois desta feature existir.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

@@ -110,6 +110,28 @@ export async function criarProvento(input: ProventoForm): Promise<AcaoResultado>
   return {};
 }
 
+export async function editarProvento(id: string, input: ProventoForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase
+    .from("proventos")
+    .update({
+      ativo_id: input.ativo_id,
+      tipo: input.tipo,
+      data: input.data,
+      valor_total: input.valor_total,
+    })
+    .eq("id", id)
+    .eq("profile_id", user.id);
+
+  if (error) return { error: "Não foi possível salvar o provento." };
+  return {};
+}
+
 export async function excluirProvento(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
@@ -119,5 +141,20 @@ export async function excluirProvento(id: string): Promise<AcaoResultado> {
 
   const { error } = await supabase.from("proventos").delete().eq("id", id).eq("profile_id", user.id);
   if (error) return { error: "Não foi possível excluir o provento." };
+  return {};
+}
+
+/** Exclusão em lote (seleção múltipla na aba Proventos). */
+export async function excluirProventosEmLote(ids: string[]): Promise<AcaoResultado> {
+  if (ids.length === 0) return {};
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase.from("proventos").delete().eq("profile_id", user.id).in("id", ids);
+  if (error) return { error: "Não foi possível excluir os proventos selecionados." };
   return {};
 }

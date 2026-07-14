@@ -892,3 +892,68 @@ alter table public.ativo_resultado_trimestral enable row level security;
 drop policy if exists "ativo_resultado_trimestral_all_own" on public.ativo_resultado_trimestral;
 create policy "ativo_resultado_trimestral_all_own" on public.ativo_resultado_trimestral
   for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+-- ============================================================================
+-- 15. Histórico de preço diário por ativo — decisões em
+--     docs/MAPA-DE-DADOS.md §8.12 (2026-07-14). Duas tabelas com semânticas
+--     diferentes:
+--     (a) ativo_preco_diario_mercado: preço de FECHAMENTO de mercado real
+--         (Yahoo Finance), COMPARTILHADO por (tipo, ticker) — não por
+--         ativo_id/profile_id. O preço de PETR4 é o mesmo pra todo mundo que
+--         tem PETR4, então uma única série serve todos os usuários (mesmo
+--         padrão de indicador_dolar_diario, seção 13). Só cobre os tipos
+--         cotáveis via Yahoo (TIPOS_COTACAO_AUTOMATICA em
+--         lib/ativos/yahoo-finance.ts): acao, fii, etf, internacional,
+--         cripto. Escrita só via cron (service role, bypassa RLS); somente
+--         leitura pra usuários autenticados.
+--     (b) ativo_preco_diario_manual: snapshot do preço informado manualmente
+--         (renda_fixa, fundo, outro), por profile_id + ativo_id — aqui o
+--         "ticker" é só um rótulo que o usuário escolheu, não um símbolo de
+--         mercado público, então NÃO dá pra compartilhar entre usuários (dois
+--         "CDB-ITAU" de pessoas diferentes são instrumentos diferentes com
+--         preços diferentes). Um ponto por dia: se o usuário atualizar o
+--         preço manual duas vezes no mesmo dia, a segunda sobrescreve
+--         (upsert por ativo_id+data), não acumula intraday.
+-- ============================================================================
+
+create table if not exists public.ativo_preco_diario_mercado (
+  id          uuid primary key default gen_random_uuid(),
+  tipo        text not null check (tipo in ('acao','fii','etf','internacional','cripto')),
+  ticker      text not null,
+  data        date not null,
+  preco       numeric(14,4) not null check (preco > 0),
+  created_at  timestamptz not null default now(),
+  unique (tipo, ticker, data)
+);
+
+comment on table public.ativo_preco_diario_mercado is 'Série diária de preço de fechamento por (tipo, ticker), via Yahoo Finance. Compartilhada entre todos os usuários que têm o mesmo ativo — preço de mercado é dado objetivo, não pessoal (ver docs/MAPA-DE-DADOS.md §8.12). Escrita só pelo cron (service role); somente leitura pra usuários autenticados.';
+
+alter table public.ativo_preco_diario_mercado enable row level security;
+
+drop policy if exists "ativo_preco_diario_mercado_select_authenticated" on public.ativo_preco_diario_mercado;
+create policy "ativo_preco_diario_mercado_select_authenticated" on public.ativo_preco_diario_mercado
+  for select using (auth.role() = 'authenticated');
+
+create index if not exists idx_ativo_preco_diario_mercado_lookup
+  on public.ativo_preco_diario_mercado (tipo, ticker, data);
+
+create table if not exists public.ativo_preco_diario_manual (
+  id          uuid primary key default gen_random_uuid(),
+  profile_id  uuid not null references public.profiles(id) on delete cascade,
+  ativo_id    uuid not null references public.ativos(id) on delete cascade,
+  data        date not null,
+  preco       numeric(14,4) not null check (preco >= 0),
+  created_at  timestamptz not null default now(),
+  unique (ativo_id, data)
+);
+
+comment on table public.ativo_preco_diario_manual is 'Snapshot do preço manual (renda_fixa/fundo/outro) na data em que foi salvo via atualizarPrecoAtual — um ponto por ativo por dia (upsert). Ver docs/MAPA-DE-DADOS.md §8.12.';
+
+alter table public.ativo_preco_diario_manual enable row level security;
+
+drop policy if exists "ativo_preco_diario_manual_own" on public.ativo_preco_diario_manual;
+create policy "ativo_preco_diario_manual_own" on public.ativo_preco_diario_manual
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+create index if not exists idx_ativo_preco_diario_manual_ativo
+  on public.ativo_preco_diario_manual (ativo_id, data);

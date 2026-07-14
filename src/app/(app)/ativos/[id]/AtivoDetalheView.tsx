@@ -43,8 +43,10 @@ import {
 import { transacaoSchema, TIPOS_TRANSACAO, type TransacaoForm } from "@/lib/carteira/schema";
 import { TIPOS_PROVENTO } from "@/lib/proventos/schema";
 import { criarTransacao, excluirTransacao, type Corretora } from "@/lib/carteira/actions";
+import { obterRentabilidadeHistoricaAtivo, type PontoRentabilidade } from "@/lib/ativos/preco-historico";
 import DesvioBar from "@/components/DesvioBar";
 import TradingViewChart from "@/components/TradingViewChart";
+import SerieLinhaChart from "@/components/SerieLinhaChart";
 import { TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
 import {
   calcularSerieChecklistAcao,
@@ -137,15 +139,18 @@ export default function AtivoDetalheView({
   classesSetores,
   corretoras,
   checklistInicial,
+  rentabilidadeInicial,
 }: {
   ativoInicial: AtivoDetalhe;
   classesSetores: ClasseOpcao[];
   corretoras: Corretora[];
   checklistInicial: ChecklistAtivoView | null;
+  rentabilidadeInicial: PontoRentabilidade[];
 }) {
   const router = useRouter();
   const [ativo, setAtivo] = useState(ativoInicial);
   const [checklist, setChecklist] = useState(checklistInicial);
+  const [rentabilidade, setRentabilidade] = useState(rentabilidadeInicial);
   const [aba, setAba] = useState<AbaId>("geral");
   const [editandoIdentidade, setEditandoIdentidade] = useState(false);
   const [editandoClassificacao, setEditandoClassificacao] = useState(false);
@@ -166,8 +171,13 @@ export default function AtivoDetalheView({
     setChecklist(novo);
   };
 
+  const atualizarRentabilidade = async () => {
+    const nova = await obterRentabilidadeHistoricaAtivo(ativo.id);
+    setRentabilidade(nova);
+  };
+
   const atualizarTudo = async () => {
-    await Promise.all([atualizar(), atualizarChecklist()]);
+    await Promise.all([atualizar(), atualizarChecklist(), atualizarRentabilidade()]);
   };
 
   const precoDefinido = ativo.precoAtualizadoEm !== null;
@@ -443,6 +453,24 @@ export default function AtivoDetalheView({
             )}
             {erroCotacao && <p className="error-box mt-2">{erroCotacao}</p>}
           </div>
+
+          {ativo.transacoes.length > 0 && (
+            <div className="card p-5">
+              <h2 className="text-sm font-medium text-ink mb-1">Rentabilidade histórica</h2>
+              <p className="text-xs text-faint mb-3">
+                Preço de fechamento de cada dia comparado ao custo médio naquele dia — diferente do
+                &ldquo;lucro não realizado&rdquo; acima, que só compara o preço de hoje.
+              </p>
+              <SerieLinhaChart
+                pontos={rentabilidade
+                  .filter((p) => p.rentabilidadePct !== null)
+                  .map((p) => ({ data: p.data, valor: p.rentabilidadePct as number }))}
+                formatarValor={(v) => `${v.toFixed(1)}%`}
+                ariaLabel={`Rentabilidade histórica de ${ativo.ticker}`}
+                mostrarLinhaZero
+              />
+            </div>
+          )}
 
           {checklist && checklist.grupo && (
             <SecaoChecklist ativoId={ativo.id} checklist={checklist} onAtualizado={atualizarChecklist} />

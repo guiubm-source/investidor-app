@@ -12,7 +12,7 @@ export default function ClasseRow({
   onChange,
 }: {
   classe: ClasseNode;
-  onChange: () => void;
+  onChange: () => void | Promise<void>;
 }) {
   const [expandido, setExpandido] = useState(false);
   const [editando, setEditando] = useState(false);
@@ -28,8 +28,8 @@ export default function ClasseRow({
           onSalvo={async (dados) => {
             const resultado = await editarClasse(classe.id, dados);
             if (resultado.error) throw new Error(resultado.error);
+            await onChange();
             setEditando(false);
-            onChange();
           }}
         />
       </div>
@@ -84,6 +84,20 @@ export default function ClasseRow({
           {classe.setores.length === 0 && (
             <p className="text-xs text-faint mb-2">Nenhum setor cadastrado nessa classe.</p>
           )}
+          {classe.setores.length > 0 &&
+            (() => {
+              const somaPesoSetores = classe.setores.reduce((s, st) => s + st.pesoAlvo, 0);
+              return (
+                <p className={`text-xs mb-2 ml-4 ${somaPesoSetores > 100.01 ? "text-danger" : "text-faint"}`}>
+                  Soma dos pesos-alvo dos setores: {somaPesoSetores.toFixed(1)}%
+                  {somaPesoSetores > 100.01
+                    ? ` — excede 100% em ${(somaPesoSetores - 100).toFixed(1)}pp`
+                    : somaPesoSetores < 99.99
+                      ? ` — faltam ${(100 - somaPesoSetores).toFixed(1)}pp pra fechar 100%`
+                      : " ✓"}
+                </p>
+              );
+            })()}
           {classe.setores.map((setor) => (
             <SetorRow key={setor.id} setor={setor} onChange={onChange} />
           ))}
@@ -95,8 +109,8 @@ export default function ClasseRow({
                 onSalvo={async (dados) => {
                   const resultado = await criarSetor(classe.id, dados);
                   if (resultado.error) throw new Error(resultado.error);
+                  await onChange();
                   setAdicionandoSetor(false);
-                  onChange();
                 }}
               />
             </div>

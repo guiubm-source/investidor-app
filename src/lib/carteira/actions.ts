@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import type { CorretoraForm, TransacaoForm } from "./schema";
-import { obterAtivosComPosicao } from "@/lib/ativos/actions";
+import { obterQuantidadeDisponivelEmData } from "@/lib/ativos/actions";
 
 export type AcaoResultado = { error?: string };
 
@@ -160,12 +160,15 @@ export async function criarTransacao(input: TransacaoForm): Promise<AcaoResultad
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
   if (input.tipo === "venda") {
-    const ativos = await obterAtivosComPosicao();
-    const ativo = ativos.find((a) => a.id === input.ativo_id);
-    const disponivel = ativo?.quantidade ?? 0;
+    // Valida contra a posição NA DATA da transação (ponto no tempo), não
+    // contra a posição agregada final — uma venda retroativa lançada antes
+    // de uma compra também retroativa não pode ficar negativa naquele
+    // ponto da linha do tempo, mesmo que o total (somando tudo) feche
+    // positivo. Ver docs/MAPA-DE-DADOS.md §8.11.
+    const disponivel = await obterQuantidadeDisponivelEmData(input.ativo_id, input.data);
     if (input.quantidade > disponivel) {
       return {
-        error: `Quantidade maior do que a disponível em carteira (${disponivel.toLocaleString("pt-BR")}).`,
+        error: `Quantidade maior do que a disponível em carteira na data informada (${disponivel.toLocaleString("pt-BR")}).`,
       };
     }
   }

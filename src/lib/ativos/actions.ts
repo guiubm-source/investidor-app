@@ -85,13 +85,46 @@ export type AtivoDetalhe = AtivoResumo & {
   proventos: ProventoItem[];
 };
 
-type TransacaoCalc = {
+export type TransacaoCalc = {
   tipo: "compra" | "venda";
   data: string;
   quantidade: number;
   precoUnitario: number;
   custos: number;
 };
+
+export type EstadoPosicao = { quantidade: number; custoTotal: number; lucroRealizado: number };
+
+export const ESTADO_POSICAO_INICIAL: EstadoPosicao = { quantidade: 0, custoTotal: 0, lucroRealizado: 0 };
+
+/**
+ * Um passo do cálculo de posição por custo médio ponderado — corpo do loop
+ * de `calcularPosicao` extraído e exportado pra quem precisa da posição EM
+ * CADA PONTO de uma linha do tempo (ex. lib/ativos/preco-historico.ts, pra
+ * rentabilidade histórica dia a dia), sem duplicar a fórmula. `calcularPosicao`
+ * é só um fold desta função sobre a lista inteira — fonte única de verdade
+ * continua sendo esta função (ver docs/MAPA-DE-DADOS.md §3).
+ */
+export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCalc): EstadoPosicao {
+  if (t.tipo === "compra") {
+    return {
+      quantidade: estado.quantidade + t.quantidade,
+      custoTotal: estado.custoTotal + t.quantidade * t.precoUnitario + t.custos,
+      lucroRealizado: estado.lucroRealizado,
+    };
+  }
+  const precoMedioAtual = estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
+  const qtdVenda = Math.min(t.quantidade, estado.quantidade);
+  return {
+    quantidade: estado.quantidade - qtdVenda,
+    custoTotal: estado.custoTotal - precoMedioAtual * qtdVenda,
+    lucroRealizado: estado.lucroRealizado + (t.precoUnitario - precoMedioAtual) * qtdVenda - t.custos,
+  };
+}
+
+export function precoMedioDoEstado(estado: EstadoPosicao): number {
+  return estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
+}
 
 /**
  * Deriva um símbolo padrão do TradingView (bolsa:ticker) a partir do tipo do
@@ -128,28 +161,12 @@ function deriveTradingViewSymbol(tipo: TipoAtivo, ticker: string): string {
  * ou prejuízo realizado (preço de venda − preço médio, descontados custos).
  */
 function calcularPosicao(transacoesOrdenadas: TransacaoCalc[]) {
-  let quantidade = 0;
-  let custoTotal = 0;
-  let lucroRealizado = 0;
-
-  for (const t of transacoesOrdenadas) {
-    if (t.tipo === "compra") {
-      custoTotal += t.quantidade * t.precoUnitario + t.custos;
-      quantidade += t.quantidade;
-    } else {
-      const precoMedioAtual = quantidade > 0 ? custoTotal / quantidade : 0;
-      const qtdVenda = Math.min(t.quantidade, quantidade);
-      lucroRealizado += (t.precoUnitario - precoMedioAtual) * qtdVenda - t.custos;
-      custoTotal -= precoMedioAtual * qtdVenda;
-      quantidade -= qtdVenda;
-    }
-  }
-
-  const precoMedio = quantidade > 0 ? custoTotal / quantidade : 0;
-  return { quantidade, precoMedio, lucroRealizado };
+  let estado = ESTADO_POSICAO_INICIAL;
+  for (const t of transacoesOrdenadas) estado = aplicarTransacaoNaPosicao(estado, t);
+  return { quantidade: estado.quantidade, precoMedio: precoMedioDoEstado(estado), lucroRealizado: estado.lucroRealizado };
 }
 
-function ordenarTransacoes<T extends { data: string; createdAt: string }>(itens: T[]): T[] {
+export function ordenarTransacoes<T extends { data: string; createdAt: string }>(itens: T[]): T[] {
   return [...itens].sort((a, b) => {
     if (a.data !== b.data) return a.data < b.data ? -1 : 1;
     return a.createdAt < b.createdAt ? -1 : 1;
@@ -249,6 +266,43 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       retornoTotal: lucroNaoRealizado + lucroRealizado + proventosRecebidos,
     };
   });
+}
+
+/**
+ * Quantidade disponível de um ativo até uma data específica (inclusive) —
+ * posição NO PONTO DO TEMPO, não a posição final agregada depois de todas
+ * as transações já lançadas. Usada por lib/carteira/actions.ts#criarTransacao
+ * pra validar vendas retroativas: uma venda datada antes de uma compra
+ * também retroativa não pode ficar negativa naquele ponto da linha do
+ * tempo, mesmo que a posição final (somando tudo) feche positiva.
+ * Reaproveita a mesma calcularPosicao/ordenarTransacoes da fonte única
+ * (ver docs/MAPA-DE-DADOS.md §3) em vez de duplicar o cálculo.
+ */
+export async function obterQuantidadeDisponivelEmData(ativoId: string, dataLimite: string): Promise<number> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return 0;
+
+  const { data } = await supabase
+    .from("transacoes")
+    .select("tipo, data, quantidade, preco_unitario, custos, created_at")
+    .eq("profile_id", user.id)
+    .eq("ativo_id", ativoId)
+    .lte("data", dataLimite);
+
+  const transacoes = (data ?? []).map((t) => ({
+    tipo: t.tipo as "compra" | "venda",
+    data: t.data as string,
+    quantidade: Number(t.quantidade),
+    precoUnitario: Number(t.preco_unitario),
+    custos: Number(t.custos),
+    createdAt: t.created_at as string,
+  }));
+
+  const ordenadas = ordenarTransacoes(transacoes);
+  return calcularPosicao(ordenadas).quantidade;
 }
 
 /** Valor atual (quantidade × preço atual) de cada ativo — usado pela Alocação. */
@@ -443,6 +497,21 @@ export async function atualizarPrecoAtual(id: string, input: PrecoAtualForm): Pr
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível atualizar o preço atual." };
+
+  // Snapshot no histórico de preço manual (ver docs/MAPA-DE-DADOS.md §8.12) —
+  // um ponto por dia; se já existir um lançamento hoje, o upsert sobrescreve
+  // em vez de acumular intraday. Erro aqui não desfaz a atualização do preço
+  // atual (já confirmada acima), só fica sem registrar o ponto histórico.
+  await supabase.from("ativo_preco_diario_manual").upsert(
+    {
+      profile_id: user.id,
+      ativo_id: id,
+      data: new Date().toISOString().slice(0, 10),
+      preco: input.preco_atual,
+    },
+    { onConflict: "ativo_id,data" }
+  );
+
   return {};
 }
 

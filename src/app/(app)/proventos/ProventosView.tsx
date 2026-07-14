@@ -7,7 +7,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { proventoSchema, TIPOS_PROVENTO, type ProventoForm } from "@/lib/proventos/schema";
 import {
   criarProvento,
+  editarProvento,
   excluirProvento,
+  excluirProventosEmLote,
   obterLivroProventos,
   type LivroProventos,
 } from "@/lib/proventos/actions";
@@ -33,10 +35,30 @@ export default function ProventosView({
 }) {
   const [livro, setLivro] = useState(livroInicial);
   const [addProvento, setAddProvento] = useState(false);
+  const [editando, setEditando] = useState<string | null>(null);
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+  const [confirmandoLote, setConfirmandoLote] = useState(false);
+  const [excluindoLote, setExcluindoLote] = useState(false);
 
   const atualizar = async () => {
     const novo = await obterLivroProventos();
     setLivro(novo);
+  };
+
+  const alternarSelecao = (id: string) => {
+    setSelecionados((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(id)) novo.delete(id);
+      else novo.add(id);
+      return novo;
+    });
+  };
+
+  const todosSelecionados =
+    livro.lancamentos.length > 0 && livro.lancamentos.every((l) => selecionados.has(l.id));
+
+  const alternarTodos = () => {
+    setSelecionados(todosSelecionados ? new Set() : new Set(livro.lancamentos.map((l) => l.id)));
   };
 
   return (
@@ -124,15 +146,63 @@ export default function ProventosView({
             onSalvo={async (dados) => {
               const resultado = await criarProvento(dados);
               if (resultado.error) throw new Error(resultado.error);
-              setAddProvento(false);
               await atualizar();
+              setAddProvento(false);
             }}
           />
         </div>
       )}
 
+      {selecionados.size > 0 && (
+        <div className="card p-3 flex items-center justify-between gap-3 bg-surface-2">
+          <span className="text-xs text-muted">{selecionados.size} selecionado(s)</span>
+          {confirmandoLote ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-danger">Excluir os selecionados?</span>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setConfirmandoLote(false)}
+                disabled={excluindoLote}
+              >
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={excluindoLote}
+                onClick={async () => {
+                  setExcluindoLote(true);
+                  await excluirProventosEmLote([...selecionados]);
+                  setSelecionados(new Set());
+                  setConfirmandoLote(false);
+                  await atualizar();
+                  setExcluindoLote(false);
+                }}
+              >
+                {excluindoLote ? "Excluindo..." : "Confirmar"}
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <button className="text-xs text-faint hover:text-ink" onClick={() => setSelecionados(new Set())}>
+                Limpar seleção
+              </button>
+              <button className="text-xs text-danger hover:underline" onClick={() => setConfirmandoLote(true)}>
+                Excluir selecionados
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card overflow-hidden">
-        <div className="grid grid-cols-[90px_1fr_1fr_100px_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+        <div className="grid grid-cols-[24px_90px_1fr_1fr_100px_120px] gap-2 px-4 py-2 text-xs text-faint border-b border-border items-center">
+          <input
+            type="checkbox"
+            checked={todosSelecionados}
+            onChange={alternarTodos}
+            disabled={livro.lancamentos.length === 0}
+            aria-label="Selecionar todos"
+          />
           <span>Data</span>
           <span>Ativo</span>
           <span>Tipo</span>
@@ -144,28 +214,56 @@ export default function ProventosView({
           <p className="text-sm text-faint px-4 py-4">Nenhum lançamento registrado ainda.</p>
         )}
 
-        {livro.lancamentos.map((l) => (
-          <div
-            key={l.id}
-            className="grid grid-cols-[90px_1fr_1fr_100px_60px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
-          >
-            <span className="text-muted">{formatarData(l.data)}</span>
-            <Link href={`/ativos/${l.ativoId}`} className="text-ink font-medium hover:underline">
-              {l.ativoTicker}
-            </Link>
-            <span className="text-muted">{rotuloProvento(l.tipo)}</span>
-            <span className="text-right text-ink">{formatarMoeda(l.valorTotal)}</span>
-            <button
-              onClick={async () => {
-                await excluirProvento(l.id);
-                await atualizar();
-              }}
-              className="text-faint hover:text-danger text-right"
+        {livro.lancamentos.map((l) =>
+          editando === l.id ? (
+            <div key={l.id} className="px-4 py-3 border-b border-border last:border-0 bg-surface-2">
+              <FormProvento
+                ativos={ativos}
+                valoresIniciais={{ ativo_id: l.ativoId, tipo: l.tipo as ProventoForm["tipo"], data: l.data, valor_total: l.valorTotal }}
+                textoSalvar="Salvar"
+                onCancelar={() => setEditando(null)}
+                onSalvo={async (dados) => {
+                  const resultado = await editarProvento(l.id, dados);
+                  if (resultado.error) throw new Error(resultado.error);
+                  await atualizar();
+                  setEditando(null);
+                }}
+              />
+            </div>
+          ) : (
+            <div
+              key={l.id}
+              className="grid grid-cols-[24px_90px_1fr_1fr_100px_120px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
             >
-              Excluir
-            </button>
-          </div>
-        ))}
+              <input
+                type="checkbox"
+                checked={selecionados.has(l.id)}
+                onChange={() => alternarSelecao(l.id)}
+                aria-label={`Selecionar provento de ${l.ativoTicker}`}
+              />
+              <span className="text-muted">{formatarData(l.data)}</span>
+              <Link href={`/ativos/${l.ativoId}`} className="text-ink font-medium hover:underline">
+                {l.ativoTicker}
+              </Link>
+              <span className="text-muted">{rotuloProvento(l.tipo)}</span>
+              <span className="text-right text-ink">{formatarMoeda(l.valorTotal)}</span>
+              <span className="text-right">
+                <button onClick={() => setEditando(l.id)} className="text-faint hover:text-ink mr-2">
+                  Editar
+                </button>
+                <button
+                  onClick={async () => {
+                    await excluirProvento(l.id);
+                    await atualizar();
+                  }}
+                  className="text-faint hover:text-danger"
+                >
+                  Excluir
+                </button>
+              </span>
+            </div>
+          )
+        )}
       </div>
     </div>
   );
@@ -173,10 +271,14 @@ export default function ProventosView({
 
 function FormProvento({
   ativos,
+  valoresIniciais,
+  textoSalvar = "Salvar",
   onSalvo,
   onCancelar,
 }: {
   ativos: AtivoOpcao[];
+  valoresIniciais?: ProventoForm;
+  textoSalvar?: string;
   onSalvo: (dados: ProventoForm) => void | Promise<void>;
   onCancelar: () => void;
 }) {
@@ -187,7 +289,7 @@ function FormProvento({
     setError,
   } = useForm<ProventoForm>({
     resolver: zodResolver(proventoSchema),
-    defaultValues: {
+    defaultValues: valoresIniciais ?? {
       ativo_id: ativos[0]?.id ?? "",
       tipo: "dividendo",
       data: new Date().toISOString().slice(0, 10),
@@ -252,7 +354,7 @@ function FormProvento({
           Cancelar
         </button>
         <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
-          {isSubmitting ? "Salvando..." : "Salvar"}
+          {isSubmitting ? "Salvando..." : textoSalvar}
         </button>
       </div>
     </form>

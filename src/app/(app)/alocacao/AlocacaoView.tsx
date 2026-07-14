@@ -33,6 +33,7 @@ export default function AlocacaoView({
   };
 
   const sugestao = perfilSugestao ? SUGESTAO_ALOCACAO_POR_PERFIL[perfilSugestao] : undefined;
+  const somaPesoClasses = estrutura.classes.reduce((s, c) => s + c.pesoAlvo, 0);
 
   const usarSugestao = async () => {
     if (!sugestao) return;
@@ -106,6 +107,17 @@ export default function AlocacaoView({
         </div>
       )}
 
+      {estrutura.classes.length > 0 && (
+        <p className={`text-xs mb-2 ${somaPesoClasses > 100.01 ? "text-danger" : "text-faint"}`}>
+          Soma dos pesos-alvo das classes: {somaPesoClasses.toFixed(1)}%
+          {somaPesoClasses > 100.01
+            ? ` — excede 100% em ${(somaPesoClasses - 100).toFixed(1)}pp`
+            : somaPesoClasses < 99.99
+              ? ` — faltam ${(100 - somaPesoClasses).toFixed(1)}pp pra fechar 100%`
+              : " ✓"}
+        </p>
+      )}
+
       {estrutura.classes.map((classe) => (
         <ClasseRow key={classe.id} classe={classe} onChange={atualizar} />
       ))}
@@ -117,8 +129,8 @@ export default function AlocacaoView({
             onSalvo={async (dados) => {
               const resultado = await criarClasse(dados);
               if (resultado.error) throw new Error(resultado.error);
-              setAdicionandoClasse(false);
               await atualizar();
+              setAdicionandoClasse(false);
             }}
           />
         </div>

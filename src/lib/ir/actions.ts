@@ -252,6 +252,11 @@ export type LinhaMensal = {
   impostoDevido: number | null;
   apuracaoAnual: boolean;
   diasMediosRetencao: number | null;
+  /** Prejuízo de meses/anos anteriores (mesma categoria) usado pra abater o
+   * lucro deste mês — sempre >= 0. Ver §8.11: compensação de prejuízo em
+   * renda variável não prescreve, então isso pode vir de qualquer ano
+   * anterior, não só do mês anterior dentro do mesmo ano. */
+  prejuizoAnteriorAplicado: number;
 };
 
 export type ResumoAnualCategoria = {
@@ -306,9 +311,15 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
   const ativos = (ativosRaw ?? []) as AtivoRaw[];
   const transacoes = (transacoesRaw ?? []) as TransacaoRaw[];
 
-  // Apura TODAS as vendas (histórico completo) — precisamos do prejuízo
-  // acumulado mês a mês dentro do ano, e o ano pode começar com posições
-  // compradas em anos anteriores.
+  // Apura TODAS as vendas (histórico completo, todos os anos) — a
+  // compensação de prejuízo em renda variável não tem prazo de prescrição
+  // (Receita Federal: prejuízo de qualquer ano anterior abate lucro de
+  // qualquer ano seguinte, contanto que informado na ficha de Renda
+  // Variável da declaração). Por isso o ledger de prejuízo por categoria
+  // roda sobre a história inteira, não só o ano pedido — só FILTRAMOS o
+  // que aparece em `mensal`/`resumoAnual` pro ano `ano`, mas o estado
+  // acumulado sempre considera dezembro do ano anterior antes de janeiro
+  // deste ano. Ver docs/MAPA-DE-DADOS.md §8.11.
   const todasVendas: VendaApurada[] = [];
   for (const ativo of ativos) {
     const transacoesDoAtivo = transacoes.filter((t) => t.ativo_id === ativo.id);
@@ -316,23 +327,25 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
     todasVendas.push(...apurarVendasDoAtivo(ativo, transacoesDoAtivo));
   }
 
-  const vendasDoAno = todasVendas.filter((v) => v.anoMes.startsWith(String(ano)));
-
-  // Agrupa por (categoria, anoMes)
+  // Agrupa por (categoria, anoMes) usando TODO o histórico.
   const chaveMes = (v: VendaApurada) => `${v.categoria}|${v.anoMes}`;
   const gruposMes = new Map<string, VendaApurada[]>();
-  for (const v of vendasDoAno) {
+  for (const v of todasVendas) {
     const chave = chaveMes(v);
     const lista = gruposMes.get(chave) ?? [];
     lista.push(v);
     gruposMes.set(chave, lista);
   }
 
-  const categoriasComVenda = new Set<CategoriaIR>(vendasDoAno.map((v) => v.categoria));
-  const mensal: LinhaMensal[] = [];
-  const prejuizoAcumuladoPorCategoria: Partial<Record<CategoriaIR, number>> = {};
+  const todasCategorias = new Set<CategoriaIR>(todasVendas.map((v) => v.categoria));
+  const categoriasComVendaNoAno = new Set<CategoriaIR>(
+    todasVendas.filter((v) => v.anoMes.startsWith(String(ano))).map((v) => v.categoria)
+  );
 
-  for (const categoria of categoriasComVenda) {
+  const mensal: LinhaMensal[] = [];
+  const prejuizoAcumuladoPorCategoria: Partial<Record<CategoriaIR, number>> = {}; // sempre <= 0
+
+  for (const categoria of todasCategorias) {
     const apuracaoAnual = CATEGORIAS_APURACAO_ANUAL.includes(categoria);
     const mesesDaCategoria = [...gruposMes.entries()]
       .filter(([chave]) => chave.startsWith(`${categoria}|`))
@@ -341,6 +354,10 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
 
     for (const vendasMes of mesesDaCategoria) {
       const anoMes = vendasMes[0].anoMes;
+      // Processa TODO mês de TODO ano (pra manter o ledger de prejuízo
+      // correto), mas só emite linha em `mensal` pro ano pedido.
+      const emitirLinha = anoMes.startsWith(String(ano));
+
       const vendaTotal = vendasMes.reduce((s, v) => s + v.vendaTotal, 0);
       const lucroBruto = vendasMes.reduce((s, v) => s + v.ganho, 0);
       const diasValidos = vendasMes.map((v) => v.diasMediosRetencao).filter((d): d is number => d !== null);
@@ -348,63 +365,77 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
         diasValidos.length > 0 ? diasValidos.reduce((s, d) => s + d, 0) / diasValidos.length : null;
 
       if (categoria === "renda_fixa_isenta") {
-        mensal.push({
-          anoMes,
-          categoria,
-          categoriaLabel: LABEL_CATEGORIA[categoria],
-          vendaTotal,
-          lucroBruto,
-          isento: true,
-          motivoIsencao: "LCI/LCA/CRI/CRA são isentos de IR para pessoa física",
-          baseCalculo: 0,
-          aliquota: null,
-          impostoDevido: 0,
-          apuracaoAnual: false,
-          diasMediosRetencao,
-        });
+        if (emitirLinha) {
+          mensal.push({
+            anoMes,
+            categoria,
+            categoriaLabel: LABEL_CATEGORIA[categoria],
+            vendaTotal,
+            lucroBruto,
+            isento: true,
+            motivoIsencao: "LCI/LCA/CRI/CRA são isentos de IR para pessoa física",
+            baseCalculo: 0,
+            aliquota: null,
+            impostoDevido: 0,
+            apuracaoAnual: false,
+            diasMediosRetencao,
+            prejuizoAnteriorAplicado: 0,
+          });
+        }
         continue;
       }
 
       if (categoria === "renda_fixa_tributavel") {
-        const aliquotaEstimada = diasMediosRetencao !== null ? aliquotaRendaFixaPorDias(diasMediosRetencao) : null;
-        mensal.push({
-          anoMes,
-          categoria,
-          categoriaLabel: LABEL_CATEGORIA[categoria],
-          vendaTotal,
-          lucroBruto,
-          isento: false,
-          motivoIsencao: null,
-          baseCalculo: Math.max(0, lucroBruto),
-          aliquota: aliquotaEstimada,
-          impostoDevido: null, // retido na fonte automaticamente, sem DARF
-          apuracaoAnual: false,
-          diasMediosRetencao,
-        });
+        if (emitirLinha) {
+          const aliquotaEstimada = diasMediosRetencao !== null ? aliquotaRendaFixaPorDias(diasMediosRetencao) : null;
+          mensal.push({
+            anoMes,
+            categoria,
+            categoriaLabel: LABEL_CATEGORIA[categoria],
+            vendaTotal,
+            lucroBruto,
+            isento: false,
+            motivoIsencao: null,
+            baseCalculo: Math.max(0, lucroBruto),
+            aliquota: aliquotaEstimada,
+            impostoDevido: null, // retido na fonte automaticamente, sem DARF
+            apuracaoAnual: false,
+            diasMediosRetencao,
+            prejuizoAnteriorAplicado: 0,
+          });
+        }
         continue;
       }
 
       if (apuracaoAnual) {
-        // Linha mensal só informativa — imposto de verdade sai no resumo anual.
-        mensal.push({
-          anoMes,
-          categoria,
-          categoriaLabel: LABEL_CATEGORIA[categoria],
-          vendaTotal,
-          lucroBruto,
-          isento: false,
-          motivoIsencao: null,
-          baseCalculo: lucroBruto,
-          aliquota: null,
-          impostoDevido: null,
-          apuracaoAnual: true,
-          diasMediosRetencao: null,
-        });
+        // Linha mensal só informativa — imposto de verdade sai no resumo
+        // anual (ledger anual próprio, ver abaixo), que também compensa
+        // prejuízo de anos anteriores da mesma categoria.
+        if (emitirLinha) {
+          mensal.push({
+            anoMes,
+            categoria,
+            categoriaLabel: LABEL_CATEGORIA[categoria],
+            vendaTotal,
+            lucroBruto,
+            isento: false,
+            motivoIsencao: null,
+            baseCalculo: lucroBruto,
+            aliquota: null,
+            impostoDevido: null,
+            apuracaoAnual: true,
+            diasMediosRetencao: null,
+            prejuizoAnteriorAplicado: 0,
+          });
+        }
         continue;
       }
 
       // Categorias de apuração mensal com compensação de prejuízo: acao_swing,
-      // acao_day, fii, cripto_nacional.
+      // acao_day, fii, cripto_nacional. O ledger roda sobre TODA a história
+      // (loop externo não filtra por ano), então dezembro do ano anterior já
+      // abateu esse `prejuizoAnterior` antes de chegarmos em janeiro do ano
+      // pedido.
       const prejuizoAnterior = prejuizoAcumuladoPorCategoria[categoria] ?? 0; // sempre <= 0
       const baseAntesCompensacao = lucroBruto + prejuizoAnterior;
 
@@ -439,46 +470,80 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
         prejuizoAcumuladoPorCategoria[categoria] = 0;
       }
 
-      mensal.push({
-        anoMes,
-        categoria,
-        categoriaLabel: LABEL_CATEGORIA[categoria],
-        vendaTotal,
-        lucroBruto,
-        isento,
-        motivoIsencao,
-        baseCalculo: Math.max(0, baseAntesCompensacao),
-        aliquota,
-        impostoDevido,
-        apuracaoAnual: false,
-        diasMediosRetencao: null,
-      });
+      if (emitirLinha) {
+        mensal.push({
+          anoMes,
+          categoria,
+          categoriaLabel: LABEL_CATEGORIA[categoria],
+          vendaTotal,
+          lucroBruto,
+          isento,
+          motivoIsencao,
+          baseCalculo: Math.max(0, baseAntesCompensacao),
+          aliquota,
+          impostoDevido,
+          apuracaoAnual: false,
+          diasMediosRetencao: null,
+          prejuizoAnteriorAplicado: -Math.min(0, prejuizoAnterior),
+        });
+      }
     }
   }
 
   mensal.sort((a, b) => (a.anoMes === b.anoMes ? a.categoria.localeCompare(b.categoria) : a.anoMes < b.anoMes ? -1 : 1));
 
-  // Resumo anual: soma o que já foi apurado mês a mês (categorias mensais) e
-  // recalcula do zero as categorias de apuração anual.
+  // Resumo anual: soma o que já foi apurado mês a mês (categorias mensais,
+  // já com compensação entre anos aplicada acima) e roda um ledger ANO A
+  // ANO (não mês a mês) pras categorias de apuração anual — mesmo
+  // princípio, prejuízo de um ano abate lucro de qualquer ano seguinte.
   const resumoAnual: ResumoAnualCategoria[] = [];
-  for (const categoria of categoriasComVenda) {
-    const linhasCategoria = mensal.filter((l) => l.categoria === categoria);
-    const vendaTotal = linhasCategoria.reduce((s, l) => s + l.vendaTotal, 0);
-    const lucroLiquido = linhasCategoria.reduce((s, l) => s + l.lucroBruto, 0);
-
+  for (const categoria of categoriasComVendaNoAno) {
     if (CATEGORIAS_APURACAO_ANUAL.includes(categoria)) {
-      const impostoDevido = lucroLiquido > 0 ? lucroLiquido * 0.15 : 0;
+      const vendasCategoria = todasVendas.filter(
+        (v) => v.categoria === categoria && Number(v.anoMes.slice(0, 4)) <= ano
+      );
+      const porAno = new Map<number, VendaApurada[]>();
+      for (const v of vendasCategoria) {
+        const anoV = Number(v.anoMes.slice(0, 4));
+        const lista = porAno.get(anoV) ?? [];
+        lista.push(v);
+        porAno.set(anoV, lista);
+      }
+      const anosOrdenados = [...porAno.keys()].sort((a, b) => a - b);
+
+      let prejuizoAcumuladoAnual = 0; // sempre <= 0
+      let vendaTotalAnoAlvo = 0;
+      let lucroBrutoAnoAlvo = 0;
+      let baseAnoAlvo = 0;
+      for (const anoIter of anosOrdenados) {
+        const vendasDoAnoIter = porAno.get(anoIter)!;
+        const lucroBrutoAno = vendasDoAnoIter.reduce((s, v) => s + v.ganho, 0);
+        const vendaTotalAno = vendasDoAnoIter.reduce((s, v) => s + v.vendaTotal, 0);
+        const baseAno = lucroBrutoAno + prejuizoAcumuladoAnual;
+
+        if (anoIter === ano) {
+          vendaTotalAnoAlvo = vendaTotalAno;
+          lucroBrutoAnoAlvo = lucroBrutoAno;
+          baseAnoAlvo = baseAno;
+        }
+        prejuizoAcumuladoAnual = baseAno <= 0 ? baseAno : 0;
+      }
+
+      const impostoDevido = baseAnoAlvo > 0 ? baseAnoAlvo * 0.15 : 0;
       resumoAnual.push({
         categoria,
         categoriaLabel: LABEL_CATEGORIA[categoria],
-        vendaTotal,
-        lucroLiquido,
+        vendaTotal: vendaTotalAnoAlvo,
+        lucroLiquido: lucroBrutoAnoAlvo,
         impostoDevido,
         apuracaoAnual: true,
       });
       continue;
     }
 
+    const linhasCategoria = mensal.filter((l) => l.categoria === categoria);
+    const vendaTotal = linhasCategoria.reduce((s, l) => s + l.vendaTotal, 0);
+    const lucroLiquido = linhasCategoria.reduce((s, l) => s + l.lucroBruto, 0);
     const impostoDevido = linhasCategoria.reduce((s, l) => s + (l.impostoDevido ?? 0), 0);
     resumoAnual.push({
       categoria,

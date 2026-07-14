@@ -139,12 +139,48 @@ export async function obterEstruturaAlocacao(): Promise<EstruturaAlocacao> {
 // ---------------------------------------------------------------------------
 // Classes
 // ---------------------------------------------------------------------------
+/** Tolerância de arredondamento pra validação de soma de peso-alvo (evita falso positivo por ponto flutuante). */
+const TOLERANCIA_SOMA_PESO = 0.01;
+
+/**
+ * Soma dos pesos-alvo das classes já cadastradas, exceto `excluirId` (uso em
+ * editarClasse, pra não contar o peso antigo da própria classe duas vezes).
+ * Validação redundante (ver docs/MAPA-DE-DADOS.md §8.11): além do usuário
+ * poder ver o total na tela, o servidor também barra se ultrapassar 100%.
+ */
+async function somaPesoAlvoClasses(profileId: string, excluirId?: string): Promise<number> {
+  const supabase = await createClient();
+  let query = supabase.from("alocacao_classes").select("peso_alvo").eq("profile_id", profileId);
+  if (excluirId) query = query.neq("id", excluirId);
+  const { data } = await query;
+  return (data ?? []).reduce((s, c) => s + Number(c.peso_alvo), 0);
+}
+
+async function somaPesoAlvoSetores(profileId: string, classeId: string, excluirId?: string): Promise<number> {
+  const supabase = await createClient();
+  let query = supabase
+    .from("alocacao_setores")
+    .select("peso_alvo")
+    .eq("profile_id", profileId)
+    .eq("classe_id", classeId);
+  if (excluirId) query = query.neq("id", excluirId);
+  const { data } = await query;
+  return (data ?? []).reduce((s, c) => s + Number(c.peso_alvo), 0);
+}
+
 export async function criarClasse(input: ClasseForm): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const somaAtual = await somaPesoAlvoClasses(user.id);
+  if (somaAtual + input.peso_alvo > 100 + TOLERANCIA_SOMA_PESO) {
+    return {
+      error: `A soma dos pesos-alvo das classes passaria de 100% (já cadastrado: ${somaAtual.toFixed(1)}%, tentando adicionar ${input.peso_alvo.toFixed(1)}%).`,
+    };
+  }
 
   const { error } = await supabase.from("alocacao_classes").insert({
     profile_id: user.id,
@@ -165,6 +201,13 @@ export async function editarClasse(id: string, input: ClasseForm): Promise<AcaoR
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const somaOutras = await somaPesoAlvoClasses(user.id, id);
+  if (somaOutras + input.peso_alvo > 100 + TOLERANCIA_SOMA_PESO) {
+    return {
+      error: `A soma dos pesos-alvo das classes passaria de 100% (as outras classes já somam ${somaOutras.toFixed(1)}%, tentando deixar esta em ${input.peso_alvo.toFixed(1)}%).`,
+    };
+  }
 
   const { error } = await supabase
     .from("alocacao_classes")
@@ -206,6 +249,13 @@ export async function criarSetor(classeId: string, input: SetorForm): Promise<Ac
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
+  const somaAtual = await somaPesoAlvoSetores(user.id, classeId);
+  if (somaAtual + input.peso_alvo > 100 + TOLERANCIA_SOMA_PESO) {
+    return {
+      error: `A soma dos pesos-alvo dos setores dessa classe passaria de 100% (já cadastrado: ${somaAtual.toFixed(1)}%, tentando adicionar ${input.peso_alvo.toFixed(1)}%).`,
+    };
+  }
+
   const { error } = await supabase.from("alocacao_setores").insert({
     profile_id: user.id,
     classe_id: classeId,
@@ -226,6 +276,21 @@ export async function editarSetor(id: string, input: SetorForm): Promise<AcaoRes
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { data: setorAtual } = await supabase
+    .from("alocacao_setores")
+    .select("classe_id")
+    .eq("id", id)
+    .eq("profile_id", user.id)
+    .single();
+  if (!setorAtual) return { error: "Setor não encontrado." };
+
+  const somaOutros = await somaPesoAlvoSetores(user.id, setorAtual.classe_id, id);
+  if (somaOutros + input.peso_alvo > 100 + TOLERANCIA_SOMA_PESO) {
+    return {
+      error: `A soma dos pesos-alvo dos setores dessa classe passaria de 100% (os outros setores já somam ${somaOutros.toFixed(1)}%, tentando deixar este em ${input.peso_alvo.toFixed(1)}%).`,
+    };
+  }
 
   const { error } = await supabase
     .from("alocacao_setores")

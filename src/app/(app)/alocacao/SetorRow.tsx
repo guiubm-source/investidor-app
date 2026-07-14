@@ -12,7 +12,7 @@ export default function SetorRow({
   onChange,
 }: {
   setor: SetorNode;
-  onChange: () => void;
+  onChange: () => void | Promise<void>;
 }) {
   const [expandido, setExpandido] = useState(false);
   const [editando, setEditando] = useState(false);
@@ -27,8 +27,8 @@ export default function SetorRow({
           onSalvo={async (dados) => {
             const resultado = await editarSetor(setor.id, dados);
             if (resultado.error) throw new Error(resultado.error);
+            await onChange();
             setEditando(false);
-            onChange();
           }}
         />
       </div>

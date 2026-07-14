@@ -2,6 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { obterAtivoDetalhe, obterChecklistAtivo, obterClassesSetores } from "@/lib/ativos/actions";
 import { obterCorretoras } from "@/lib/carteira/actions";
+import { obterRentabilidadeHistoricaAtivo } from "@/lib/ativos/preco-historico";
 import AtivoDetalheView from "./AtivoDetalheView";
 
 export default async function AtivoDetalhePage({ params }: { params: Promise<{ id: string }> }) {
@@ -14,11 +15,12 @@ export default async function AtivoDetalhePage({ params }: { params: Promise<{ i
 
   if (!user) redirect("/login");
 
-  const [ativo, classesSetores, corretoras, checklist] = await Promise.all([
+  const [ativo, classesSetores, corretoras, checklist, rentabilidade] = await Promise.all([
     obterAtivoDetalhe(id),
     obterClassesSetores(),
     obterCorretoras(),
     obterChecklistAtivo(id),
+    obterRentabilidadeHistoricaAtivo(id),
   ]);
 
   if (!ativo) notFound();
@@ -31,6 +33,7 @@ export default async function AtivoDetalhePage({ params }: { params: Promise<{ i
           classesSetores={classesSetores}
           corretoras={corretoras}
           checklistInicial={checklist}
+          rentabilidadeInicial={rentabilidade}
         />
       </div>
     </div>
