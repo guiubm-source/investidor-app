@@ -206,11 +206,11 @@ src/
     alocacao/     actions.ts (estrutura-alvo), constants.ts, schema.ts
     carteira/     actions.ts (livro-razão de compra/venda), schema.ts
     proventos/    actions.ts (CRUD + consolidações), schema.ts
-    indicadores/  actions.ts (CRUD + Visão Geral + motores Selic/IPCA), schema.ts, selic-estatisticas.ts, ipca-estatisticas.ts (cálculos puros, sem "use server" — usados no servidor e nos gráficos client-side)
+    indicadores/  actions.ts (CRUD + Visão Geral + motores Selic/IPCA/Dólar), schema.ts, selic-estatisticas.ts, ipca-estatisticas.ts, dolar-estatisticas.ts (cálculos puros, sem "use server" — usados no servidor e nos gráficos client-side)
     referencia/   actions.ts + schema.ts — CRUD de bacen_diretoria, brasil_presidentes, peso_ipca_grupo e meta_inflacao (sem profile_id), consumido por Configurações (cadastro) e por Indicadores/Selic/IPCA (filtros de mandato, pesos, metas)
     ir/           actions.ts (motor de apuração de IR por categoria, mensal + anual, só leitura da Carteira/Ativos)
     suitability/  actions.ts, schema.ts, score.ts
-    supabase/     client.ts, server.ts, middleware.ts
+    supabase/     client.ts, server.ts, middleware.ts, admin.ts (service role, só para rotas de cron)
   proxy.ts                      sessão + proteção de rotas (Next 16)
 supabase/schema.sql              schema completo, comentado, idempotente
 ```
@@ -296,7 +296,8 @@ seguem em aberto na seção 8.5):
 2. **Fonte de dado**: cadastro manual para os quatro indicadores (Selic,
    IPCA, Dólar, Fluxo estrangeiro) — decidido não integrar a API do BACEN
    por enquanto, mesmo estando disponível e gratuita. Reavaliar essa escolha
-   se o lançamento manual se mostrar trabalhoso demais na prática.
+   se o lançamento manual se mostrar trabalhoso demais na prática. **Ver
+   8.9 decisão 2 — essa escolha foi revista especificamente pro Dólar.**
 3. **Visão Geral**: mostra as duas coisas — painel-resumo objetivo (último
    valor + tendência de cada indicador, lado a lado) **e** uma leitura
    interpretativa combinada (texto explicando o que a combinação atual
@@ -305,7 +306,8 @@ seguem em aberto na seção 8.5):
 4. **Fluxo estrangeiro**: lançamento mensal (saldo líquido em R$), não
    diário.
 5. **Dólar**: lançamento mensal (não diário) — mesma cadência do fluxo
-   estrangeiro e do IPCA.
+   estrangeiro e do IPCA. **Superado pela decisão 8.9.1 (granularidade
+   diária).**
 6. **Calendário do Copom**: as datas de 2026 já públicas (17–18/mar,
    28–29/abr, 16–17/jun, 4–5/ago, 15–16/set, 3–4/nov, 8–9/dez) vêm
    **pré-cadastradas** no app (seed/migration). O usuário só lança a
@@ -585,6 +587,144 @@ então dropa `indicador_ipca_categoria`.
   ficam prontos pra alimentar isso (acumulado 12m já é a base do juro
   real), mas a integração de fato só acontece quando essas outras abas
   forem trabalhadas.
+
+### 8.9 Decisões tomadas em 2026-07-14 (Dólar avançado + automação)
+
+Guilherme trouxe uma análise detalhada (recebida de fonte externa, com um
+raciocínio de economista/gestor de patrimônio) sobre o papel do Dólar
+(USD/BRL) na economia brasileira e o que a sub-aba **Dólar** dentro de
+Indicadores precisaria ter pra refletir isso: cotação e histórico,
+tendência e estatísticas, volatilidade e ciclos, e relações com Selic/IPCA.
+Decisões de escopo confirmadas antes de codar:
+
+1. **Granularidade muda de mensal pra diária.** Hoje o Dólar é lançado uma
+   vez por mês (mesma cadência do Fluxo estrangeiro). O Dólar é um ativo
+   financeiro negociado todo dia útil — médias móveis de mercado (5/20/50/
+   100/200 dias, como pedido) só fazem sentido sobre uma série diária.
+   `indicador_dolar_mensal` é substituída por `indicador_dolar_diario`
+   (data + cotação, sem abertura/máxima/mínima — o resto pode ser
+   calculado/adicionado depois se algum dia fizer falta).
+2. **Automação via API do Bacen (reabre parcialmente a decisão 8.3.2).** A
+   decisão de 2026-07-13 foi "cadastro manual pros quatro indicadores,
+   sem integrar a API do Bacen por enquanto". Isso muda **só pro Dólar**:
+   o Bacen expõe a PTAX de fechamento diária publicamente via API SGS
+   (Sistema Gerenciador de Séries Temporais), sem autenticação. Um Vercel
+   Cron Job roda uma rota de API uma vez por dia (depois do fechamento da
+   PTAX, ~13h) e faz upsert da cotação do dia em `indicador_dolar_diario`.
+   Selic, IPCA e Fluxo estrangeiro **continuam manuais** — não têm uma API
+   pública tão simples e estável quanto a PTAX, e dependem de decisão do
+   COPOM / divulgação do IBGE / B3, não de um valor diário objetivo.
+3. **Backfill histórico desde 1999** (início do regime de câmbio
+   flutuante no Brasil). A mesma rota de cron que faz a atualização diária
+   também faz o backfill: se a tabela estiver vazia (ou tiver buraco desde
+   o último dia salvo), busca da API do Bacen tudo entre a última data
+   salva (ou 1999-01-04 se a tabela estiver vazia) e hoje, em janelas de
+   até 10 anos por chamada (limite prático da API do Bacen pra intervalos
+   grandes), e faz upsert em lote. Isso significa que a mesma rota serve
+   tanto pro backfill inicial quanto pra atualização incremental diária —
+   não existe um script de migração à parte.
+4. **Aba somente-leitura.** Sem cadastro manual, edição ou importação por
+   colar texto pro Dólar — o único jeito de um valor mudar é o cron rodar
+   de novo (correção pontual, se necessário, é direto no banco ou
+   re-executando o cron pro intervalo afetado). É uma exceção ao padrão
+   Selic/IPCA (que mantêm lançamento manual + importação como fallback)
+   porque a fonte automática é confiável e pública — manter um formulário
+   de cadastro que compete com o cron adicionaria risco de inconsistência
+   sem benefício real.
+5. **Relações Macroeconômicas — só Dólar × Selic e Dólar × IPCA por
+   enquanto.** A análise original pedia também Dólar × CDI, mas o CDI não
+   existe em nenhum lugar do app hoje (nenhuma tabela, schema ou tela) —
+   criá-lo do zero é do tamanho de um indicador novo (histórico diário,
+   também automatizável via Bacen SGS). Fica documentado como candidato a
+   próximo indicador; quando existir, a comparação com Dólar entra junto.
+6. **Método de comparação: correlação estatística (Pearson), não só
+   gráfico sobreposto.** Mesmo padrão já usado no motor do IPCA
+   (`correlacaoGrupoComGeral`): o Dólar diário é reamostrado pra mensal
+   (fechamento do mês = cotação do último dia útil disponível naquele
+   mês) e a correlação é calculada entre a variação mensal do Dólar e (a)
+   a variação mensal do IPCA geral, (b) a Selic vigente no fim de cada
+   mês. Amostra mínima de 3 pontos pareados, mesma regra do IPCA.
+7. **Dados derivados nunca são armazenados** (mesmo princípio de
+   Selic/IPCA): variação diária/mensal/anual, máxima/mínima histórica,
+   média e desvio padrão históricos, médias móveis, tendência, sequência
+   de dias consecutivos de alta/queda, volatilidade atual vs histórica e
+   as correlações com Selic/IPCA são **sempre recalculados** em
+   `lib/indicadores/dolar-estatisticas.ts` + `actions.ts` a partir de
+   `indicador_dolar_diario` (e das séries de Selic/IPCA já existentes),
+   nunca gravados em coluna.
+
+#### Schema planejado (seção 8.9)
+
+- `indicador_dolar_diario` (nova, sem `profile_id`, mesmo padrão de dado
+  compartilhado das outras tabelas de Indicadores): `id`, `data` (date,
+  unique), `cotacao` (numeric(10,4), > 0), `created_at`, `updated_at`.
+- `indicador_dolar_mensal` (antiga): dropada. O backfill desde 1999 deixa
+  qualquer lançamento mensal manual anterior estritamente obsoleto (dado
+  real da PTAX é superior a uma aproximação mensal digitada à mão), então
+  não há migração de dado — só `drop table`.
+
+RLS: habilitado, mas **diferente do padrão usado até aqui**. Como a aba é
+somente-leitura pro usuário, a policy cobre só `select` pra
+`auth.role() = 'authenticated'` — não existe policy de `insert`/`update`/
+`delete` pra esse papel. A escrita (cron) usa a **service role key**
+(`SUPABASE_SERVICE_ROLE_KEY`), que bypassa RLS por padrão no Supabase —
+não precisa de policy própria pra isso.
+
+#### Automação — cron + API do Bacen (desenho antes de codar)
+
+- **Fonte**: API SGS do Bacen, série 1 (dólar americano venda, PTAX
+  fechamento) — `https://api.bcb.gov.br/dados/serie/bcdata.sgs.1/dados`,
+  JSON público, parâmetros `dataInicial`/`dataFinal` no formato
+  `DD/MM/AAAA`. Sem necessidade de chave.
+- **Rota**: `src/app/api/cron/dolar/route.ts` (Route Handler, não Server
+  Action — cron do Vercel chama via HTTP, não tem sessão de usuário).
+  Protegida por um segredo (`CRON_SECRET`) comparado no header
+  `Authorization: Bearer` (é como a própria documentação da Vercel
+  recomenda proteger cron routes) — não é uma credencial do usuário, é um
+  segredo da aplicação gerado uma vez e configurado nas env vars da
+  Vercel.
+- **Cliente**: novo `src/lib/supabase/admin.ts`, usando
+  `SUPABASE_SERVICE_ROLE_KEY` (só no servidor, nunca exposto ao
+  navegador) — os três clients existentes (`client.ts`/`server.ts`/
+  `middleware.ts`) dependem de sessão de usuário via cookies, o que não
+  existe numa chamada de cron.
+- **Agendamento**: `vercel.json` com um cron diário (`0 21 * * *` UTC =
+  18h em Brasília, seguro depois do fechamento da PTAX). Feriados/fins de
+  semana: o Bacen não publica valor novo, a rota simplesmente não
+  encontra dado pro intervalo e não faz nada — sem erro.
+- **Idempotência**: upsert por `data` (unique) — rodar o cron mais de uma
+  vez pro mesmo dia não duplica nem corrompe nada.
+
+#### Motor de cálculo — desenho antes de codar
+
+- **Tendência**: comparação de médias móveis curta × longa sobre a
+  cotação (mesmo espírito do MM3×MM6 do IPCA), usando MM20 × MM200
+  (curto prazo de mercado vs. tendência de longo prazo, referência comum
+  no mercado financeiro) — cotação e MM20 acima da MM200 = alta; abaixo
+  das duas = baixa; caso misto = lateral.
+- **Volatilidade**: desvio padrão da série de variações percentuais
+  diárias (não da cotação em nível) — "volatilidade atual" sobre os
+  últimos 30 dias úteis com dado, "volatilidade histórica" sobre toda a
+  série. Comparar as duas responde "está mais ou menos arriscado que o
+  normal".
+- **Sequência de dias consecutivos**: mesmo algoritmo do
+  `calcularSequenciaAceleracaoDesaceleracao` do IPCA, aplicado à direção
+  dia a dia da cotação.
+- **Correlação com Selic/IPCA**: reaproveita `correlacaoPearson` (já
+  genérica, vive em `ipca-estatisticas.ts`) — `dolar-estatisticas.ts`
+  importa a função em vez de duplicar a fórmula.
+
+#### Fora de escopo por enquanto
+
+- **CDI como indicador** (e a comparação Dólar × CDI): candidato a
+  próxima sub-aba de Indicadores, do tamanho de um indicador novo
+  completo (tabela diária, automação via Bacen SGS, motor de cálculo).
+- **OHLC (abertura/máxima/mínima intradiária)**: só a cotação de
+  fechamento é armazenada por enquanto; o schema não impede adicionar
+  essas colunas depois sem quebrar nada.
+- **Automatizar Selic/IPCA/Fluxo estrangeiro do mesmo jeito**: essa
+  sessão trata só do Dólar; os outros três indicadores continuam
+  manuais (ver decisão 2 acima).
 
 ## 9. Convenções a preservar
 

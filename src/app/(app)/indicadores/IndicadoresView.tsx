@@ -4,15 +4,11 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
-  dolarMensalSchema,
   fluxoEstrangeiroMensalSchema,
-  type DolarMensalForm,
   type FluxoEstrangeiroMensalForm,
 } from "@/lib/indicadores/schema";
 import {
-  criarDolarMensal,
   criarFluxoEstrangeiroMensal,
-  excluirDolarMensal,
   excluirFluxoEstrangeiroMensal,
   obterDolar,
   obterFluxoEstrangeiro,
@@ -28,6 +24,7 @@ import {
 import { obterDiretoriaBacen, obterPresidentesBrasil, type DiretorBacen, type PresidenteBrasil } from "@/lib/referencia/actions";
 import AbaSelic from "./AbaSelic";
 import AbaIpca from "./AbaIpca";
+import AbaDolar from "./AbaDolar";
 
 const formatarMoeda = (valor: number) => valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -230,98 +227,6 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
             <button
               onClick={async () => {
                 await excluirFluxoEstrangeiroMensal(f.id);
-                await onAtualizar();
-              }}
-              className="text-faint hover:text-danger text-right"
-            >
-              Excluir
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Dólar
-// ---------------------------------------------------------------------------
-
-function AbaDolar({ dolar, onAtualizar }: { dolar: DolarView; onAtualizar: () => Promise<void> }) {
-  const [addLancamento, setAddLancamento] = useState(false);
-  const { register, handleSubmit, reset, formState, setError } = useForm<DolarMensalForm>({
-    resolver: zodResolver(dolarMensalSchema),
-  });
-
-  const onSubmit = handleSubmit(async (data) => {
-    try {
-      const resultado = await criarDolarMensal(data);
-      if (resultado.error) throw new Error(resultado.error);
-      setAddLancamento(false);
-      reset();
-      await onAtualizar();
-    } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
-    }
-  });
-
-  return (
-    <div className="space-y-4">
-      <div className="card p-3 w-fit">
-        <p className="text-xs text-faint">Última cotação</p>
-        <p className="text-lg font-medium text-ink flex items-center gap-1.5">
-          {dolar.ultimo ? `R$ ${dolar.ultimo.cotacao.toFixed(2)}` : "—"}
-          <SetaTendencia tendencia={dolar.tendencia} />
-        </p>
-      </div>
-
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border">
-          <p className="text-xs text-faint">Cotação mensal</p>
-          {!addLancamento && (
-            <button onClick={() => setAddLancamento(true)} className="text-xs text-accent hover:underline">
-              + Lançar mês
-            </button>
-          )}
-        </div>
-        {addLancamento && (
-          <form onSubmit={onSubmit} className="grid grid-cols-2 md:grid-cols-3 gap-3 px-4 py-3 border-b border-border">
-            <div>
-              <label className="label">Mês (AAAA-MM)</label>
-              <input {...register("ano_mes")} placeholder="2026-06" className="input" />
-              {formState.errors.ano_mes?.message && <p className="field-error">{formState.errors.ano_mes.message}</p>}
-            </div>
-            <div>
-              <label className="label">Cotação (R$)</label>
-              <input type="number" step="0.0001" {...register("cotacao", { valueAsNumber: true })} className="input" />
-            </div>
-            <div className="flex items-end gap-2">
-              <button type="button" onClick={() => setAddLancamento(false)} className="btn btn-secondary flex-1">
-                Cancelar
-              </button>
-              <button type="submit" disabled={formState.isSubmitting} className="btn btn-primary flex-1">
-                Salvar
-              </button>
-            </div>
-            {formState.errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{formState.errors.root.message}</p>}
-          </form>
-        )}
-        <div className="grid grid-cols-[1fr_1fr_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
-          <span>Mês</span>
-          <span className="text-right">Cotação</span>
-          <span></span>
-        </div>
-        {dolar.mensal.length === 0 && <p className="text-sm text-faint px-4 py-4">Nenhum lançamento ainda.</p>}
-        {dolar.mensal.map((d) => (
-          <div
-            key={d.id}
-            className="grid grid-cols-[1fr_1fr_60px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
-          >
-            <span className="text-ink">{d.anoMes}</span>
-            <span className="text-right text-ink">R$ {d.cotacao.toFixed(2)}</span>
-            <button
-              onClick={async () => {
-                await excluirDolarMensal(d.id);
                 await onAtualizar();
               }}
               className="text-faint hover:text-danger text-right"

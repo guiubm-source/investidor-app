@@ -25,8 +25,9 @@ export default async function ConfiguracoesPage() {
       <div className="max-w-3xl mx-auto">
         <h1 className="text-2xl font-medium text-ink mb-1">Configurações</h1>
         <p className="text-sm text-muted mb-8">
-          Seus dados pessoais, perfil de investidor, segurança da conta e cadastros de referência
-          (diretoria do Bacen, presidentes do Brasil, pesos do IPCA e metas de inflação).
+          Organizado em sub-abas: Dados pessoais (cadastro, perfil de investidor e segurança da
+          conta), Selic (diretoria do Bacen e presidentes do Brasil) e IPCA (pesos por grupo e
+          metas de inflação).
         </p>
         <ConfiguracoesForm
           dadosIniciais={dados}

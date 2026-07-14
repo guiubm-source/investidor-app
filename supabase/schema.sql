@@ -741,3 +741,41 @@ create policy "peso_ipca_grupo_authenticated" on public.peso_ipca_grupo
 drop policy if exists "meta_inflacao_authenticated" on public.meta_inflacao;
 create policy "meta_inflacao_authenticated" on public.meta_inflacao
   for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- 13. Dólar avançado (granularidade diária + automação) — decisões em
+--     docs/MAPA-DE-DADOS.md §8.9 (2026-07-14). indicador_dolar_mensal é
+--     substituída por indicador_dolar_diario: a automação via API do Bacen
+--     (PTAX, SGS série 1) faz o lançamento mensal manual ficar obsoleto —
+--     backfill diário desde 1999 é estritamente superior a qualquer
+--     aproximação mensal digitada à mão, então não há migração de dado, só
+--     `drop table`. Continua sem profile_id (mesmo padrão de dado
+--     compartilhado da seção 10), mas com uma diferença importante: a aba é
+--     somente-leitura pro usuário, então a policy de "authenticated" cobre
+--     só SELECT — não existe policy de insert/update/delete pra esse papel.
+--     A escrita é feita só pelo cron (src/app/api/cron/dolar/route.ts) via
+--     service role key, que bypassa RLS por padrão no Supabase.
+-- ============================================================================
+
+drop table if exists public.indicador_dolar_mensal;
+
+create table if not exists public.indicador_dolar_diario (
+  id          uuid primary key default gen_random_uuid(),
+  data        date not null unique,
+  cotacao     numeric(10,4) not null check (cotacao > 0),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+comment on table public.indicador_dolar_diario is 'Cotação de fechamento diária do dólar (PTAX, Bacen SGS série 1), preenchida automaticamente por cron. Somente leitura para usuários — sem cadastro/edição manual pela UI.';
+
+drop trigger if exists trg_indicador_dolar_diario_updated_at on public.indicador_dolar_diario;
+create trigger trg_indicador_dolar_diario_updated_at
+  before update on public.indicador_dolar_diario
+  for each row execute function public.set_updated_at();
+
+alter table public.indicador_dolar_diario enable row level security;
+
+drop policy if exists "indicador_dolar_diario_select_authenticated" on public.indicador_dolar_diario;
+create policy "indicador_dolar_diario_select_authenticated" on public.indicador_dolar_diario
+  for select using (auth.role() = 'authenticated');

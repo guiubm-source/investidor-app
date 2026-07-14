@@ -56,6 +56,20 @@ const NOMES_PERFIL: Record<string, string> = {
   arrojado: "Arrojado",
 };
 
+// Sub-abas de Configurações (decisão 2026-07-14): navegação por estado local,
+// mesmo padrão de src/app/(app)/indicadores/IndicadoresView.tsx — sem sync
+// com a URL. Agrupamento: "Dados pessoais" reúne tudo que é sobre o usuário
+// (dados cadastrais, perfil de investidor/suitability e segurança da conta);
+// "Selic" e "IPCA" reúnem os cadastros de referência que alimentam o motor
+// de cálculo de cada indicador na aba Indicadores.
+const ABAS = [
+  { id: "dados", label: "Dados pessoais" },
+  { id: "selic", label: "Selic" },
+  { id: "ipca", label: "IPCA" },
+] as const;
+
+type AbaId = (typeof ABAS)[number]["id"];
+
 export default function ConfiguracoesForm({
   dadosIniciais,
   diretoriaBacenInicial,
@@ -69,6 +83,7 @@ export default function ConfiguracoesForm({
   pesosIpcaInicial: PesoIpcaGrupo[];
   metasInflacaoInicial: MetaInflacao[];
 }) {
+  const [aba, setAba] = useState<AbaId>("dados");
   const [dados, setDados] = useState(dadosIniciais);
   const [diretoriaBacen, setDiretoriaBacen] = useState(diretoriaBacenInicial);
   const [presidentesBrasil, setPresidentesBrasil] = useState(presidentesBrasilInicial);
@@ -77,22 +92,50 @@ export default function ConfiguracoesForm({
 
   return (
     <div className="space-y-6">
-      <SecaoDadosPessoais dados={dados} onSalvo={(novo) => setDados({ ...dados, perfil: novo })} />
-      <SecaoPerfilInvestidor dados={dados} onAtualizado={(s) => setDados({ ...dados, suitability: s })} />
-      <SecaoSeguranca dados={dados} onSenhaDefinida={() => setDados({ ...dados, temSenha: true })} />
-      <SecaoDiretoriaBacen
-        diretoria={diretoriaBacen}
-        onAtualizar={async () => setDiretoriaBacen(await obterDiretoriaBacen())}
-      />
-      <SecaoPresidentesBrasil
-        presidentes={presidentesBrasil}
-        onAtualizar={async () => setPresidentesBrasil(await obterPresidentesBrasil())}
-      />
-      <SecaoPesosIpca pesos={pesosIpca} onAtualizar={async () => setPesosIpca(await obterPesosIpca())} />
-      <SecaoMetasInflacao
-        metas={metasInflacao}
-        onAtualizar={async () => setMetasInflacao(await obterMetasInflacao())}
-      />
+      <div className="flex gap-1 border-b border-border overflow-x-auto">
+        {ABAS.map((a) => (
+          <button
+            key={a.id}
+            onClick={() => setAba(a.id)}
+            className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
+              aba === a.id ? "border-accent text-ink" : "border-transparent text-muted hover:text-ink"
+            }`}
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+
+      {aba === "dados" && (
+        <div className="space-y-6">
+          <SecaoDadosPessoais dados={dados} onSalvo={(novo) => setDados({ ...dados, perfil: novo })} />
+          <SecaoPerfilInvestidor dados={dados} onAtualizado={(s) => setDados({ ...dados, suitability: s })} />
+          <SecaoSeguranca dados={dados} onSenhaDefinida={() => setDados({ ...dados, temSenha: true })} />
+        </div>
+      )}
+
+      {aba === "selic" && (
+        <div className="space-y-6">
+          <SecaoDiretoriaBacen
+            diretoria={diretoriaBacen}
+            onAtualizar={async () => setDiretoriaBacen(await obterDiretoriaBacen())}
+          />
+          <SecaoPresidentesBrasil
+            presidentes={presidentesBrasil}
+            onAtualizar={async () => setPresidentesBrasil(await obterPresidentesBrasil())}
+          />
+        </div>
+      )}
+
+      {aba === "ipca" && (
+        <div className="space-y-6">
+          <SecaoPesosIpca pesos={pesosIpca} onAtualizar={async () => setPesosIpca(await obterPesosIpca())} />
+          <SecaoMetasInflacao
+            metas={metasInflacao}
+            onAtualizar={async () => setMetasInflacao(await obterMetasInflacao())}
+          />
+        </div>
+      )}
     </div>
   );
 }

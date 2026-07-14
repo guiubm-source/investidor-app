@@ -3,7 +3,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type {
   DecisaoSelicForm,
-  DolarMensalForm,
   FluxoEstrangeiroMensalForm,
   ImportarIpcaForm,
   ImportarSelicForm,
@@ -61,6 +60,30 @@ import {
   type MetaInflacao,
   type PesoIpcaGrupo,
 } from "@/lib/referencia/actions";
+import {
+  calcularDistanciaPct,
+  calcularMediaHistorica,
+  calcularMediasMoveisAtuais,
+  calcularSequenciaDiasConsecutivos,
+  calcularTendencia as calcularTendenciaDolar,
+  calcularVariacaoAnual,
+  calcularVariacaoMensal,
+  calcularVariacaoPct,
+  calcularVariacoesMensais,
+  calcularVolatilidadeAtual,
+  calcularVolatilidadeHistorica,
+  correlacaoComIpca,
+  correlacaoComSelic,
+  encontrarMaximoHistorico,
+  encontrarMinimoHistorico,
+  maximoMinimoUltimos12Meses,
+  reamostrarMensal,
+  type MaximoMinimoHistorico,
+  type MediasMoveisAtuais,
+  type PontoDolar,
+  type SequenciaDolar,
+  type TendenciaDolar,
+} from "./dolar-estatisticas";
 
 export type AcaoResultado = { error?: string };
 
@@ -661,46 +684,212 @@ export async function importarHistoricoIpca(input: ImportarIpcaForm): Promise<Im
 }
 
 // ---------------------------------------------------------------------------
-// Dólar
+// Dólar — ver docs/MAPA-DE-DADOS.md §8.9. Granularidade diária, preenchida
+// automaticamente por cron (src/app/api/cron/dolar/route.ts) a partir da
+// PTAX do Bacen — SOMENTE LEITURA aqui (sem criar/editar/excluir). Variação
+// diária/mensal/anual, máxima/mínima histórica, média/desvio padrão, médias
+// móveis, tendência, sequência de dias consecutivos, volatilidade e as
+// correlações com Selic/IPCA são SEMPRE recalculados a partir de
+// `indicador_dolar_diario` — cálculo puro fica em `dolar-estatisticas.ts`.
 // ---------------------------------------------------------------------------
 
-export type DolarMensal = { id: string; anoMes: string; cotacao: number };
-export type DolarView = { mensal: DolarMensal[]; ultimo: DolarMensal | null; tendencia: Tendencia };
+export type DolarView = {
+  pontos: PontoDolar[]; // mais recente primeiro (histórico/gráfico)
+  ultimo: PontoDolar | null;
+  variacaoDiaria: number | null;
+  variacaoMensal: number | null;
+  variacaoAnual: number | null;
+  maximoHistorico: MaximoMinimoHistorico | null;
+  minimoHistorico: MaximoMinimoHistorico | null;
+  maximo12m: MaximoMinimoHistorico | null;
+  minimo12m: MaximoMinimoHistorico | null;
+  mediaHistorica: number | null;
+  distanciaMaximaPct: number | null;
+  distanciaMinimaPct: number | null;
+  distanciaMediaPct: number | null;
+  mediasMoveis: MediasMoveisAtuais;
+  tendencia: TendenciaDolar | null;
+  sequencia: SequenciaDolar | null;
+  volatilidadeAtual: number | null;
+  volatilidadeHistorica: number | null;
+  correlacaoSelic: number | null;
+  correlacaoIpca: number | null;
+  insights: string[];
+};
+
+/** Último dia do mês (AAAA-MM-DD) de uma competência "AAAA-MM" — usado para achar a Selic vigente no fechamento do mês. */
+function ultimoDiaDoMes(anoMes: string): string {
+  const [ano, mes] = anoMes.split("-").map(Number);
+  const ultimoDia = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+  return `${anoMes}-${String(ultimoDia).padStart(2, "0")}`;
+}
+
+/** Taxa Selic vigente numa data (a mais recente reunião decidida com dataVigencia <= data). */
+function selicVigenteEmData(reunioes: SelicReuniao[], dataAlvo: string): number | null {
+  const candidatas = reunioes
+    .filter((r) => r.decidido && r.dataVigencia !== null && r.dataVigencia <= dataAlvo)
+    .sort((a, b) => (a.dataVigencia! < b.dataVigencia! ? 1 : -1));
+  return candidatas[0]?.taxaDefinida ?? null;
+}
+
+function gerarInsightsDolar(input: {
+  tendencia: TendenciaDolar | null;
+  sequencia: SequenciaDolar | null;
+  distanciaMaximaPct: number | null;
+  distanciaMinimaPct: number | null;
+  distanciaMediaPct: number | null;
+  volatilidadeAtual: number | null;
+  volatilidadeHistorica: number | null;
+  correlacaoSelic: number | null;
+  correlacaoIpca: number | null;
+}): string[] {
+  const insights: string[] = [];
+
+  if (input.tendencia === "alta") {
+    insights.push("Dólar em tendência de alta (cotação e média móvel de 20 dias acima da média móvel de 200 dias).");
+  } else if (input.tendencia === "baixa") {
+    insights.push("Dólar em tendência de baixa (cotação e média móvel de 20 dias abaixo da média móvel de 200 dias).");
+  } else if (input.tendencia === "lateral") {
+    insights.push("Dólar sem tendência definida no momento (lateralizado entre as médias móveis de curto e longo prazo).");
+  }
+
+  if (input.sequencia) {
+    const direcao = input.sequencia.tipo === "alta" ? "em alta" : "em queda";
+    insights.push(`Cotação ${direcao} por ${input.sequencia.quantidade} dia(s) útil(eis) seguido(s).`);
+  }
+
+  if (input.distanciaMaximaPct !== null) {
+    insights.push(`Cotação atual está ${Math.abs(input.distanciaMaximaPct).toFixed(1)}% abaixo da máxima histórica.`);
+  }
+  if (input.distanciaMinimaPct !== null && input.distanciaMinimaPct > 0.01) {
+    insights.push(`Cotação atual está ${input.distanciaMinimaPct.toFixed(1)}% acima da mínima histórica.`);
+  }
+  if (input.distanciaMediaPct !== null) {
+    insights.push(
+      input.distanciaMediaPct >= 0
+        ? `Cotação está ${input.distanciaMediaPct.toFixed(1)}% acima da média histórica.`
+        : `Cotação está ${Math.abs(input.distanciaMediaPct).toFixed(1)}% abaixo da média histórica.`
+    );
+  }
+
+  if (input.volatilidadeAtual !== null && input.volatilidadeHistorica !== null && input.volatilidadeHistorica > 0) {
+    if (input.volatilidadeAtual > input.volatilidadeHistorica * 1.2) {
+      insights.push("Volatilidade recente acima do normal histórico — mercado mais instável que o de costume.");
+    } else if (input.volatilidadeAtual < input.volatilidadeHistorica * 0.8) {
+      insights.push("Volatilidade recente abaixo do normal histórico — mercado mais calmo que o de costume.");
+    }
+  }
+
+  if (input.correlacaoSelic !== null) {
+    insights.push(`Correlação com a Selic (reamostrada mensalmente): ${input.correlacaoSelic.toFixed(2)}.`);
+  }
+  if (input.correlacaoIpca !== null) {
+    insights.push(`Correlação com o IPCA (reamostrado mensalmente): ${input.correlacaoIpca.toFixed(2)}.`);
+  }
+
+  return insights;
+}
+
+const DOLAR_VIEW_VAZIA: DolarView = {
+  pontos: [],
+  ultimo: null,
+  variacaoDiaria: null,
+  variacaoMensal: null,
+  variacaoAnual: null,
+  maximoHistorico: null,
+  minimoHistorico: null,
+  maximo12m: null,
+  minimo12m: null,
+  mediaHistorica: null,
+  distanciaMaximaPct: null,
+  distanciaMinimaPct: null,
+  distanciaMediaPct: null,
+  mediasMoveis: { mm5: null, mm20: null, mm50: null, mm100: null, mm200: null },
+  tendencia: null,
+  sequencia: null,
+  volatilidadeAtual: null,
+  volatilidadeHistorica: null,
+  correlacaoSelic: null,
+  correlacaoIpca: null,
+  insights: [
+    "Ainda não há cotações do dólar carregadas — o cron diário faz o backfill inicial (desde 1999) na primeira execução.",
+  ],
+};
 
 export async function obterDolar(): Promise<DolarView> {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("indicador_dolar_mensal")
-    .select("id, ano_mes, cotacao")
-    .order("ano_mes", { ascending: false });
+  const [{ data }, selic, ipca] = await Promise.all([
+    supabase.from("indicador_dolar_diario").select("data, cotacao").order("data", { ascending: true }),
+    obterSelic(),
+    obterIpca(),
+  ]);
 
-  const mensal: DolarMensal[] = (data ?? []).map((d) => ({ id: d.id, anoMes: d.ano_mes, cotacao: Number(d.cotacao) }));
-  const ultimo = mensal[0] ?? null;
-  const penultimo = mensal[1] ?? null;
+  const pontosAsc: PontoDolar[] = (data ?? []).map((d) => ({ data: d.data, cotacao: Number(d.cotacao) }));
+  if (pontosAsc.length === 0) return DOLAR_VIEW_VAZIA;
 
-  return { mensal, ultimo, tendencia: calcularTendencia(ultimo?.cotacao ?? null, penultimo?.cotacao ?? null) };
-}
+  const cotacoesAsc = pontosAsc.map((p) => p.cotacao);
+  const ultimo = pontosAsc[pontosAsc.length - 1];
+  const penultimo = pontosAsc[pontosAsc.length - 2] ?? null;
 
-export async function criarDolarMensal(input: DolarMensalForm): Promise<AcaoResultado> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+  const maximoHistorico = encontrarMaximoHistorico(pontosAsc);
+  const minimoHistorico = encontrarMinimoHistorico(pontosAsc);
+  const { maximo: maximo12m, minimo: minimo12m } = maximoMinimoUltimos12Meses(pontosAsc);
+  const mediaHistorica = calcularMediaHistorica(pontosAsc);
 
-  const { error } = await supabase
-    .from("indicador_dolar_mensal")
-    .upsert({ ano_mes: input.ano_mes, cotacao: input.cotacao }, { onConflict: "ano_mes" });
+  const mensal = reamostrarMensal(pontosAsc);
+  const variacoesMensais = calcularVariacoesMensais(mensal);
 
-  if (error) return { error: "Não foi possível registrar a cotação do mês." };
-  return {};
-}
+  const ipcaMensalPares = ipca.competencias.map((c) => ({ anoMes: c.anoMes, geral: c.geral }));
+  const correlacaoIpca = correlacaoComIpca(variacoesMensais, ipcaMensalPares);
 
-export async function excluirDolarMensal(id: string): Promise<AcaoResultado> {
-  const supabase = await createClient();
-  const { error } = await supabase.from("indicador_dolar_mensal").delete().eq("id", id);
-  if (error) return { error: "Não foi possível excluir o lançamento." };
-  return {};
+  const selicVigentePorMes = variacoesMensais
+    .map((v) => ({ anoMes: v.anoMes, taxa: selicVigenteEmData(selic.reunioes, ultimoDiaDoMes(v.anoMes)) }))
+    .filter((s): s is { anoMes: string; taxa: number } => s.taxa !== null);
+  const correlacaoSelic = correlacaoComSelic(variacoesMensais, selicVigentePorMes);
+
+  const distanciaMaximaPct = calcularDistanciaPct(ultimo.cotacao, maximoHistorico?.valor ?? null);
+  const distanciaMinimaPct = calcularDistanciaPct(ultimo.cotacao, minimoHistorico?.valor ?? null);
+  const distanciaMediaPct = calcularDistanciaPct(ultimo.cotacao, mediaHistorica);
+  const tendencia = calcularTendenciaDolar(cotacoesAsc);
+  const sequencia = calcularSequenciaDiasConsecutivos(pontosAsc);
+  const volatilidadeAtual = calcularVolatilidadeAtual(pontosAsc);
+  const volatilidadeHistorica = calcularVolatilidadeHistorica(pontosAsc);
+
+  const insights = gerarInsightsDolar({
+    tendencia,
+    sequencia,
+    distanciaMaximaPct,
+    distanciaMinimaPct,
+    distanciaMediaPct,
+    volatilidadeAtual,
+    volatilidadeHistorica,
+    correlacaoSelic,
+    correlacaoIpca,
+  });
+
+  return {
+    pontos: [...pontosAsc].reverse(),
+    ultimo,
+    variacaoDiaria: calcularVariacaoPct(ultimo.cotacao, penultimo?.cotacao ?? null),
+    variacaoMensal: calcularVariacaoMensal(pontosAsc),
+    variacaoAnual: calcularVariacaoAnual(pontosAsc),
+    maximoHistorico,
+    minimoHistorico,
+    maximo12m,
+    minimo12m,
+    mediaHistorica,
+    distanciaMaximaPct,
+    distanciaMinimaPct,
+    distanciaMediaPct,
+    mediasMoveis: calcularMediasMoveisAtuais(cotacoesAsc),
+    tendencia,
+    sequencia,
+    volatilidadeAtual,
+    volatilidadeHistorica,
+    correlacaoSelic,
+    correlacaoIpca,
+    insights,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +968,12 @@ export async function obterVisaoGeral(): Promise<VisaoGeralView> {
     obterFluxoEstrangeiro(),
   ]);
 
+  // DolarView.tendencia usa "alta"/"baixa"/"lateral" (ver dolar-estatisticas.ts),
+  // diferente do tipo genérico Tendencia ("alta"/"queda"/"estavel") usado pelos
+  // outros três indicadores no painel — mapeamento só pra exibição aqui.
+  const dolarTendenciaMapeada: Tendencia =
+    dolar.tendencia === "alta" ? "alta" : dolar.tendencia === "baixa" ? "queda" : dolar.tendencia === "lateral" ? "estavel" : null;
+
   const painel: PainelItem[] = [
     {
       label: "Selic",
@@ -793,7 +988,7 @@ export async function obterVisaoGeral(): Promise<VisaoGeralView> {
     {
       label: "Dólar",
       valor: dolar.ultimo ? `R$ ${dolar.ultimo.cotacao.toFixed(2)}` : "—",
-      tendencia: dolar.tendencia,
+      tendencia: dolarTendenciaMapeada,
     },
     {
       label: "Fluxo estrangeiro",
@@ -835,10 +1030,10 @@ export async function obterVisaoGeral(): Promise<VisaoGeralView> {
     observacoes.push("IPCA acumulado em 12 meses dentro da banda da meta de inflação vigente");
   }
 
-  if (dolar.tendencia === "alta") {
+  if (dolarTendenciaMapeada === "alta") {
     pontosCautela++;
     observacoes.push("Dólar em alta (pressiona inflação de importados e custo de dívida em moeda estrangeira)");
-  } else if (dolar.tendencia === "queda") {
+  } else if (dolarTendenciaMapeada === "queda") {
     pontosFavoraveis++;
     observacoes.push("Dólar em queda");
   }

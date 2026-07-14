@@ -80,11 +80,9 @@ export const importarIpcaSchema = z.object({
 });
 export type ImportarIpcaForm = z.infer<typeof importarIpcaSchema>;
 
-export const dolarMensalSchema = z.object({
-  ano_mes: anoMesSchema,
-  cotacao: z.number().positive("Informe uma cotação válida"),
-});
-export type DolarMensalForm = z.infer<typeof dolarMensalSchema>;
+// dolarMensalSchema foi removido — Dólar agora é diário, automático (Bacen
+// SGS via cron) e somente-leitura, sem cadastro manual. Ver
+// docs/MAPA-DE-DADOS.md §8.9 decisão 4.
 
 export const fluxoEstrangeiroMensalSchema = z.object({
   ano_mes: anoMesSchema,
