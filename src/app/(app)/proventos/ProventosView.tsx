@@ -1,0 +1,260 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { proventoSchema, TIPOS_PROVENTO, type ProventoForm } from "@/lib/proventos/schema";
+import {
+  criarProvento,
+  excluirProvento,
+  obterLivroProventos,
+  type LivroProventos,
+} from "@/lib/proventos/actions";
+
+const formatarMoeda = (valor: number) =>
+  valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+const formatarData = (iso: string) => {
+  const [ano, mes, dia] = iso.split("-");
+  return `${dia}/${mes}/${ano}`;
+};
+
+const rotuloProvento = (valor: string) => TIPOS_PROVENTO.find((t) => t.valor === valor)?.label ?? valor;
+
+export type AtivoOpcao = { id: string; ticker: string };
+
+export default function ProventosView({
+  livroInicial,
+  ativos,
+}: {
+  livroInicial: LivroProventos;
+  ativos: AtivoOpcao[];
+}) {
+  const [livro, setLivro] = useState(livroInicial);
+  const [addProvento, setAddProvento] = useState(false);
+
+  const atualizar = async () => {
+    const novo = await obterLivroProventos();
+    setLivro(novo);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="card p-3">
+          <p className="text-xs text-faint">Total recebido</p>
+          <p className="text-lg font-medium text-ink">{formatarMoeda(livro.totalGeral)}</p>
+        </div>
+
+        <div className="card p-3">
+          <p className="text-xs text-faint mb-2">Por tipo</p>
+          {livro.porTipo.length === 0 ? (
+            <p className="text-xs text-faint">—</p>
+          ) : (
+            <div className="space-y-1">
+              {livro.porTipo.map((t) => (
+                <div key={t.tipo} className="flex items-center justify-between text-xs">
+                  <span className="text-muted">{t.label}</span>
+                  <span className="text-ink">{formatarMoeda(t.total)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card p-3">
+          <p className="text-xs text-faint mb-2">Por ano</p>
+          {livro.porAno.length === 0 ? (
+            <p className="text-xs text-faint">—</p>
+          ) : (
+            <div className="space-y-1">
+              {livro.porAno.map((a) => (
+                <div key={a.ano} className="flex items-center justify-between text-xs">
+                  <span className="text-muted">{a.ano}</span>
+                  <span className="text-ink">{formatarMoeda(a.total)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="card p-3">
+        <p className="text-xs text-faint mb-2">Por ativo</p>
+        {livro.porAtivo.length === 0 ? (
+          <p className="text-xs text-faint">Nenhum provento registrado ainda.</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {livro.porAtivo.map((a) => (
+              <Link
+                key={a.ativoId}
+                href={`/ativos/${a.ativoId}`}
+                className="flex items-center justify-between text-xs bg-surface-2 rounded-md px-3 py-2 hover:bg-border"
+              >
+                <span className="text-ink font-medium">{a.ativoTicker}</span>
+                <span className="text-muted">{formatarMoeda(a.total)}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {ativos.length === 0 ? (
+        <p className="text-sm text-faint">
+          Cadastre um ativo na aba{" "}
+          <Link href="/ativos" className="text-accent hover:underline">
+            Ativos
+          </Link>{" "}
+          antes de lançar proventos.
+        </p>
+      ) : (
+        !addProvento && (
+          <button onClick={() => setAddProvento(true)} className="btn btn-secondary">
+            + Registrar provento
+          </button>
+        )
+      )}
+
+      {addProvento && (
+        <div className="card p-4">
+          <FormProvento
+            ativos={ativos}
+            onCancelar={() => setAddProvento(false)}
+            onSalvo={async (dados) => {
+              const resultado = await criarProvento(dados);
+              if (resultado.error) throw new Error(resultado.error);
+              setAddProvento(false);
+              await atualizar();
+            }}
+          />
+        </div>
+      )}
+
+      <div className="card overflow-hidden">
+        <div className="grid grid-cols-[90px_1fr_1fr_100px_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+          <span>Data</span>
+          <span>Ativo</span>
+          <span>Tipo</span>
+          <span className="text-right">Valor</span>
+          <span></span>
+        </div>
+
+        {livro.lancamentos.length === 0 && (
+          <p className="text-sm text-faint px-4 py-4">Nenhum lançamento registrado ainda.</p>
+        )}
+
+        {livro.lancamentos.map((l) => (
+          <div
+            key={l.id}
+            className="grid grid-cols-[90px_1fr_1fr_100px_60px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
+          >
+            <span className="text-muted">{formatarData(l.data)}</span>
+            <Link href={`/ativos/${l.ativoId}`} className="text-ink font-medium hover:underline">
+              {l.ativoTicker}
+            </Link>
+            <span className="text-muted">{rotuloProvento(l.tipo)}</span>
+            <span className="text-right text-ink">{formatarMoeda(l.valorTotal)}</span>
+            <button
+              onClick={async () => {
+                await excluirProvento(l.id);
+                await atualizar();
+              }}
+              className="text-faint hover:text-danger text-right"
+            >
+              Excluir
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FormProvento({
+  ativos,
+  onSalvo,
+  onCancelar,
+}: {
+  ativos: AtivoOpcao[];
+  onSalvo: (dados: ProventoForm) => void | Promise<void>;
+  onCancelar: () => void;
+}) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    setError,
+  } = useForm<ProventoForm>({
+    resolver: zodResolver(proventoSchema),
+    defaultValues: {
+      ativo_id: ativos[0]?.id ?? "",
+      tipo: "dividendo",
+      data: new Date().toISOString().slice(0, 10),
+      valor_total: 0,
+    },
+  });
+
+  const onSubmit = handleSubmit(async (data) => {
+    try {
+      await onSalvo(data);
+    } catch (e) {
+      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+    }
+  });
+
+  return (
+    <form onSubmit={onSubmit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div>
+        <label className="label">Ativo</label>
+        <select {...register("ativo_id")} className="input">
+          {ativos.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.ticker}
+            </option>
+          ))}
+        </select>
+        {errors.ativo_id?.message && <p className="field-error">{errors.ativo_id.message}</p>}
+      </div>
+
+      <div>
+        <label className="label">Tipo</label>
+        <select {...register("tipo")} className="input">
+          {TIPOS_PROVENTO.map((t) => (
+            <option key={t.valor} value={t.valor}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="label">Data</label>
+        <input type="date" {...register("data")} className="input" />
+        {errors.data?.message && <p className="field-error">{errors.data.message}</p>}
+      </div>
+
+      <div>
+        <label className="label">Valor total (R$)</label>
+        <input
+          type="number"
+          step="0.01"
+          {...register("valor_total", { valueAsNumber: true })}
+          className="input"
+        />
+        {errors.valor_total?.message && <p className="field-error">{errors.valor_total.message}</p>}
+      </div>
+
+      {errors.root?.message && <p className="error-box col-span-2 md:col-span-4">{errors.root.message}</p>}
+
+      <div className="col-span-2 md:col-span-4 flex gap-2">
+        <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
+          Cancelar
+        </button>
+        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
+          {isSubmitting ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </form>
+  );
+}

@@ -47,6 +47,14 @@ funcionalidade nova:
 | Quantidade, preço médio, lucro realizado | Calculado em runtime a partir de `transacoes` (`lib/ativos/actions.ts#calcularPosicao`) | Carteira, Alocação |
 | Valor atual de cada ativo | `quantidade × ativos.preco_atual` (mesmo cálculo acima) | Alocação, Configurações |
 | Perfil de suitability vigente | `current_investor_suitability` (view) | Alocação (sugestão de template), Configurações (exibição) |
+| Registro de proventos (dividendo/JCP/rendimento) | `lib/proventos` (tabela `proventos`) — único lugar com cadastrar/editar/excluir | Carteira (livro-razão combinado), detalhe do Ativo — ambos só leitura, sem botão de cadastrar/excluir |
+
+Cadastro/edição/exclusão de provento só existe em `lib/proventos/actions.ts`
+(aba Proventos). Carteira e a página do Ativo continuam consultando a
+tabela `proventos` diretamente para exibir (leitura), mas nunca chamam
+`criarProvento`/`excluirProvento` — isso é proposital: várias LEITURAS da
+mesma fonte são incentivadas (redundância de informação), múltiplas
+ESCRITAS da mesma fonte nunca são.
 
 Se uma tela nova precisar de "posição do ativo" ou "estrutura de alocação",
 ela **importa a função de `lib/ativos` ou `lib/alocacao`**, nunca reimplementa
@@ -55,8 +63,8 @@ o cálculo.
 ## 4. Fluxo de dados entre as abas
 
 ```
-Carteira (lançamentos)              Alocação (estrutura-alvo)
-  transacoes + proventos              alocacao_classes + alocacao_setores
+Carteira (compra/venda)             Alocação (estrutura-alvo)
+  transacoes                          alocacao_classes + alocacao_setores
         │                                       │
         ▼                                       │
 lib/ativos/actions.ts                            │
@@ -73,6 +81,12 @@ lib/ativos/actions.ts                            │
    Aba Ativos (lista + detalhe)                       │
    Aba Carteira (livro-razão + nomes)                  ▼
                                               Aba Alocação (barras de desvio)
+
+Proventos (dividendo/JCP/rendimento)
+  lib/proventos/actions.ts — único lugar que cadastra/edita/exclui
+        │
+        ├──▶ Aba Carteira (livro-razão combinado, só leitura)
+        └──▶ Aba Ativos [detalhe] (proventosRecebidos, retornoTotal, só leitura)
 ```
 
 Pontos de atenção:
@@ -83,6 +97,12 @@ Pontos de atenção:
 - **Venda validada contra posição calculada**, não contra um campo de
   "quantidade em carteira" armazenado (`lib/carteira/actions.ts#criarTransacao`
   chama `obterAtivosComPosicao()` antes de aceitar uma venda).
+- **Proventos só são cadastrados/editados/excluídos na aba Proventos**
+  (`lib/proventos/actions.ts`). Carteira (`lib/carteira/actions.ts#obterLivroRazao`)
+  e o detalhe do Ativo (`lib/ativos/actions.ts#obterAtivoDetalhe`) leem a
+  tabela `proventos` direto, mas não têm mais botão de cadastrar/excluir —
+  qualquer aba nova que precisar de dado de provento (ex. um futuro
+  dashboard) deve ler de lá, nunca duplicar o cadastro.
 
 ## 5. Regras de negócio
 
@@ -119,7 +139,19 @@ defensável e documentada). Cada preenchimento gera uma **linha nova** em
 `investor_suitability` (histórico imutável, nunca UPDATE) — requisito de
 rastreabilidade/compliance.
 
-### 5.4 Segurança (RLS)
+### 5.4 Proventos (dividendo/JCP/rendimento)
+`lib/proventos/actions.ts#obterLivroProventos` calcula, a partir da mesma
+lista de lançamentos, quatro visões: livro-razão cronológico, total geral,
+total por tipo e total por ativo e por ano (agrupado por `data.slice(0,4)`).
+Sem vínculo com corretora por enquanto (decisão consciente — proventos
+guardam só `ativo_id`, `tipo`, `data`, `valor_total`; pode ganhar
+`corretora_id` depois se precisar).
+⚠️ Nota de negócio ainda não implementada: no Brasil, dividendo é isento de
+IR para pessoa física, enquanto JCP tem retenção de 15% na fonte. Hoje o
+app trata os dois genericamente como "provento" sem distinguir tributação —
+considerar isso antes de qualquer cálculo futuro de IR devido.
+
+### 5.5 Segurança (RLS)
 Toda tabela de domínio tem Row Level Security com policy
 `auth.uid() = profile_id` (ou `= id` em `profiles`). `investor_suitability`
 não tem policy de UPDATE/DELETE de propósito — histórico é imutável mesmo
@@ -141,7 +173,7 @@ para o próprio dono da linha.
    chama `updateSession()` (`lib/supabase/middleware.ts`), que renova o
    token via `supabase.auth.getUser()` e redireciona para `/login` se a rota
    é protegida (`/dashboard`, `/configuracoes`, `/alocacao`, `/carteira`,
-   `/ativos`, `/cadastro/perfil`) e não há usuário autenticado.
+   `/proventos`, `/ativos`, `/cadastro/perfil`) e não há usuário autenticado.
 5. Três clientes Supabase distintos, cada um para seu contexto:
    `lib/supabase/client.ts` (browser), `lib/supabase/server.ts` (Server
    Components/Actions, via cookies do Next), `lib/supabase/middleware.ts`
@@ -161,14 +193,16 @@ src/
       layout.tsx
       dashboard/
       ativos/                   lista + página de detalhe [id]
-      carteira/                 livro-razão + gestão de corretoras
+      carteira/                 livro-razão de compra/venda (+ proventos, só leitura) e gestão de corretoras
+      proventos/                cadastro de dividendo/JCP/rendimento + consolidações
       alocacao/                 árvore de desvio (classe > setor > ativo)
       configuracoes/            dados pessoais, senha, suitability vigente
   components/                   Sidebar, TradingViewChart, suitability/*
   lib/
     ativos/       actions.ts (motor de posição/desvio), schema.ts (Zod)
     alocacao/     actions.ts (estrutura-alvo), constants.ts, schema.ts
-    carteira/     actions.ts (livro-razão), schema.ts
+    carteira/     actions.ts (livro-razão de compra/venda), schema.ts
+    proventos/    actions.ts (CRUD + consolidações), schema.ts
     suitability/  actions.ts, schema.ts, score.ts
     supabase/     client.ts, server.ts, middleware.ts
   proxy.ts                      sessão + proteção de rotas (Next 16)

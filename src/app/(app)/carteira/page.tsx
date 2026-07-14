@@ -20,8 +20,9 @@ export default async function CarteiraPage() {
       <div className="max-w-5xl mx-auto">
         <h1 className="text-2xl font-medium text-ink mb-1">Carteira</h1>
         <p className="text-sm text-muted mb-8">
-          Livro-razão de lançamentos: registre compras, vendas e proventos aqui. Posição, preço
-          médio e desvio de cada ativo ficam na página dele, na aba Ativos.
+          Livro-razão de compras e vendas. Proventos aparecem aqui só como referência — cadastre-os
+          na aba Proventos. Posição, preço médio e desvio de cada ativo ficam na página dele, na
+          aba Ativos.
         </p>
         <CarteiraView livroInicial={livro} ativos={ativos} />
       </div>

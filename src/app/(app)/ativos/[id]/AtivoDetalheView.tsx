@@ -26,21 +26,9 @@ import {
   type AtivoDetalhe,
   type ClasseOpcao,
 } from "@/lib/ativos/actions";
-import {
-  proventoSchema,
-  transacaoSchema,
-  TIPOS_PROVENTO,
-  TIPOS_TRANSACAO,
-  type ProventoForm,
-  type TransacaoForm,
-} from "@/lib/carteira/schema";
-import {
-  criarProvento,
-  criarTransacao,
-  excluirProvento,
-  excluirTransacao,
-  type Corretora,
-} from "@/lib/carteira/actions";
+import { transacaoSchema, TIPOS_TRANSACAO, type TransacaoForm } from "@/lib/carteira/schema";
+import { TIPOS_PROVENTO } from "@/lib/proventos/schema";
+import { criarTransacao, excluirTransacao, type Corretora } from "@/lib/carteira/actions";
 import DesvioBar from "@/components/DesvioBar";
 import TradingViewChart from "@/components/TradingViewChart";
 import { TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
@@ -88,7 +76,6 @@ export default function AtivoDetalheView({
   const [editandoPreco, setEditandoPreco] = useState(false);
   const [editandoSimbolo, setEditandoSimbolo] = useState(false);
   const [addTransacao, setAddTransacao] = useState(false);
-  const [addProvento, setAddProvento] = useState(false);
   const [excluindo, setExcluindo] = useState(false);
 
   const atualizar = async () => {
@@ -379,25 +366,10 @@ export default function AtivoDetalheView({
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-ink">Proventos</h2>
-          {!addProvento && (
-            <button onClick={() => setAddProvento(true)} className="text-xs text-faint hover:text-ink">
-              + Registrar provento
-            </button>
-          )}
+          <a href="/proventos" className="text-xs text-faint hover:text-ink">
+            Cadastrar na aba Proventos →
+          </a>
         </div>
-
-        {addProvento && (
-          <FormProvento
-            ativoId={ativo.id}
-            onCancelar={() => setAddProvento(false)}
-            onSalvo={async (dados) => {
-              const resultado = await criarProvento(dados);
-              if (resultado.error) throw new Error(resultado.error);
-              setAddProvento(false);
-              await atualizar();
-            }}
-          />
-        )}
 
         {ativo.proventos.length === 0 ? (
           <p className="text-xs text-faint">Nenhum provento registrado ainda.</p>
@@ -411,15 +383,6 @@ export default function AtivoDetalheView({
                 <span className="text-muted">{rotuloProvento(p.tipo)}</span>
                 <span className="text-muted">{formatarData(p.data)}</span>
                 <span className="text-ink">{formatarMoeda(p.valorTotal)}</span>
-                <button
-                  onClick={async () => {
-                    await excluirProvento(p.id);
-                    await atualizar();
-                  }}
-                  className="text-faint hover:text-danger"
-                >
-                  Excluir
-                </button>
               </div>
             ))}
           </div>
@@ -850,80 +813,3 @@ function FormTransacao({
   );
 }
 
-function FormProvento({
-  ativoId,
-  onSalvo,
-  onCancelar,
-}: {
-  ativoId: string;
-  onSalvo: (dados: ProventoForm) => void | Promise<void>;
-  onCancelar: () => void;
-}) {
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-    setError,
-  } = useForm<ProventoForm>({
-    resolver: zodResolver(proventoSchema),
-    defaultValues: {
-      ativo_id: ativoId,
-      tipo: "dividendo",
-      data: new Date().toISOString().slice(0, 10),
-      valor_total: 0,
-    },
-  });
-
-  const onSubmit = handleSubmit(async (data) => {
-    try {
-      await onSalvo(data);
-    } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
-    }
-  });
-
-  return (
-    <form onSubmit={onSubmit} className="grid grid-cols-2 md:grid-cols-3 gap-3 bg-surface-2 rounded-md p-3 mb-3">
-      <input type="hidden" {...register("ativo_id")} />
-
-      <div>
-        <label className="label">Tipo</label>
-        <select {...register("tipo")} className="input">
-          {TIPOS_PROVENTO.map((t) => (
-            <option key={t.valor} value={t.valor}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className="label">Data</label>
-        <input type="date" {...register("data")} className="input" />
-        {errors.data?.message && <p className="field-error">{errors.data.message}</p>}
-      </div>
-
-      <div>
-        <label className="label">Valor total (R$)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register("valor_total", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.valor_total?.message && <p className="field-error">{errors.valor_total.message}</p>}
-      </div>
-
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
-
-      <div className="col-span-2 md:col-span-3 flex gap-2">
-        <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
-          Cancelar
-        </button>
-        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
-          {isSubmitting ? "Salvando..." : "Salvar"}
-        </button>
-      </div>
-    </form>
-  );
-}

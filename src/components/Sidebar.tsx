@@ -8,6 +8,7 @@ const ITENS = [
   { href: "/dashboard", label: "Painel", icone: "home" },
   { href: "/ativos", label: "Ativos", icone: "layers" },
   { href: "/carteira", label: "Carteira", icone: "wallet" },
+  { href: "/proventos", label: "Proventos", icone: "trending-up" },
   { href: "/alocacao", label: "Alocação", icone: "chart-pie" },
   { href: "/configuracoes", label: "Configurações", icone: "settings" },
 ] as const;
@@ -82,6 +83,7 @@ function Icone({ nome }: { nome: string }) {
     logout: "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9",
     wallet: "M3 7a2 2 0 012-2h13a1 1 0 011 1v2H5a2 2 0 100 4h14v6a2 2 0 01-2 2H5a2 2 0 01-2-2V7zM16 12h3",
     layers: "M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5",
+    "trending-up": "M3 17l6-6 4 4 8-8M14 7h7v7",
   };
   return (
     <svg

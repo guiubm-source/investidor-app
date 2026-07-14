@@ -4,18 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { transacaoSchema, TIPOS_TRANSACAO, type TransacaoForm } from "@/lib/carteira/schema";
+import { TIPOS_PROVENTO } from "@/lib/proventos/schema";
 import {
-  proventoSchema,
-  transacaoSchema,
-  TIPOS_PROVENTO,
-  TIPOS_TRANSACAO,
-  type ProventoForm,
-  type TransacaoForm,
-} from "@/lib/carteira/schema";
-import {
-  criarProvento,
   criarTransacao,
-  excluirProvento,
   excluirTransacao,
   obterLivroRazao,
   type LivroRazao,
@@ -44,7 +36,6 @@ export default function CarteiraView({
 }) {
   const [livro, setLivro] = useState(livroInicial);
   const [addTransacao, setAddTransacao] = useState(false);
-  const [addProvento, setAddProvento] = useState(false);
 
   const atualizar = async () => {
     const novo = await obterLivroRazao();
@@ -53,9 +44,14 @@ export default function CarteiraView({
 
   return (
     <div className="space-y-4">
-      <div className="card p-3">
-        <p className="text-xs text-faint">Proventos recebidos (total)</p>
-        <p className="text-sm font-medium text-ink">{formatarMoeda(livro.proventosTotal)}</p>
+      <div className="card p-3 flex items-center justify-between">
+        <div>
+          <p className="text-xs text-faint">Proventos recebidos (total)</p>
+          <p className="text-sm font-medium text-ink">{formatarMoeda(livro.proventosTotal)}</p>
+        </div>
+        <Link href="/proventos" className="text-xs text-accent hover:underline">
+          Gerenciar proventos →
+        </Link>
       </div>
 
       <CorretorasManager corretoras={livro.corretoras} onChange={atualizar} />
@@ -69,18 +65,11 @@ export default function CarteiraView({
           antes de lançar transações.
         </p>
       ) : (
-        <div className="flex gap-2">
-          {!addTransacao && (
-            <button onClick={() => setAddTransacao(true)} className="btn btn-secondary">
-              + Registrar transação
-            </button>
-          )}
-          {!addProvento && (
-            <button onClick={() => setAddProvento(true)} className="btn btn-secondary">
-              + Registrar provento
-            </button>
-          )}
-        </div>
+        !addTransacao && (
+          <button onClick={() => setAddTransacao(true)} className="btn btn-secondary">
+            + Registrar transação
+          </button>
+        )
       )}
 
       {addTransacao && (
@@ -93,21 +82,6 @@ export default function CarteiraView({
               const resultado = await criarTransacao(dados);
               if (resultado.error) throw new Error(resultado.error);
               setAddTransacao(false);
-              await atualizar();
-            }}
-          />
-        </div>
-      )}
-
-      {addProvento && (
-        <div className="card p-4">
-          <FormProvento
-            ativos={ativos}
-            onCancelar={() => setAddProvento(false)}
-            onSalvo={async (dados) => {
-              const resultado = await criarProvento(dados);
-              if (resultado.error) throw new Error(resultado.error);
-              setAddProvento(false);
               await atualizar();
             }}
           />
@@ -155,16 +129,21 @@ export default function CarteiraView({
                 <span className="text-faint">—</span>
               </>
             )}
-            <button
-              onClick={async () => {
-                if (l.categoria === "transacao") await excluirTransacao(l.id);
-                else await excluirProvento(l.id);
-                await atualizar();
-              }}
-              className="text-faint hover:text-danger text-right"
-            >
-              Excluir
-            </button>
+            {l.categoria === "transacao" ? (
+              <button
+                onClick={async () => {
+                  await excluirTransacao(l.id);
+                  await atualizar();
+                }}
+                className="text-faint hover:text-danger text-right"
+              >
+                Excluir
+              </button>
+            ) : (
+              <Link href="/proventos" className="text-faint hover:text-ink text-right">
+                Ver
+              </Link>
+            )}
           </div>
         ))}
       </div>
@@ -283,94 +262,6 @@ function FormTransacao({
           className="input"
         />
         {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
-      </div>
-
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-4">{errors.root.message}</p>}
-
-      <div className="col-span-2 md:col-span-4 flex gap-2">
-        <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
-          Cancelar
-        </button>
-        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
-          {isSubmitting ? "Salvando..." : "Salvar"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function FormProvento({
-  ativos,
-  onSalvo,
-  onCancelar,
-}: {
-  ativos: AtivoOpcao[];
-  onSalvo: (dados: ProventoForm) => void | Promise<void>;
-  onCancelar: () => void;
-}) {
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-    setError,
-  } = useForm<ProventoForm>({
-    resolver: zodResolver(proventoSchema),
-    defaultValues: {
-      ativo_id: ativos[0]?.id ?? "",
-      tipo: "dividendo",
-      data: new Date().toISOString().slice(0, 10),
-      valor_total: 0,
-    },
-  });
-
-  const onSubmit = handleSubmit(async (data) => {
-    try {
-      await onSalvo(data);
-    } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
-    }
-  });
-
-  return (
-    <form onSubmit={onSubmit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <div>
-        <label className="label">Ativo</label>
-        <select {...register("ativo_id")} className="input">
-          {ativos.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.ticker}
-            </option>
-          ))}
-        </select>
-        {errors.ativo_id?.message && <p className="field-error">{errors.ativo_id.message}</p>}
-      </div>
-
-      <div>
-        <label className="label">Tipo</label>
-        <select {...register("tipo")} className="input">
-          {TIPOS_PROVENTO.map((t) => (
-            <option key={t.valor} value={t.valor}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className="label">Data</label>
-        <input type="date" {...register("data")} className="input" />
-        {errors.data?.message && <p className="field-error">{errors.data.message}</p>}
-      </div>
-
-      <div>
-        <label className="label">Valor total (R$)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register("valor_total", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.valor_total?.message && <p className="field-error">{errors.valor_total.message}</p>}
       </div>
 
       {errors.root?.message && <p className="error-box col-span-2 md:col-span-4">{errors.root.message}</p>}

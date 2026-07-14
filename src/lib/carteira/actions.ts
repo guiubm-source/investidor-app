@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import type { CorretoraForm, ProventoForm, TransacaoForm } from "./schema";
+import type { CorretoraForm, TransacaoForm } from "./schema";
 import { obterAtivosComPosicao } from "@/lib/ativos/actions";
 
 export type AcaoResultado = { error?: string };
@@ -197,36 +197,6 @@ export async function excluirTransacao(id: string): Promise<AcaoResultado> {
   return {};
 }
 
-// ---------------------------------------------------------------------------
-// Proventos
-// ---------------------------------------------------------------------------
-export async function criarProvento(input: ProventoForm): Promise<AcaoResultado> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada. Faça login novamente." };
-
-  const { error } = await supabase.from("proventos").insert({
-    profile_id: user.id,
-    ativo_id: input.ativo_id,
-    tipo: input.tipo,
-    data: input.data,
-    valor_total: input.valor_total,
-  });
-
-  if (error) return { error: "Não foi possível registrar o provento." };
-  return {};
-}
-
-export async function excluirProvento(id: string): Promise<AcaoResultado> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada. Faça login novamente." };
-
-  const { error } = await supabase.from("proventos").delete().eq("id", id).eq("profile_id", user.id);
-  if (error) return { error: "Não foi possível excluir o provento." };
-  return {};
-}
+// Cadastrar/excluir provento agora é responsabilidade exclusiva de
+// lib/proventos/actions.ts (aba Proventos). A Carteira continua só LENDO
+// proventos acima, em obterLivroRazao(), para o livro-razão combinado.

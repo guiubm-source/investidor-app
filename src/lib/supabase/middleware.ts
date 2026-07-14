@@ -34,7 +34,15 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const rotasProtegidas = ["/dashboard", "/configuracoes", "/alocacao", "/carteira", "/ativos", "/cadastro/perfil"];
+  const rotasProtegidas = [
+    "/dashboard",
+    "/configuracoes",
+    "/alocacao",
+    "/carteira",
+    "/proventos",
+    "/ativos",
+    "/cadastro/perfil",
+  ];
   const isRotaProtegida = rotasProtegidas.some((rota) =>
     request.nextUrl.pathname.startsWith(rota)
   );
