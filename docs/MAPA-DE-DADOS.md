@@ -726,6 +726,169 @@ não precisa de policy própria pra isso.
   sessão trata só do Dólar; os outros três indicadores continuam
   manuais (ver decisão 2 acima).
 
+### 8.10 Decisões tomadas em 2026-07-14 (Ativo avançado: cotação automática, checklist comparativo e resultados trimestrais)
+
+Pedido original: a página de cada Ativo deveria puxar a cotação atual
+automaticamente, ganhar uma sub-aba de monitoramento de resultados
+trimestrais das empresas, e um checklist comparativo — um template pra
+Ações/ETFs/ações internacionais (P/L, PEG Ratio, P/VP, ROE, ROA, ROIC,
+margens, endividamento, crescimento, governança) e outro pra FIIs (P/VP,
+liquidez, vacância, cap rate, dividend yield, valor m²/aluguel), nos moldes
+de dois checklists impressos enviados como referência. As decisões abaixo
+resolvem as ambiguidades levantadas antes de codar.
+
+1. **Fonte de dados**: Yahoo Finance (endpoint não-oficial, gratuito, sem
+   chave) para cotação atual e histórico de preço. Decisão explícita de
+   **não** assinar brapi.dev por ora (planos pagos, a partir de ~R$100/mês,
+   seriam necessários pra automação completa de fundamentos e FIIs
+   detalhados) — o resto do checklist e os resultados trimestrais ficam
+   com lançamento manual. Trade-off aceito: o endpoint do Yahoo é instável
+   (pode mudar/bloquear sem aviso, atraso de 15-20min) — qualquer rotina
+   que o use precisa tolerar falha sem quebrar o resto da tela.
+2. **Cotação automática — gatilho duplo**: cron diário (mesmo padrão do
+   Dólar, `src/app/api/cron/*`) atualiza a cotação de todos os ativos
+   cotáveis de uma vez, **e** um botão manual "Atualizar agora" na página
+   do ativo busca na hora, pro usuário não depender só do horário do cron.
+3. **Novo tipo de ativo `etf`**: o enum de `tipo` não tinha categoria
+   própria pra ETF listado na B3 (BOVA11, IVVB11 etc.) — só existia
+   `internacional` ("ação/ETF exterior"). Adicionado `etf` ao enum. O
+   checklist "Ações" vale para `acao` + `etf` + `internacional` (o pedido
+   original agrupa "ações, ETF e stock" no mesmo template), com a ressalva
+   de que várias métricas (P/L, ROE etc.) não fazem sentido conceitual
+   pra ETF puro — ficam em branco/"—" nesse caso, sem impedir o
+   preenchimento de quem quiser usar mesmo assim.
+4. **Tipos com cotação automática**: `acao`, `fii`, `etf`, `internacional`,
+   `cripto` — todos têm um símbolo de mercado líquido derivável do ticker
+   (`TICKER.SA` pra B3, `TICKER-USD` pra cripto, ticker puro pra
+   internacional). `renda_fixa`, `fundo` e `outro` continuam 100%
+   manuais (CDB/Tesouro/fundo fechado não têm cotação de mercado líquida
+   comparável via Yahoo) — isso **substitui parcialmente** a convenção
+   antiga da seção 9 ("preço é sempre informado manualmente"), que passa a
+   valer só pra esses três tipos.
+5. **Checklist comparativo**: vive em duas partes — (a) uma seção na
+   própria página do ativo, preenchida individualmente; (b) uma tela nova
+   de comparação lado a lado (2-3 ativos do mesmo grupo — ações/ETF entre
+   si, ou FIIs entre si —, colunas A/B/C, igual aos templates enviados).
+   Os dois lêem a mesma fonte de dados (nunca duplicada).
+6. **Resultados trimestrais — dados brutos, nunca os índices prontos**:
+   nova tabela por ativo com os números BRUTOS de cada trimestre
+   (receita, lucro, patrimônio líquido, dívida etc. pra ações/ETF/
+   internacional; distribuição, vacância, valor patrimonial da cota etc.
+   pra FIIs) lançados manualmente. Os índices do checklist que dependem de
+   demonstração financeira (P/L, ROE, ROIC, margens, DL/EBIT, CAGR...) são
+   **sempre recalculados** a partir dessa tabela + preço atual — nunca
+   ficam guardados soltos, mesma regra de ouro do resto do app (seção 3).
+7. **Nuances de fórmula resolvidas** (documentando pra não perder o
+   raciocínio depois):
+   - **ROIC**: usa NOPAT aproximado = EBIT × (1 − 34%), a alíquota
+     efetiva padrão de IRPJ+CSLL no Brasil pra empresas no lucro real
+     (aproximação comum em plataformas de análise fundamentalista, não é
+     o imposto de caixa exato da empresa). Capital investido = dívida
+     líquida + patrimônio líquido (último trimestre).
+   - **"DL/EBIT" do card de Ações**: o template impresso tem um conflito —
+     a célula da tabela diz "DL/EBIT" mas a fórmula no rodapé diz
+     "Dív. Bruta/EBITDA". A fórmula do rodapé é quem manda: o card
+     calcula e rotula como **Dívida Bruta/EBITDA** (índice de alavancagem
+     padrão), não dívida líquida sobre EBIT.
+   - **"Saldo dos Acionistas"** (linha de Governança do template de
+     Ações): não tem fórmula no rodapé do checklist — não é um índice
+     computável a partir de demonstração financeira. Vira campo de texto
+     livre, manual, **por ativo** (não por trimestre) — ex.: estrutura de
+     controle, free float, notas de governança.
+   - **CAGR EBIT / CAGR Lucro (5 anos)**: comparam o trimestre mais
+     recente com o mesmo trimestre 5 anos atrás (20 trimestres de
+     distância) — enquanto não houver histórico manual suficiente
+     lançado, o card mostra "—" em vez de calcular com janela incompleta.
+   - **PEG Ratio**: P/L ÷ crescimento do LPA (lucro por ação) — usa a
+     variação percentual do LPA dos últimos 12 meses (TTM) contra o TTM
+     do ano anterior.
+   - Todos os índices "TTM" (P/L, PEG, Mg. Bruta, Mg. Lucro, ROE, ROA,
+     ROIC) somam os 4 trimestres mais recentes lançados; card mostra "—"
+     com menos de 4 trimestres.
+8. **Dividend Yield do FII é a única métrica do checklist FII que NÃO
+   precisa de lançamento novo**: reaproveita a tabela `proventos` que já
+   existe (soma dos últimos 12 meses ÷ preço atual da cota) — segue a
+   regra de fonte única, sem duplicar proventos numa tabela nova.
+9. **`cotacao_automatica` é sempre derivado do `tipo`, nunca um toggle
+   manual independente**: `criarAtivo`/`editarAtivo`
+   (`lib/ativos/actions.ts`) recalculam esse campo a cada save a partir de
+   `TIPOS_COTACAO_AUTOMATICA` (decisão 4) — criar um ativo `acao` já liga
+   automático sem precisar de passo extra, e trocar o tipo do ativo depois
+   (ex.: de `renda_fixa` pra `acao`) liga/desliga junto. Não existe hoje
+   um botão "desligar cotação automática nesse ativo específico" — se
+   surgir a necessidade (ex.: ticker delistado que o Yahoo não acha mais),
+   isso é uma decisão nova a levantar, não algo pra assumir agora.
+10. **UI final**: a página `/ativos/[id]` ganhou sub-abas "Visão geral"
+    (gráfico, classificação, posição — com botão "Atualizar agora" e a
+    fonte do preço —, checklist do grupo do ativo, transações, proventos)
+    e "Resultados trimestrais" (lançamento manual + série histórica com
+    variação QoQ/YoY da métrica-âncora de cada grupo — Lucro Líquido pra
+    ações, Receita Imobiliária pra FIIs). As sub-abas só aparecem pra
+    ativos com `grupo` definido (`acao`/`etf`/`internacional` ou `fii`);
+    `renda_fixa`/`fundo`/`outro`/`cripto` continuam com a página antiga,
+    sem checklist (cripto tem cotação automática mas não tem template de
+    checklist). Nova rota `/ativos/comparar?grupo=acoes|fiis`
+    (`ComparativoView.tsx`) deixa escolher até 3 ativos do mesmo grupo e
+    ver o checklist lado a lado, lendo os mesmos dados de
+    `obterChecklistAtivo`/`obterChecklistsPorGrupo` (nunca duplica cálculo).
+
+#### Schema planejado (seção 8.10)
+
+- `ativos`: adicionar `'etf'` ao check constraint de `tipo`; nova coluna
+  `cotacao_automatica boolean not null default false` (liga/desliga por
+  ativo se o cron/botão deve tentar buscar — desligado por padrão pra
+  `renda_fixa`/`fundo`/`outro`, ligado por padrão pros tipos cotáveis);
+  `preco_fonte text` (`'yahoo_finance' | 'manual' | null`) pra UI mostrar
+  a procedência do último preço salvo.
+- `ativo_checklist`: uma linha por ativo (`ativo_id` unique), com os
+  campos manuais que não vêm de `ativo_resultado_trimestral` — hoje só
+  `saldo_acionistas text` (Ações/ETF) e, pro grupo FIIs, os campos que o
+  Yahoo/CVM não cobrem de forma confiável de graça (nenhum obrigatório —
+  ver decisão 6, o resto é sempre calculado).
+- `ativo_resultado_trimestral`: uma linha por ativo + competência
+  (`ano_trimestre` tipo "2026-Q2"), campos nulos por padrão. Grupo
+  Ações/ETF/Internacional: `receita_liquida`, `lucro_bruto`,
+  `lucro_liquido`, `ebit`, `ebitda`, `patrimonio_liquido`, `ativo_total`,
+  `ativo_circulante`, `passivo_circulante`, `divida_liquida`,
+  `divida_bruta`, `numero_acoes`. Grupo FIIs: `valor_patrimonial_cota`,
+  `numero_negocios_mes`, `vacancia_financeira_pct`, `vacancia_fisica_pct`,
+  `receita_imobiliaria`, `valor_avaliacao_imoveis`, `valor_m2_aluguel`.
+  RLS igual ao resto do app (`auth.uid() = profile_id`, via join com
+  `ativos`).
+
+#### Motor de cálculo — desenho antes de codar
+
+- `lib/ativos/yahoo-finance.ts`: função que deriva o símbolo Yahoo a
+  partir de tipo+ticker (mesma lógica de `deriveTradingViewSymbol`, mas
+  pro sufixo do Yahoo) e busca a cotação atual; tolera falha (endpoint
+  não-oficial) sem derrubar o resto da chamada.
+- `src/app/api/cron/cotacoes/route.ts`: mesmo padrão do cron do Dólar —
+  Route Handler, `CRON_SECRET`, cliente admin (reaproveita
+  `src/lib/supabase/admin.ts` já existente) — mas em vez de uma tabela
+  compartilhada, atualiza `preco_atual`/`preco_atualizado_em`/`preco_fonte`
+  de todos os `ativos` de todos os usuários com `cotacao_automatica = true`
+  numa varredura.
+- `lib/ativos/checklist-estatisticas.ts`: funções puras que recebem o
+  histórico de `ativo_resultado_trimestral` de um ativo + preço atual e
+  devolvem os dois conjuntos de índices (Ações/ETF/Internacional vs
+  FIIs), reaproveitando o TTM/CAGR/margem como funções genéricas
+  (parecido com `dolar-estatisticas.ts`/`ipca-estatisticas.ts`).
+
+#### Fora de escopo por enquanto
+
+- **brapi.dev (ou qualquer API paga)**: decisão explícita de não assinar
+  agora — reavaliar se o Yahoo Finance se mostrar instável demais na
+  prática.
+- **Pipeline de ETL da CVM (ITR/DFP em massa)**: os dados trimestrais
+  ficam manuais; automatizar a partir dos arquivos abertos da CVM é um
+  projeto à parte, bem maior que isso aqui.
+- **Métricas de ETF "puro"** (taxa de administração, tracking error,
+  patrimônio líquido do fundo): o checklist de ETF reaproveita o template
+  de Ações por pedido explícito; métricas específicas de ETF ficam de
+  fora por enquanto.
+- **Cotação automática pra `renda_fixa`/`fundo`/`outro`**: continuam 100%
+  manuais (ver decisão 4).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
@@ -735,6 +898,9 @@ não precisa de policy própria pra isso.
 - Nomes de campos/variáveis em português (`ticker`, `peso_alvo`,
   `valorAtual`), consistente em banco, actions e UI — não misturar idiomas
   em nomes novos.
-- Preço é sempre informado manualmente (não há integração de cotação);
-  qualquer feature que assuma preço "ao vivo" precisa checar
-  `preco_atualizado_em` antes de confiar no valor.
+- Preço é informado manualmente pra `renda_fixa`/`fundo`/`outro`. Pros
+  demais tipos (`acao`, `fii`, `etf`, `internacional`, `cripto`) o preço
+  pode vir do cron/botão de cotação automática (Yahoo Finance, ver seção
+  8.10) — qualquer feature que assuma preço "ao vivo" precisa checar
+  `preco_atualizado_em` e `preco_fonte` antes de confiar no valor, já que
+  a fonte não-oficial pode falhar e deixar o valor desatualizado.

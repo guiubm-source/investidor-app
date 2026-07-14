@@ -779,3 +779,116 @@ alter table public.indicador_dolar_diario enable row level security;
 drop policy if exists "indicador_dolar_diario_select_authenticated" on public.indicador_dolar_diario;
 create policy "indicador_dolar_diario_select_authenticated" on public.indicador_dolar_diario
   for select using (auth.role() = 'authenticated');
+
+-- ============================================================================
+-- 14. Ativo avançado — cotação automática (Yahoo Finance), checklist
+--     comparativo (Ações/ETF/Internacional vs FIIs) e resultados
+--     trimestrais. Decisões em docs/MAPA-DE-DADOS.md §8.10.
+-- ============================================================================
+
+-- 14.1 Novo tipo de ativo `etf` (B3) — não existia categoria própria antes,
+--      só `internacional` ("ação/ETF exterior"). O check constraint da
+--      coluna `tipo` precisa ser recriado (não dá pra só adicionar um valor
+--      a um CHECK já existente).
+alter table public.ativos drop constraint if exists ativos_tipo_check;
+alter table public.ativos add constraint ativos_tipo_check
+  check (tipo in ('acao','fii','etf','renda_fixa','fundo','internacional','cripto','outro'));
+
+-- 14.2 Cotação automática: liga/desliga por ativo (`cotacao_automatica`) e
+--      procedência do último preço salvo (`preco_fonte`) — pra UI distinguir
+--      "veio do Yahoo Finance" de "informado manualmente". Tipos cotáveis
+--      (acao/fii/etf/internacional/cripto) começam ligados; os demais
+--      (renda_fixa/fundo/outro) começam desligados, mesmo default de antes
+--      (preço 100% manual).
+alter table public.ativos add column if not exists cotacao_automatica boolean not null default false;
+alter table public.ativos add column if not exists preco_fonte text
+  check (preco_fonte in ('yahoo_finance','manual'));
+
+-- Backfill único: liga cotação automática pros ativos já cadastrados dos
+-- tipos cotáveis. Se rodar de novo depois de o usuário desligar manualmente
+-- pra algum ativo específico, volta a ligar — aceitável nesse app pessoal,
+-- documentado em §8.10.
+update public.ativos set cotacao_automatica = true
+  where tipo in ('acao','fii','etf','internacional','cripto');
+
+-- 14.3 Checklist comparativo — campos manuais que não vêm de
+--      ativo_resultado_trimestral (hoje só a nota de governança de
+--      Ações/ETF; o resto do checklist é sempre calculado, nunca
+--      armazenado, ver §8.10 decisão 6).
+create table if not exists public.ativo_checklist (
+  id           uuid primary key default gen_random_uuid(),
+  profile_id   uuid not null references public.profiles (id) on delete cascade,
+  ativo_id     uuid not null references public.ativos (id) on delete cascade,
+  saldo_acionistas text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (ativo_id)
+);
+
+comment on table public.ativo_checklist is 'Campos manuais do checklist comparativo que não vêm dos resultados trimestrais (ex. nota de governança/estrutura de controle). O resto dos indicadores do checklist (P/L, ROE, P/VP, Dividend Yield etc.) é sempre recalculado a partir de ativo_resultado_trimestral + preco_atual + proventos, nunca armazenado aqui.';
+
+drop trigger if exists trg_ativo_checklist_updated_at on public.ativo_checklist;
+create trigger trg_ativo_checklist_updated_at
+  before update on public.ativo_checklist
+  for each row execute function public.set_updated_at();
+
+alter table public.ativo_checklist enable row level security;
+
+drop policy if exists "ativo_checklist_all_own" on public.ativo_checklist;
+create policy "ativo_checklist_all_own" on public.ativo_checklist
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+-- 14.4 Resultados trimestrais — dados BRUTOS lançados manualmente por
+--      trimestre. Ações/ETF/Internacional usam as colunas de demonstração
+--      financeira; FIIs usam as colunas específicas de fundo imobiliário.
+--      Todas nullable — cada ativo só preenche o grupo de colunas que faz
+--      sentido pro seu tipo, e pode ficar incompleto (o motor de cálculo
+--      mostra "—" pro que faltar).
+create table if not exists public.ativo_resultado_trimestral (
+  id                    uuid primary key default gen_random_uuid(),
+  profile_id            uuid not null references public.profiles (id) on delete cascade,
+  ativo_id              uuid not null references public.ativos (id) on delete cascade,
+  ano_trimestre         text not null check (ano_trimestre ~ '^\d{4}-Q[1-4]$'),
+
+  -- Ações / ETF / Internacional (demonstração financeira)
+  receita_liquida       numeric(18,2),
+  lucro_bruto           numeric(18,2),
+  lucro_liquido         numeric(18,2),
+  ebit                  numeric(18,2),
+  ebitda                numeric(18,2),
+  patrimonio_liquido    numeric(18,2),
+  ativo_total           numeric(18,2),
+  ativo_circulante      numeric(18,2),
+  passivo_circulante    numeric(18,2),
+  divida_liquida        numeric(18,2),
+  divida_bruta          numeric(18,2),
+  numero_acoes          bigint,
+
+  -- FIIs
+  valor_patrimonial_cota  numeric(14,4),
+  numero_negocios_mes     integer,
+  vacancia_financeira_pct numeric(6,2),
+  vacancia_fisica_pct     numeric(6,2),
+  receita_imobiliaria     numeric(18,2),
+  valor_avaliacao_imoveis numeric(18,2),
+  valor_m2_aluguel        numeric(10,2),
+
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (ativo_id, ano_trimestre)
+);
+
+comment on table public.ativo_resultado_trimestral is 'Dados brutos trimestrais lançados manualmente (DRE/balanço para Ações/ETF/Internacional; métricas de fundo imobiliário para FIIs). Os índices do checklist (P/L, ROE, ROIC, margens, DL/EBIT, CAGR...) são sempre recalculados a partir daqui — nunca armazenados prontos, ver docs/MAPA-DE-DADOS.md §8.10 decisão 6.';
+
+create index if not exists idx_ativo_resultado_trimestral_ativo_id on public.ativo_resultado_trimestral (ativo_id);
+
+drop trigger if exists trg_ativo_resultado_trimestral_updated_at on public.ativo_resultado_trimestral;
+create trigger trg_ativo_resultado_trimestral_updated_at
+  before update on public.ativo_resultado_trimestral
+  for each row execute function public.set_updated_at();
+
+alter table public.ativo_resultado_trimestral enable row level security;
+
+drop policy if exists "ativo_resultado_trimestral_all_own" on public.ativo_resultado_trimestral;
+create policy "ativo_resultado_trimestral_all_own" on public.ativo_resultado_trimestral
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);

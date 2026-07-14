@@ -3,6 +3,7 @@ import { z } from "zod";
 export const TIPOS_ATIVO = [
   { valor: "acao", label: "Ação" },
   { valor: "fii", label: "Fundo imobiliário (FII)" },
+  { valor: "etf", label: "ETF (Brasil)" },
   { valor: "renda_fixa", label: "Renda fixa" },
   { valor: "fundo", label: "Fundo de investimento" },
   { valor: "internacional", label: "Internacional (ação/ETF exterior)" },
@@ -38,7 +39,7 @@ export const ativoSchema = z.object({
     .min(1, "Informe o ticker/código")
     .transform((v) => v.toUpperCase()),
   nome: z.string().trim().optional(),
-  tipo: z.enum(["acao", "fii", "renda_fixa", "fundo", "internacional", "cripto", "outro"]),
+  tipo: z.enum(["acao", "fii", "etf", "renda_fixa", "fundo", "internacional", "cripto", "outro"]),
   // Selects de formulário mandam "" quando "não informado" — union com
   // z.literal("") (em vez de z.preprocess) mantém o tipo de entrada
   // explícito, o que evita conflito de tipos entre zodResolver e o generic
@@ -68,3 +69,50 @@ export const simboloTradingviewSchema = z.object({
   simbolo_tradingview: z.string().trim(),
 });
 export type SimboloTradingviewForm = z.infer<typeof simboloTradingviewSchema>;
+
+// ---------------------------------------------------------------------------
+// Checklist comparativo — ver docs/MAPA-DE-DADOS.md §8.10.
+// ---------------------------------------------------------------------------
+
+/** Único campo manual do checklist que não vem de resultado_trimestral (ver §8.10 decisão 7). */
+export const saldoAcionistasSchema = z.object({
+  saldo_acionistas: z.string().trim(),
+});
+export type SaldoAcionistasForm = z.infer<typeof saldoAcionistasSchema>;
+
+/**
+ * Lançamento de um trimestre de `ativo_resultado_trimestral` — schema único
+ * cobrindo os dois grupos de campos (Ações/ETF/Internacional e FIIs); cada
+ * formulário na UI só preenche o grupo que faz sentido pro tipo do ativo,
+ * o resto fica null. Mesmo padrão de "tabela larga com campos opcionais" já
+ * usado em `ipcaCompetenciaSchema` (lib/indicadores/schema.ts).
+ */
+const numeroOpcional = z.union([z.number(), z.nan()]).transform((v) => (Number.isNaN(v) ? null : v));
+
+export const resultadoTrimestralSchema = z.object({
+  ano_trimestre: z
+    .string()
+    .regex(/^\d{4}-Q[1-4]$/, "Formato esperado: AAAA-Q1 a AAAA-Q4"),
+  // Ações / ETF / Internacional
+  receita_liquida: numeroOpcional,
+  lucro_bruto: numeroOpcional,
+  lucro_liquido: numeroOpcional,
+  ebit: numeroOpcional,
+  ebitda: numeroOpcional,
+  patrimonio_liquido: numeroOpcional,
+  ativo_total: numeroOpcional,
+  ativo_circulante: numeroOpcional,
+  passivo_circulante: numeroOpcional,
+  divida_liquida: numeroOpcional,
+  divida_bruta: numeroOpcional,
+  numero_acoes: numeroOpcional,
+  // FIIs
+  valor_patrimonial_cota: numeroOpcional,
+  numero_negocios_mes: numeroOpcional,
+  vacancia_financeira_pct: numeroOpcional,
+  vacancia_fisica_pct: numeroOpcional,
+  receita_imobiliaria: numeroOpcional,
+  valor_avaliacao_imoveis: numeroOpcional,
+  valor_m2_aluguel: numeroOpcional,
+});
+export type ResultadoTrimestralForm = z.infer<typeof resultadoTrimestralSchema>;

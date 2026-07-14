@@ -1,10 +1,21 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { buscarCotacaoYahoo, deriveYahooSymbol, TIPOS_COTACAO_AUTOMATICA } from "./yahoo-finance";
+import {
+  calcularChecklistAcao,
+  calcularChecklistFii,
+  type ChecklistAcao,
+  type ChecklistFii,
+  type PontoTrimestralAcao,
+  type PontoTrimestralFii,
+} from "./checklist-estatisticas";
 import type {
   AtivoForm,
   ClassificacaoForm,
   PrecoAtualForm,
+  ResultadoTrimestralForm,
+  SaldoAcionistasForm,
   SimboloTradingviewForm,
 } from "./schema";
 
@@ -13,6 +24,7 @@ export type AcaoResultado = { error?: string };
 export type TipoAtivo =
   | "acao"
   | "fii"
+  | "etf"
   | "renda_fixa"
   | "fundo"
   | "internacional"
@@ -46,6 +58,8 @@ export type AtivoResumo = {
   criptoExchange: string | null;
   precoAtual: number;
   precoAtualizadoEm: string | null;
+  precoFonte: "yahoo_finance" | "manual" | null;
+  cotacaoAutomatica: boolean;
   simboloTradingview: string;
   simboloTradingviewManual: boolean;
   classeId: string | null;
@@ -91,6 +105,7 @@ function deriveTradingViewSymbol(tipo: TipoAtivo, ticker: string): string {
   switch (tipo) {
     case "acao":
     case "fii":
+    case "etf":
     case "fundo":
     case "renda_fixa":
       return `BMFBOVESPA:${t}`;
@@ -157,7 +172,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     supabase
       .from("ativos")
       .select(
-        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, preco_atual, preco_atualizado_em, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
+        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, preco_atual, preco_atualizado_em, preco_fonte, cotacao_automatica, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
       )
       .eq("profile_id", user.id)
       .order("ticker"),
@@ -214,6 +229,8 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       criptoExchange: ativo.cripto_exchange,
       precoAtual,
       precoAtualizadoEm: ativo.preco_atualizado_em,
+      precoFonte: (ativo.preco_fonte as "yahoo_finance" | "manual" | null) ?? null,
+      cotacaoAutomatica: !!ativo.cotacao_automatica,
       simboloTradingview: ativo.simbolo_tradingview || deriveTradingViewSymbol(ativo.tipo as TipoAtivo, ativo.ticker),
       simboloTradingviewManual: !!ativo.simbolo_tradingview,
       classeId: classe?.id ?? null,
@@ -360,6 +377,7 @@ export async function criarAtivo(input: AtivoForm): Promise<AcaoResultado & { id
       tipo: input.tipo,
       subtipo_renda_fixa: input.subtipo_renda_fixa || null,
       cripto_exchange: input.cripto_exchange || null,
+      cotacao_automatica: TIPOS_COTACAO_AUTOMATICA.includes(input.tipo as TipoAtivo),
     })
     .select("id")
     .single();
@@ -387,6 +405,7 @@ export async function editarAtivo(id: string, input: AtivoForm): Promise<AcaoRes
       tipo: input.tipo,
       subtipo_renda_fixa: input.subtipo_renda_fixa || null,
       cripto_exchange: input.cripto_exchange || null,
+      cotacao_automatica: TIPOS_COTACAO_AUTOMATICA.includes(input.tipo as TipoAtivo),
     })
     .eq("id", id)
     .eq("profile_id", user.id);
@@ -419,11 +438,57 @@ export async function atualizarPrecoAtual(id: string, input: PrecoAtualForm): Pr
 
   const { error } = await supabase
     .from("ativos")
-    .update({ preco_atual: input.preco_atual, preco_atualizado_em: new Date().toISOString() })
+    .update({ preco_atual: input.preco_atual, preco_atualizado_em: new Date().toISOString(), preco_fonte: "manual" })
     .eq("id", id)
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível atualizar o preço atual." };
+  return {};
+}
+
+/**
+ * Botão "Atualizar agora" da página do ativo — busca a cotação na hora via
+ * Yahoo Finance (mesma fonte do cron diário, ver docs/MAPA-DE-DADOS.md
+ * §8.10 decisão 2). Só funciona pra tipos cotáveis com `cotacao_automatica`
+ * ligado; o endpoint é não-oficial e pode falhar, então o erro devolvido é
+ * sempre uma mensagem amigável, nunca uma exceção.
+ */
+export async function atualizarCotacaoAgora(id: string): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { data: ativo, error: erroConsulta } = await supabase
+    .from("ativos")
+    .select("tipo, ticker, cotacao_automatica")
+    .eq("id", id)
+    .eq("profile_id", user.id)
+    .single();
+
+  if (erroConsulta || !ativo) return { error: "Ativo não encontrado." };
+  if (!ativo.cotacao_automatica) {
+    return { error: "Este ativo não está marcado para cotação automática." };
+  }
+
+  const symbol = deriveYahooSymbol(ativo.tipo as TipoAtivo, ativo.ticker);
+  if (!symbol) return { error: "Este tipo de ativo não tem cotação automática disponível." };
+
+  const resultado = await buscarCotacaoYahoo(symbol);
+  if ("erro" in resultado) return { error: resultado.erro };
+
+  const { error } = await supabase
+    .from("ativos")
+    .update({
+      preco_atual: resultado.preco,
+      preco_atualizado_em: new Date().toISOString(),
+      preco_fonte: "yahoo_finance",
+    })
+    .eq("id", id)
+    .eq("profile_id", user.id);
+
+  if (error) return { error: "Cotação buscada, mas não foi possível salvar." };
   return {};
 }
 
@@ -483,4 +548,286 @@ export async function removerClassificacao(id: string): Promise<AcaoResultado> {
 
   if (error) return { error: "Não foi possível remover a classificação." };
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Checklist comparativo (Ações/ETF/Internacional vs FIIs) + resultados
+// trimestrais — ver docs/MAPA-DE-DADOS.md §8.10. Os índices do checklist
+// nunca são armazenados: `obterChecklistAtivo` sempre recalcula a partir de
+// `ativo_resultado_trimestral` (dados brutos) + preço atual + proventos.
+// ---------------------------------------------------------------------------
+
+export type ResultadoTrimestralItem = {
+  id: string;
+  anoTrimestre: string;
+  receitaLiquida: number | null;
+  lucroBruto: number | null;
+  lucroLiquido: number | null;
+  ebit: number | null;
+  ebitda: number | null;
+  patrimonioLiquido: number | null;
+  ativoTotal: number | null;
+  ativoCirculante: number | null;
+  passivoCirculante: number | null;
+  dividaLiquida: number | null;
+  dividaBruta: number | null;
+  numeroAcoes: number | null;
+  valorPatrimonialCota: number | null;
+  numeroNegociosMes: number | null;
+  vacanciaFinanceiraPct: number | null;
+  vacanciaFisicaPct: number | null;
+  receitaImobiliaria: number | null;
+  valorAvaliacaoImoveis: number | null;
+  valorM2Aluguel: number | null;
+};
+
+export type GrupoChecklist = "acoes" | "fiis" | null;
+
+export type ChecklistAtivoView = {
+  ativoId: string;
+  tipo: TipoAtivo;
+  ticker: string;
+  precoAtual: number;
+  grupo: GrupoChecklist;
+  checklistAcao: ChecklistAcao | null;
+  checklistFii: ChecklistFii | null;
+  saldoAcionistas: string;
+  resultados: ResultadoTrimestralItem[];
+};
+
+/** Tipos que usam o template de checklist "Ações/ETF/Internacional". */
+const TIPOS_CHECKLIST_ACOES: TipoAtivo[] = ["acao", "etf", "internacional"];
+
+function grupoChecklistDoTipo(tipo: TipoAtivo): GrupoChecklist {
+  if (TIPOS_CHECKLIST_ACOES.includes(tipo)) return "acoes";
+  if (tipo === "fii") return "fiis";
+  return null;
+}
+
+function mapResultado(r: {
+  id: string;
+  ano_trimestre: string;
+  receita_liquida: number | null;
+  lucro_bruto: number | null;
+  lucro_liquido: number | null;
+  ebit: number | null;
+  ebitda: number | null;
+  patrimonio_liquido: number | null;
+  ativo_total: number | null;
+  ativo_circulante: number | null;
+  passivo_circulante: number | null;
+  divida_liquida: number | null;
+  divida_bruta: number | null;
+  numero_acoes: number | null;
+  valor_patrimonial_cota: number | null;
+  numero_negocios_mes: number | null;
+  vacancia_financeira_pct: number | null;
+  vacancia_fisica_pct: number | null;
+  receita_imobiliaria: number | null;
+  valor_avaliacao_imoveis: number | null;
+  valor_m2_aluguel: number | null;
+}): ResultadoTrimestralItem {
+  return {
+    id: r.id,
+    anoTrimestre: r.ano_trimestre,
+    receitaLiquida: r.receita_liquida !== null ? Number(r.receita_liquida) : null,
+    lucroBruto: r.lucro_bruto !== null ? Number(r.lucro_bruto) : null,
+    lucroLiquido: r.lucro_liquido !== null ? Number(r.lucro_liquido) : null,
+    ebit: r.ebit !== null ? Number(r.ebit) : null,
+    ebitda: r.ebitda !== null ? Number(r.ebitda) : null,
+    patrimonioLiquido: r.patrimonio_liquido !== null ? Number(r.patrimonio_liquido) : null,
+    ativoTotal: r.ativo_total !== null ? Number(r.ativo_total) : null,
+    ativoCirculante: r.ativo_circulante !== null ? Number(r.ativo_circulante) : null,
+    passivoCirculante: r.passivo_circulante !== null ? Number(r.passivo_circulante) : null,
+    dividaLiquida: r.divida_liquida !== null ? Number(r.divida_liquida) : null,
+    dividaBruta: r.divida_bruta !== null ? Number(r.divida_bruta) : null,
+    numeroAcoes: r.numero_acoes !== null ? Number(r.numero_acoes) : null,
+    valorPatrimonialCota: r.valor_patrimonial_cota !== null ? Number(r.valor_patrimonial_cota) : null,
+    numeroNegociosMes: r.numero_negocios_mes !== null ? Number(r.numero_negocios_mes) : null,
+    vacanciaFinanceiraPct: r.vacancia_financeira_pct !== null ? Number(r.vacancia_financeira_pct) : null,
+    vacanciaFisicaPct: r.vacancia_fisica_pct !== null ? Number(r.vacancia_fisica_pct) : null,
+    receitaImobiliaria: r.receita_imobiliaria !== null ? Number(r.receita_imobiliaria) : null,
+    valorAvaliacaoImoveis: r.valor_avaliacao_imoveis !== null ? Number(r.valor_avaliacao_imoveis) : null,
+    valorM2Aluguel: r.valor_m2_aluguel !== null ? Number(r.valor_m2_aluguel) : null,
+  };
+}
+
+/** Checklist completo de um ativo: calculado a partir dos resultados trimestrais + preço atual + proventos (Dividend Yield do FII). */
+export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAtivoView | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const [{ data: ativo }, { data: resultadosRaw }, { data: checklistRaw }, { data: proventosRaw }] = await Promise.all([
+    supabase
+      .from("ativos")
+      .select("id, ticker, tipo, preco_atual")
+      .eq("id", ativoId)
+      .eq("profile_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("ativo_resultado_trimestral")
+      .select(
+        "id, ano_trimestre, receita_liquida, lucro_bruto, lucro_liquido, ebit, ebitda, patrimonio_liquido, ativo_total, ativo_circulante, passivo_circulante, divida_liquida, divida_bruta, numero_acoes, valor_patrimonial_cota, numero_negocios_mes, vacancia_financeira_pct, vacancia_fisica_pct, receita_imobiliaria, valor_avaliacao_imoveis, valor_m2_aluguel"
+      )
+      .eq("profile_id", user.id)
+      .eq("ativo_id", ativoId),
+    supabase.from("ativo_checklist").select("saldo_acionistas").eq("profile_id", user.id).eq("ativo_id", ativoId).maybeSingle(),
+    supabase
+      .from("proventos")
+      .select("valor_total, data")
+      .eq("profile_id", user.id)
+      .eq("ativo_id", ativoId),
+  ]);
+
+  if (!ativo) return null;
+
+  const tipo = ativo.tipo as TipoAtivo;
+  const grupo = grupoChecklistDoTipo(tipo);
+  const precoAtual = Number(ativo.preco_atual);
+  const resultados = (resultadosRaw ?? []).map(mapResultado);
+
+  let checklistAcao: ChecklistAcao | null = null;
+  let checklistFii: ChecklistFii | null = null;
+
+  if (grupo === "acoes") {
+    const pontos: PontoTrimestralAcao[] = resultados.map((r) => ({
+      anoTrimestre: r.anoTrimestre,
+      receitaLiquida: r.receitaLiquida,
+      lucroBruto: r.lucroBruto,
+      lucroLiquido: r.lucroLiquido,
+      ebit: r.ebit,
+      ebitda: r.ebitda,
+      patrimonioLiquido: r.patrimonioLiquido,
+      ativoTotal: r.ativoTotal,
+      ativoCirculante: r.ativoCirculante,
+      passivoCirculante: r.passivoCirculante,
+      dividaLiquida: r.dividaLiquida,
+      dividaBruta: r.dividaBruta,
+      numeroAcoes: r.numeroAcoes,
+    }));
+    checklistAcao = calcularChecklistAcao(pontos, precoAtual);
+  } else if (grupo === "fiis") {
+    const pontos: PontoTrimestralFii[] = resultados.map((r) => ({
+      anoTrimestre: r.anoTrimestre,
+      valorPatrimonialCota: r.valorPatrimonialCota,
+      numeroNegociosMes: r.numeroNegociosMes,
+      vacanciaFinanceiraPct: r.vacanciaFinanceiraPct,
+      vacanciaFisicaPct: r.vacanciaFisicaPct,
+      receitaImobiliaria: r.receitaImobiliaria,
+      valorAvaliacaoImoveis: r.valorAvaliacaoImoveis,
+      valorM2Aluguel: r.valorM2Aluguel,
+    }));
+    const hoje = new Date();
+    const umAnoAtras = new Date(hoje);
+    umAnoAtras.setDate(umAnoAtras.getDate() - 365);
+    const cutoff = umAnoAtras.toISOString().slice(0, 10);
+    const proventosUltimos12Meses = (proventosRaw ?? [])
+      .filter((p) => p.data >= cutoff)
+      .reduce((s, p) => s + Number(p.valor_total), 0);
+    checklistFii = calcularChecklistFii(pontos, precoAtual, proventosUltimos12Meses);
+  }
+
+  return {
+    ativoId,
+    tipo,
+    ticker: ativo.ticker,
+    precoAtual,
+    grupo,
+    checklistAcao,
+    checklistFii,
+    saldoAcionistas: checklistRaw?.saldo_acionistas ?? "",
+    resultados: resultados.sort((a, b) => (a.anoTrimestre < b.anoTrimestre ? 1 : -1)),
+  };
+}
+
+export async function salvarSaldoAcionistas(ativoId: string, input: SaldoAcionistasForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase
+    .from("ativo_checklist")
+    .upsert(
+      { profile_id: user.id, ativo_id: ativoId, saldo_acionistas: input.saldo_acionistas || null },
+      { onConflict: "ativo_id" }
+    );
+
+  if (error) return { error: "Não foi possível salvar a nota de governança." };
+  return {};
+}
+
+/** Cria ou atualiza (upsert por ativo+trimestre) um lançamento de resultado trimestral. */
+export async function salvarResultadoTrimestral(
+  ativoId: string,
+  input: ResultadoTrimestralForm
+): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase.from("ativo_resultado_trimestral").upsert(
+    {
+      profile_id: user.id,
+      ativo_id: ativoId,
+      ano_trimestre: input.ano_trimestre,
+      receita_liquida: input.receita_liquida,
+      lucro_bruto: input.lucro_bruto,
+      lucro_liquido: input.lucro_liquido,
+      ebit: input.ebit,
+      ebitda: input.ebitda,
+      patrimonio_liquido: input.patrimonio_liquido,
+      ativo_total: input.ativo_total,
+      ativo_circulante: input.ativo_circulante,
+      passivo_circulante: input.passivo_circulante,
+      divida_liquida: input.divida_liquida,
+      divida_bruta: input.divida_bruta,
+      numero_acoes: input.numero_acoes,
+      valor_patrimonial_cota: input.valor_patrimonial_cota,
+      numero_negocios_mes: input.numero_negocios_mes,
+      vacancia_financeira_pct: input.vacancia_financeira_pct,
+      vacancia_fisica_pct: input.vacancia_fisica_pct,
+      receita_imobiliaria: input.receita_imobiliaria,
+      valor_avaliacao_imoveis: input.valor_avaliacao_imoveis,
+      valor_m2_aluguel: input.valor_m2_aluguel,
+    },
+    { onConflict: "ativo_id,ano_trimestre" }
+  );
+
+  if (error) return { error: "Não foi possível salvar o trimestre." };
+  return {};
+}
+
+export async function excluirResultadoTrimestral(id: string): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase
+    .from("ativo_resultado_trimestral")
+    .delete()
+    .eq("id", id)
+    .eq("profile_id", user.id);
+
+  if (error) return { error: "Não foi possível excluir o trimestre." };
+  return {};
+}
+
+/**
+ * Checklists de todos os ativos de um grupo (pra tela de comparação lado a
+ * lado) — reaproveita `obterChecklistAtivo` por ativo, sem duplicar lógica.
+ */
+export async function obterChecklistsPorGrupo(grupo: "acoes" | "fiis"): Promise<ChecklistAtivoView[]> {
+  const ativos = await obterAtivosComPosicao();
+  const doGrupo = ativos.filter((a) => grupoChecklistDoTipo(a.tipo) === grupo);
+  const checklists = await Promise.all(doGrupo.map((a) => obterChecklistAtivo(a.id)));
+  return checklists.filter((c): c is ChecklistAtivoView => c !== null);
 }
