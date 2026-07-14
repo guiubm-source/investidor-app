@@ -173,7 +173,8 @@ para o próprio dono da linha.
    chama `updateSession()` (`lib/supabase/middleware.ts`), que renova o
    token via `supabase.auth.getUser()` e redireciona para `/login` se a rota
    é protegida (`/dashboard`, `/configuracoes`, `/alocacao`, `/carteira`,
-   `/proventos`, `/ativos`, `/cadastro/perfil`) e não há usuário autenticado.
+   `/proventos`, `/indicadores`, `/ativos`, `/cadastro/perfil`) e não há
+   usuário autenticado.
 5. Três clientes Supabase distintos, cada um para seu contexto:
    `lib/supabase/client.ts` (browser), `lib/supabase/server.ts` (Server
    Components/Actions, via cookies do Next), `lib/supabase/middleware.ts`
@@ -195,6 +196,7 @@ src/
       ativos/                   lista + página de detalhe [id]
       carteira/                 livro-razão de compra/venda (+ proventos, só leitura) e gestão de corretoras
       proventos/                cadastro de dividendo/JCP/rendimento + consolidações
+      indicadores/              Selic, IPCA, Dólar, Fluxo estrangeiro (dado compartilhado) + Visão Geral
       alocacao/                 árvore de desvio (classe > setor > ativo)
       configuracoes/            dados pessoais, senha, suitability vigente
   components/                   Sidebar, TradingViewChart, suitability/*
@@ -203,13 +205,159 @@ src/
     alocacao/     actions.ts (estrutura-alvo), constants.ts, schema.ts
     carteira/     actions.ts (livro-razão de compra/venda), schema.ts
     proventos/    actions.ts (CRUD + consolidações), schema.ts
+    indicadores/  actions.ts (CRUD + Visão Geral), schema.ts (sem profile_id — dado compartilhado)
     suitability/  actions.ts, schema.ts, score.ts
     supabase/     client.ts, server.ts, middleware.ts
   proxy.ts                      sessão + proteção de rotas (Next 16)
 supabase/schema.sql              schema completo, comentado, idempotente
 ```
 
-## 8. Convenções a preservar
+## 8. Roadmap — abas em estudo (ainda não implementadas)
+
+Pesquisa feita em 2026-07-13 para embasar o design dessas duas abas antes de
+construir qualquer uma. Nada abaixo está implementado — é a base de
+conhecimento para as próximas decisões (ver histórico de conversa para as
+perguntas de arquitetura ainda em aberto).
+
+### 8.1 Imposto de Renda (relatório auxiliar de declaração)
+
+⚠️ É um relatório **auxiliar**, não consultoria tributária — o app não
+substitui um contador; qualquer número aqui deve ser conferido antes de
+declarar. Regras vigentes (2026) por `ativos.tipo`:
+
+- **`acao`/`fundo` (ações, ETFs, à vista)**: swing trade 15% sobre lucro
+  líquido mensal, **isento se a soma das vendas do mês ≤ R$20.000** (isenção
+  cai por completo se ultrapassar, não é só sobre o excedente). Day trade
+  (compra e venda do mesmo ativo no mesmo dia) 20%, sem isenção. IRRF
+  "dedo-duro" retido pela corretora (0,005% swing / 1% day trade) é só
+  antecipação, abatida do DARF. Prejuízo compensa só dentro do mesmo grupo
+  (swing com swing, day com day). DARF código 6015, até o último dia útil
+  do mês seguinte. **O app não guarda hoje se uma transação foi day trade —
+  precisa ser detectado (mesmo `ativo_id` com compra e venda na mesma
+  `data`).**
+- **`fii`**: rendimento mensal isento de IR (bolsa/balcão organizado, sócio
+  com <10% das cotas). Venda de cota: **20% sobre qualquer ganho, sem
+  isenção de piso** (diferente de ação).
+- **`renda_fixa`**: tabela regressiva por prazo — até 180 dias 22,5%; 181–360
+  dias 20%; 361–720 dias 17,5%; acima de 720 dias 15%. Retido na fonte
+  automaticamente no resgate, sem DARF. **Exceção: LCI/LCA/CRI/CRA são
+  isentos** — hoje o schema não distingue esses papéis isentos dos
+  tributáveis (CDB/Tesouro/debênture) dentro do mesmo `tipo`.
+- **`cripto`**: isento até R$35.000 de venda/mês em exchange nacional; acima
+  disso 15–22,5% conforme faixa de ganho. Em exchange estrangeira, sem
+  isenção mensal, 15% fixo sobre o lucro líquido anual. DARF código 4600.
+- **`internacional`**: desde a Lei 14.754/2023, 15% fixo sobre ganho de
+  capital (sem isenção de piso), apurado em GCAP + DARF; câmbio do dia da
+  compra/venda entra no cálculo; prejuízo só compensa dentro do mesmo
+  grupo/país.
+
+### 8.2 Indicadores (Visão Geral + Selic, IPCA, Fluxo estrangeiro, Dólar)
+
+**Achado mais importante**: o Banco Central publica o SGS (Sistema
+Gerenciador de Séries Temporais), uma API pública e gratuita, sem
+autenticação, com séries históricas prontas — `Selic meta` (série 432),
+`Selic efetiva diária` (série 11), `IPCA` (série 433), `PTAX dólar` (série
+1). Isso muda a arquitetura: diferente de `ativos.preco_atual` (sempre
+manual), Selic/IPCA/Dólar **podem ser buscados automaticamente**, sem
+cadastro manual do usuário.
+
+- **Selic**: Copom se reúne 8x/ano, a cada ~45 dias, sempre em 2 dias
+  consecutivos (decisão divulgada a partir das 18h do segundo dia).
+  Calendário 2026 (datas já públicas): 17–18/mar, 28–29/abr, 16–17/jun,
+  4–5/ago, 15–16/set, 3–4/nov, 8–9/dez. Taxa vigente em jul/2026: 14,25%
+  a.a. (cortada na reunião de jun/2026). Presidente do BC: Gabriel
+  Galípolo, mandato 2025–2028.
+- **IPCA**: meta contínua desde 2025 (não é mais por ano-calendário; apurada
+  sobre o acumulado de 12 meses). Centro da meta 3%, tolerância ±1,5 p.p.
+  (banda 1,5%–4,5%). Projeção Focus jul/2026: ~5,16% para o ano — acima do
+  teto (BC estima 79% de chance de estourar a meta). Abertura por
+  categoria/grupo (alimentação, habitação, transportes etc.) vem do IBGE
+  (SIDRA), API diferente da do BC.
+- **Fluxo estrangeiro**: não achei uma API oficial gratuita e simples
+  (dados publicados pela própria B3; agregadores como dadosdemercado.com.br
+  republicam). Entrada de capital costuma ser lida como sinal de confiança;
+  saída, como sinal de risco percebido — mas isoladamente não indica
+  tendência estrutural. Precisa de mais investigação de fonte de dados
+  antes de decidir automático vs. manual.
+- **Dólar**: PTAX (SGS série 1) resolve o histórico. Fatores a considerar
+  na análise: diferencial de juros Brasil x EUA, quadro fiscal, ciclo
+  eleitoral 2026, preço de commodities (minério, petróleo, agro).
+
+### 8.3 Decisões tomadas em 2026-07-13 (Indicadores)
+
+Perguntas de arquitetura da aba Indicadores, já respondidas pelo Guilherme
+— construção começa por Indicadores, IR fica para depois (perguntas de IR
+seguem em aberto na seção 8.5):
+
+1. **Ordem de construção**: Indicadores primeiro, Imposto de Renda depois.
+2. **Fonte de dado**: cadastro manual para os quatro indicadores (Selic,
+   IPCA, Dólar, Fluxo estrangeiro) — decidido não integrar a API do BACEN
+   por enquanto, mesmo estando disponível e gratuita. Reavaliar essa escolha
+   se o lançamento manual se mostrar trabalhoso demais na prática.
+3. **Visão Geral**: mostra as duas coisas — painel-resumo objetivo (último
+   valor + tendência de cada indicador, lado a lado) **e** uma leitura
+   interpretativa combinada (texto explicando o que a combinação atual
+   sugere, ex. juro alto + inflação acima da meta + dólar em alta = cenário
+   de cautela).
+4. **Fluxo estrangeiro**: lançamento mensal (saldo líquido em R$), não
+   diário.
+5. **Dólar**: lançamento mensal (não diário) — mesma cadência do fluxo
+   estrangeiro e do IPCA.
+6. **Calendário do Copom**: as datas de 2026 já públicas (17–18/mar,
+   28–29/abr, 16–17/jun, 4–5/ago, 15–16/set, 3–4/nov, 8–9/dez) vêm
+   **pré-cadastradas** no app (seed/migration). O usuário só lança a
+   decisão (taxa definida) depois de cada reunião acontecer.
+7. **Categorias do IPCA**: os 9 grupos oficiais do IBGE (alimentação e
+   bebidas, habitação, artigos de residência, vestuário, transportes,
+   saúde e cuidados pessoais, despesas pessoais, educação, comunicação) —
+   não uma lista simplificada própria do app.
+8. **Escopo dos dados**: Selic/IPCA/Dólar/Fluxo estrangeiro são dados
+   oficiais, iguais para qualquer usuário — diferente do resto do app,
+   essas tabelas **não têm `profile_id`** e não seguem RLS por usuário.
+   Qualquer usuário autenticado lê e escreve o mesmo registro compartilhado
+   (ver seção 8.4 para o desenho de schema). Isso é uma exceção deliberada
+   à regra geral de RLS por `profile_id` — reavaliar se o app deixar de ser
+   uso pessoal e virar multiusuário de verdade (hoje qualquer autenticado
+   poderia editar o indicador de todo mundo).
+
+### 8.4 Schema planejado para Indicadores (antes de codar)
+
+Tabelas novas em `supabase/schema.sql`, todas **sem `profile_id`** (dado
+compartilhado, ver 8.3.8):
+
+- `indicador_selic_reunioes`: `id`, `data_inicio`, `data_fim` (reunião de 2
+  dias), `taxa_definida` (nullable até a decisão sair), `decidido_em`
+  (timestamp), `created_at`. Seed inicial com as 7 datas de 2026 já
+  públicas, `taxa_definida = null` nas que ainda não aconteceram.
+- `indicador_ipca_mensal`: `id`, `ano_mes` (ex. `2026-06`), `variacao_pct`
+  (IPCA consolidado do mês), `acumulado_12m_pct`, `created_at`.
+- `indicador_ipca_categoria`: `id`, `ano_mes`, `categoria` (enum com os 9
+  grupos IBGE), `variacao_pct`, `created_at`. FK lógica em `ano_mes` para
+  bater com `indicador_ipca_mensal` (não FK de banco, só convenção — mês
+  pode ter só o consolidado lançado ainda sem detalhamento por categoria).
+- `indicador_dolar_mensal`: `id`, `ano_mes`, `cotacao` (fechamento ou média
+  do mês, a definir na UI), `created_at`.
+- `indicador_fluxo_estrangeiro_mensal`: `id`, `ano_mes`, `saldo_liquido`
+  (R$, pode ser negativo), `created_at`.
+
+RLS: `USING (auth.role() = 'authenticated')` para SELECT/INSERT/UPDATE/DELETE
+em todas — comentário no schema explicando a exceção (ver 8.3.8).
+
+Módulo `lib/indicadores/` será o único lugar que cadastra/edita/exclui
+esses quatro indicadores (mesma regra de fonte única de verdade da seção 3).
+A sub-aba Visão Geral só lê os quatro conjuntos de dados, nunca escreve.
+
+### 8.5 Perguntas em aberto (Imposto de Renda — ainda não decididas)
+
+Ficam para quando a construção do IR começar, depois de Indicadores:
+
+1. Começar só por um tipo de ativo (ex. ações swing trade, o caso mais
+   comum) e expandir depois, ou já cobrir todos os tipos de uma vez?
+2. Como detectar day trade (mesmo ativo comprado e vendido na mesma data) e
+   como marcar renda fixa isenta (LCI/LCA) dentro do `tipo` `renda_fixa`
+   atual.
+
+## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
   faça `await` (Next exige; funções auxiliares internas não-exportadas ficam

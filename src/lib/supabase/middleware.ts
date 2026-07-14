@@ -40,6 +40,7 @@ export async function updateSession(request: NextRequest) {
     "/alocacao",
     "/carteira",
     "/proventos",
+    "/indicadores",
     "/ativos",
     "/cadastro/perfil",
   ];

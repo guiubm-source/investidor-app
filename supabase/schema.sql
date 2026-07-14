@@ -358,3 +358,152 @@ create policy "transacoes_all_own" on public.transacoes
 drop policy if exists "proventos_all_own" on public.proventos;
 create policy "proventos_all_own" on public.proventos
   for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+-- ============================================================================
+-- 10. INDICADORES — Selic, IPCA, Dólar e Fluxo estrangeiro (macro, aba
+--     Indicadores). DIFERENTE de toda tabela anterior: são dados OFICIAIS,
+--     iguais para qualquer usuário do app — por isso, DE PROPÓSITO, essas
+--     tabelas NÃO têm `profile_id` e não seguem RLS por dono da linha (ver
+--     docs/MAPA-DE-DADOS.md seção 8.3.8). Qualquer usuário autenticado lê e
+--     escreve o mesmo registro compartilhado. Cadastro é sempre manual
+--     (decisão consciente de não integrar a API gratuita do BACEN/SGS por
+--     enquanto — ver seção 8.3.2 do mapa). Reavaliar RLS se o app deixar de
+--     ser de uso pessoal.
+-- ============================================================================
+
+-- 10.1 Selic — log de reuniões do Copom (8x/ano, a cada ~45 dias, 2 dias
+--      consecutivos). Datas de 2026 já públicas vêm pré-cadastradas (seed
+--      abaixo); `taxa_definida` fica nula até a decisão sair.
+create table if not exists public.indicador_selic_reunioes (
+  id             uuid primary key default gen_random_uuid(),
+  data_inicio    date not null,
+  data_fim       date not null,
+  taxa_definida  numeric(6,2) check (taxa_definida >= 0),
+  decidido_em    timestamptz,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  unique (data_inicio)
+);
+
+comment on table public.indicador_selic_reunioes is 'Log de reuniões do Copom (dado compartilhado, sem profile_id). taxa_definida nula = reunião ainda não aconteceu.';
+
+drop trigger if exists trg_indicador_selic_reunioes_updated_at on public.indicador_selic_reunioes;
+create trigger trg_indicador_selic_reunioes_updated_at
+  before update on public.indicador_selic_reunioes
+  for each row execute function public.set_updated_at();
+
+-- Seed: calendário 2026 já público (fonte: Banco Central). Idempotente via
+-- ON CONFLICT — pode rodar de novo sem duplicar nem sobrescrever taxa já
+-- lançada manualmente.
+insert into public.indicador_selic_reunioes (data_inicio, data_fim) values
+  ('2026-03-17', '2026-03-18'),
+  ('2026-04-28', '2026-04-29'),
+  ('2026-06-16', '2026-06-17'),
+  ('2026-08-04', '2026-08-05'),
+  ('2026-09-15', '2026-09-16'),
+  ('2026-11-03', '2026-11-04'),
+  ('2026-12-08', '2026-12-09')
+on conflict (data_inicio) do nothing;
+
+-- 10.2 IPCA — consolidado mensal + acumulado 12 meses (meta contínua desde
+--      2025, não mais por ano-calendário).
+create table if not exists public.indicador_ipca_mensal (
+  id                 uuid primary key default gen_random_uuid(),
+  ano_mes            text not null unique check (ano_mes ~ '^\d{4}-\d{2}$'),
+  variacao_pct       numeric(6,3) not null,
+  acumulado_12m_pct  numeric(6,3),
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now()
+);
+
+comment on table public.indicador_ipca_mensal is 'IPCA consolidado por mês (ano_mes formato YYYY-MM) e acumulado em 12 meses, para conferir enquadramento na meta contínua.';
+
+drop trigger if exists trg_indicador_ipca_mensal_updated_at on public.indicador_ipca_mensal;
+create trigger trg_indicador_ipca_mensal_updated_at
+  before update on public.indicador_ipca_mensal
+  for each row execute function public.set_updated_at();
+
+-- 10.3 IPCA por categoria — os 9 grupos oficiais do IBGE, um lançamento por
+--      mês/categoria. Ligação com indicador_ipca_mensal é só por convenção
+--      de ano_mes (não FK de banco) — um mês pode ter só o consolidado
+--      lançado ainda sem detalhamento por categoria.
+create table if not exists public.indicador_ipca_categoria (
+  id            uuid primary key default gen_random_uuid(),
+  ano_mes       text not null check (ano_mes ~ '^\d{4}-\d{2}$'),
+  categoria     text not null check (categoria in (
+    'alimentacao_bebidas', 'habitacao', 'artigos_residencia', 'vestuario',
+    'transportes', 'saude_cuidados_pessoais', 'despesas_pessoais',
+    'educacao', 'comunicacao'
+  )),
+  variacao_pct  numeric(6,3) not null,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  unique (ano_mes, categoria)
+);
+
+comment on table public.indicador_ipca_categoria is 'IPCA por grupo IBGE (9 categorias oficiais), um valor por mês/categoria.';
+
+drop trigger if exists trg_indicador_ipca_categoria_updated_at on public.indicador_ipca_categoria;
+create trigger trg_indicador_ipca_categoria_updated_at
+  before update on public.indicador_ipca_categoria
+  for each row execute function public.set_updated_at();
+
+-- 10.4 Dólar — cotação mensal (fechamento/média do mês, decidido na UI).
+create table if not exists public.indicador_dolar_mensal (
+  id          uuid primary key default gen_random_uuid(),
+  ano_mes     text not null unique check (ano_mes ~ '^\d{4}-\d{2}$'),
+  cotacao     numeric(10,4) not null check (cotacao > 0),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+comment on table public.indicador_dolar_mensal is 'Cotação do dólar (PTAX ou equivalente), um valor por mês.';
+
+drop trigger if exists trg_indicador_dolar_mensal_updated_at on public.indicador_dolar_mensal;
+create trigger trg_indicador_dolar_mensal_updated_at
+  before update on public.indicador_dolar_mensal
+  for each row execute function public.set_updated_at();
+
+-- 10.5 Fluxo estrangeiro — saldo líquido mensal (B3), pode ser negativo.
+create table if not exists public.indicador_fluxo_estrangeiro_mensal (
+  id             uuid primary key default gen_random_uuid(),
+  ano_mes        text not null unique check (ano_mes ~ '^\d{4}-\d{2}$'),
+  saldo_liquido  numeric(16,2) not null,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+comment on table public.indicador_fluxo_estrangeiro_mensal is 'Saldo líquido mensal de fluxo de capital estrangeiro na B3 (R$, pode ser negativo = saída).';
+
+drop trigger if exists trg_indicador_fluxo_estrangeiro_mensal_updated_at on public.indicador_fluxo_estrangeiro_mensal;
+create trigger trg_indicador_fluxo_estrangeiro_mensal_updated_at
+  before update on public.indicador_fluxo_estrangeiro_mensal
+  for each row execute function public.set_updated_at();
+
+-- RLS: qualquer usuário autenticado lê e escreve (dado compartilhado, sem
+-- profile_id — ver comentário no topo da seção 10).
+alter table public.indicador_selic_reunioes enable row level security;
+alter table public.indicador_ipca_mensal enable row level security;
+alter table public.indicador_ipca_categoria enable row level security;
+alter table public.indicador_dolar_mensal enable row level security;
+alter table public.indicador_fluxo_estrangeiro_mensal enable row level security;
+
+drop policy if exists "indicador_selic_reunioes_authenticated" on public.indicador_selic_reunioes;
+create policy "indicador_selic_reunioes_authenticated" on public.indicador_selic_reunioes
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "indicador_ipca_mensal_authenticated" on public.indicador_ipca_mensal;
+create policy "indicador_ipca_mensal_authenticated" on public.indicador_ipca_mensal
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "indicador_ipca_categoria_authenticated" on public.indicador_ipca_categoria;
+create policy "indicador_ipca_categoria_authenticated" on public.indicador_ipca_categoria
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "indicador_dolar_mensal_authenticated" on public.indicador_dolar_mensal;
+create policy "indicador_dolar_mensal_authenticated" on public.indicador_dolar_mensal
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "indicador_fluxo_estrangeiro_mensal_authenticated" on public.indicador_fluxo_estrangeiro_mensal;
+create policy "indicador_fluxo_estrangeiro_mensal_authenticated" on public.indicador_fluxo_estrangeiro_mensal
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');

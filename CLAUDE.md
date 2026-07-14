@@ -55,6 +55,16 @@ para evitar bugs por falta de contexto, não para burocracia.
   `wc -l -c arquivo` e `python3 -c "print(open('arquivo','rb').read().count(b'\x00'))"`.
   Se corrompido, reescrever o arquivo inteiro via bash (heredoc ou script
   Python), não tentar um novo Edit incremental.
+- **Cache do mount do bash fica velho depois de `Edit` (não depois de
+  `Write`)**: já aconteceu do bash mostrar um arquivo truncado (e até
+  `tsc`/`grep` falharem em cima disso) enquanto o arquivo real, lido pela
+  ferramenta `Read`, estava correto e completo — não é corrupção de verdade,
+  é só o mount do bash desatualizado. **`Read` é a fonte da verdade**, não o
+  `wc`/`grep` via bash. Se o bash parecer mostrar algo truncado logo depois
+  de um `Edit`, confirme primeiro com `Read`; se o arquivo real estiver OK
+  mas o bash insistir em mostrar a versão velha, force a sincronização
+  reescrevendo o arquivo inteiro via `cat > arquivo << 'EOF' ... EOF` no
+  bash (não um novo `Edit`).
 - **`npm run build` falha neste sandbox** por falta de rede para baixar o
   binário `@next/swc-linux-x64-gnu`. Usar `./node_modules/.bin/tsc --noEmit`
   para checagem de tipos; o build real acontece na Vercel.
