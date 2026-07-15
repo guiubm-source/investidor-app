@@ -819,7 +819,11 @@ const DOLAR_VIEW_VAZIA: DolarView = {
 export async function obterDolar(): Promise<DolarView> {
   const supabase = await createClient();
   const [{ data }, selic, ipca] = await Promise.all([
-    supabase.from("indicador_dolar_diario").select("data, cotacao").order("data", { ascending: true }),
+    // .range() explícito: sem isso o Supabase corta em 1000 linhas por
+    // padrão, e como a ordenação é ascendente isso trazia só os dados mais
+    // ANTIGOS (~1999–2002) em vez dos mais recentes — causa raiz do "dólar
+    // desatualizado" (corrigido 2026-07-15). 19999 dá folga para décadas.
+    supabase.from("indicador_dolar_diario").select("data, cotacao").order("data", { ascending: true }).range(0, 19999),
     obterSelic(),
     obterIpca(),
   ]);
