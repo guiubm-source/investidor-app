@@ -1045,16 +1045,31 @@ seção 1):
 4. **Motor de rentabilidade histórica cruza preço × posição dia a dia, sem
    duplicar a fórmula de custo médio.** O corpo do loop de
    `calcularPosicao` (fonte única de verdade, seção 3) foi extraído pra uma
-   função pura exportada, `lib/ativos/actions.ts#aplicarTransacaoNaPosicao`
-   (um "passo" que recebe `EstadoPosicao` + uma transação e devolve o novo
-   estado) — `calcularPosicao` virou só um fold dessa função sobre a lista
-   inteira, comportamento idêntico a antes. Novo módulo
-   `lib/ativos/preco-historico.ts` anda pela série de preço em ordem
-   cronológica aplicando `aplicarTransacaoNaPosicao` conforme a linha do
-   tempo avança, obtendo quantidade e custo médio EM CADA DATA da série de
-   preço (não só hoje) — daí `rentabilidadePct = (preço do dia − custo
-   médio naquele dia) / custo médio naquele dia`. Mesmo princípio de reuso
-   já usado pela decisão 2 da seção 8.11 (`obterQuantidadeDisponivelEmData`).
+   função pura exportada, `aplicarTransacaoNaPosicao` (um "passo" que recebe
+   `EstadoPosicao` + uma transação e devolve o novo estado) — `calcularPosicao`
+   virou só um fold dessa função sobre a lista inteira, comportamento idêntico
+   a antes. Novo módulo `lib/ativos/preco-historico.ts` anda pela série de
+   preço em ordem cronológica aplicando `aplicarTransacaoNaPosicao` conforme a
+   linha do tempo avança, obtendo quantidade e custo médio EM CADA DATA da
+   série de preço (não só hoje) — daí `rentabilidadePct = (preço do dia −
+   custo médio naquele dia) / custo médio naquele dia`. Mesmo princípio de
+   reuso já usado pela decisão 2 da seção 8.11 (`obterQuantidadeDisponivelEmData`).
+
+   **Correção 2026-07-14 (pós-deploy):** essas funções (`aplicarTransacaoNaPosicao`,
+   `precoMedioDoEstado`, `calcularPosicao`, `ordenarTransacoes`) moraram
+   inicialmente dentro de `lib/ativos/actions.ts`, que tem `"use server"` no
+   topo — e no Next.js, TODO export de um arquivo `"use server"` vira Server
+   Action, que é obrigada a ser `async`. Como essas funções são síncronas de
+   propósito (só matemática, chamadas em loop), isso quebrou o build de
+   produção (`next build`/Turbopack: "Server Actions must be async functions")
+   sem que `tsc --noEmit`/`eslint` acusassem nada — é uma checagem exclusiva
+   do compilador do Next, invisível neste sandbox (que não roda `next build`,
+   ver CLAUDE.md §3). Fix: extraídas pra `lib/ativos/posicao-calculo.ts`, um
+   módulo puro SEM `"use server"`, importado tanto por `actions.ts` quanto por
+   `preco-historico.ts`. **Regra geral daqui pra frente:** função pura/síncrona
+   que precisa ser compartilhada com ou usada dentro de um arquivo
+   `"use server"` deve morar num módulo separado sem a diretiva — nunca ser
+   exportada diretamente de dentro do arquivo `"use server"`.
 
 5. **Escopo de UI: por ativo E patrimônio agregado (não só um dos dois).**
    Perguntado explicitamente, o Guilherme pediu ambos: (a) gráfico de

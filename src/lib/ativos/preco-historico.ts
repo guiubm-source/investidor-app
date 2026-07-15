@@ -7,8 +7,8 @@ import {
   ordenarTransacoes,
   precoMedioDoEstado,
   type TransacaoCalc,
-  type TipoAtivo,
-} from "./actions";
+} from "./posicao-calculo";
+import type { TipoAtivo } from "./actions";
 import { TIPOS_COTACAO_AUTOMATICA } from "./yahoo-finance";
 
 /**

@@ -18,6 +18,7 @@ import type {
   SaldoAcionistasForm,
   SimboloTradingviewForm,
 } from "./schema";
+import { calcularPosicao, ordenarTransacoes, type TransacaoCalc } from "./posicao-calculo";
 
 export type AcaoResultado = { error?: string };
 
@@ -85,47 +86,6 @@ export type AtivoDetalhe = AtivoResumo & {
   proventos: ProventoItem[];
 };
 
-export type TransacaoCalc = {
-  tipo: "compra" | "venda";
-  data: string;
-  quantidade: number;
-  precoUnitario: number;
-  custos: number;
-};
-
-export type EstadoPosicao = { quantidade: number; custoTotal: number; lucroRealizado: number };
-
-export const ESTADO_POSICAO_INICIAL: EstadoPosicao = { quantidade: 0, custoTotal: 0, lucroRealizado: 0 };
-
-/**
- * Um passo do cálculo de posição por custo médio ponderado — corpo do loop
- * de `calcularPosicao` extraído e exportado pra quem precisa da posição EM
- * CADA PONTO de uma linha do tempo (ex. lib/ativos/preco-historico.ts, pra
- * rentabilidade histórica dia a dia), sem duplicar a fórmula. `calcularPosicao`
- * é só um fold desta função sobre a lista inteira — fonte única de verdade
- * continua sendo esta função (ver docs/MAPA-DE-DADOS.md §3).
- */
-export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCalc): EstadoPosicao {
-  if (t.tipo === "compra") {
-    return {
-      quantidade: estado.quantidade + t.quantidade,
-      custoTotal: estado.custoTotal + t.quantidade * t.precoUnitario + t.custos,
-      lucroRealizado: estado.lucroRealizado,
-    };
-  }
-  const precoMedioAtual = estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
-  const qtdVenda = Math.min(t.quantidade, estado.quantidade);
-  return {
-    quantidade: estado.quantidade - qtdVenda,
-    custoTotal: estado.custoTotal - precoMedioAtual * qtdVenda,
-    lucroRealizado: estado.lucroRealizado + (t.precoUnitario - precoMedioAtual) * qtdVenda - t.custos,
-  };
-}
-
-export function precoMedioDoEstado(estado: EstadoPosicao): number {
-  return estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
-}
-
 /**
  * Deriva um símbolo padrão do TradingView (bolsa:ticker) a partir do tipo do
  * ativo, para quando o usuário ainda não sobrescreveu manualmente. É só um
@@ -149,28 +109,6 @@ function deriveTradingViewSymbol(tipo: TipoAtivo, ticker: string): string {
     default:
       return t;
   }
-}
-
-/**
- * Calcula quantidade em carteira, preço médio (custo médio ponderado) e
- * lucro realizado a partir de uma lista de transações de UM ativo.
- *
- * Método do custo médio ponderado (padrão no Brasil, inclusive para IR sobre
- * renda variável): na compra, o preço médio é recalculado proporcionalmente;
- * na venda, o preço médio NÃO muda — apenas reduz a quantidade e apura lucro
- * ou prejuízo realizado (preço de venda − preço médio, descontados custos).
- */
-function calcularPosicao(transacoesOrdenadas: TransacaoCalc[]) {
-  let estado = ESTADO_POSICAO_INICIAL;
-  for (const t of transacoesOrdenadas) estado = aplicarTransacaoNaPosicao(estado, t);
-  return { quantidade: estado.quantidade, precoMedio: precoMedioDoEstado(estado), lucroRealizado: estado.lucroRealizado };
-}
-
-export function ordenarTransacoes<T extends { data: string; createdAt: string }>(itens: T[]): T[] {
-  return [...itens].sort((a, b) => {
-    if (a.data !== b.data) return a.data < b.data ? -1 : 1;
-    return a.createdAt < b.createdAt ? -1 : 1;
-  });
 }
 
 /**
