@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import Link from "next/link";
 import { loginComEmailSenha, loginComGoogle, type LoginState } from "./actions";
+import { useToast } from "@/components/ToastProvider";
 
 const estadoInicial: LoginState = {};
 
@@ -17,6 +18,11 @@ export default function LoginPage() {
     loginComEmailSenha,
     estadoInicial
   );
+  const toast = useToast();
+
+  useEffect(() => {
+    if (state.error) toast.error(state.error);
+  }, [state.error, toast]);
 
   return (
     <div className="min-h-screen flex">
@@ -132,8 +138,6 @@ export default function LoginPage() {
                 className="input"
               />
             </div>
-
-            {state.error && <p className="error-box">{state.error}</p>}
 
             <button type="submit" disabled={pending} className="btn btn-primary w-full">
               {pending ? "Entrando..." : "Entrar"}

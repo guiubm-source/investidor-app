@@ -9,6 +9,7 @@ import {
 import { SUGESTAO_ALOCACAO_POR_PERFIL, TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
 import ClasseRow, { FormClasse } from "./ClasseRow";
 import DesvioBar from "@/components/DesvioBar";
+import { useToast } from "@/components/ToastProvider";
 
 const NOMES_PERFIL: Record<string, string> = {
   conservador: "conservador",
@@ -26,6 +27,7 @@ export default function AlocacaoView({
   const [estrutura, setEstrutura] = useState(estruturaInicial);
   const [adicionandoClasse, setAdicionandoClasse] = useState(false);
   const [aplicandoSugestao, setAplicandoSugestao] = useState(false);
+  const toast = useToast();
 
   const atualizar = async () => {
     const nova = await obterEstruturaAlocacao();
@@ -43,6 +45,7 @@ export default function AlocacaoView({
     }
     await atualizar();
     setAplicandoSugestao(false);
+    toast.success("Sugestão de alocação aplicada.");
   };
 
   if (estrutura.classes.length === 0 && !adicionandoClasse) {
@@ -131,6 +134,7 @@ export default function AlocacaoView({
               if (resultado.error) throw new Error(resultado.error);
               await atualizar();
               setAdicionandoClasse(false);
+              toast.success("Classe criada.");
             }}
           />
         </div>

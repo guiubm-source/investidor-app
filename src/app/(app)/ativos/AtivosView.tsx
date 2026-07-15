@@ -6,6 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ativoSchema, EXCHANGES_CRIPTO, SUBTIPOS_RENDA_FIXA, TIPOS_ATIVO, type AtivoForm } from "@/lib/ativos/schema";
 import { criarAtivo, obterAtivosComPosicao, type AtivoResumo } from "@/lib/ativos/actions";
+import { useToast } from "@/components/ToastProvider";
 
 const rotuloTipo = (valor: string) => TIPOS_ATIVO.find((t) => t.valor === valor)?.label ?? valor;
 
@@ -15,6 +16,7 @@ const formatarMoeda = (valor: number) =>
 export default function AtivosView({ ativosIniciais }: { ativosIniciais: AtivoResumo[] }) {
   const [ativos, setAtivos] = useState(ativosIniciais);
   const [adicionando, setAdicionando] = useState(false);
+  const toast = useToast();
 
   const atualizar = async () => {
     const novo = await obterAtivosComPosicao();
@@ -73,6 +75,7 @@ export default function AtivosView({ ativosIniciais }: { ativosIniciais: AtivoRe
               if (resultado.error) throw new Error(resultado.error);
               setAdicionando(false);
               await atualizar();
+              toast.success("Ativo cadastrado.");
             }}
           />
         </div>
@@ -97,7 +100,6 @@ function FormNovoAtivo({
     handleSubmit,
     watch,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(ativoSchema),
     defaultValues: { ticker: "", nome: "", tipo: "acao" as const, subtipo_renda_fixa: "" as const, cripto_exchange: "" as const },
@@ -105,11 +107,12 @@ function FormNovoAtivo({
 
   const tipoSelecionado = watch("tipo");
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -164,7 +167,6 @@ function FormNovoAtivo({
         Depois de criado, abra o ativo para classificá-lo (classe/setor/peso-alvo) e lançar
         transações.
       </p>
-      {errors.root?.message && <p className="error-box col-span-2">{errors.root.message}</p>}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar

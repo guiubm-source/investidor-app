@@ -6,6 +6,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { classeSchema, type ClasseForm } from "@/lib/alocacao/schema";
 import { criarSetor, editarClasse, excluirClasse, type ClasseNode } from "@/lib/alocacao/actions";
 import SetorRow, { FormSetor } from "./SetorRow";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 export default function ClasseRow({
   classe,
@@ -18,6 +20,8 @@ export default function ClasseRow({
   const [editando, setEditando] = useState(false);
   const [adicionandoSetor, setAdicionandoSetor] = useState(false);
   const [excluindo, setExcluindo] = useState(false);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   if (editando) {
     return (
@@ -30,6 +34,7 @@ export default function ClasseRow({
             if (resultado.error) throw new Error(resultado.error);
             await onChange();
             setEditando(false);
+            toast.success("Classe atualizada.");
           }}
         />
       </div>
@@ -60,23 +65,24 @@ export default function ClasseRow({
       </div>
 
       {excluindo && (
-        <div className="error-box flex items-center justify-between mx-4 mb-3">
-          <span>Excluir a classe {classe.nome} e tudo dentro dela?</span>
-          <div className="flex gap-2">
-            <button className="btn btn-secondary" onClick={() => setExcluindo(false)}>
-              Cancelar
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={async () => {
-                await excluirClasse(classe.id);
-                onChange();
-              }}
-            >
-              Confirmar
-            </button>
-          </div>
-        </div>
+        <ConfirmModal
+          title={`Excluir a classe ${classe.nome}?`}
+          message="Tudo dentro dela (setores e classificações dos ativos) some junto. Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindo(false)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            const resultado = await excluirClasse(classe.id);
+            setExcluindoLoading(false);
+            if (resultado.error) {
+              toast.error(resultado.error);
+              return;
+            }
+            setExcluindo(false);
+            await onChange();
+            toast.success("Classe excluída.");
+          }}
+        />
       )}
 
       {expandido && (
@@ -111,6 +117,7 @@ export default function ClasseRow({
                   if (resultado.error) throw new Error(resultado.error);
                   await onChange();
                   setAdicionandoSetor(false);
+                  toast.success("Setor criado.");
                 }}
               />
             </div>
@@ -141,7 +148,6 @@ export function FormClasse({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<ClasseForm>({
     resolver: zodResolver(classeSchema),
     defaultValues: {
@@ -150,11 +156,12 @@ export function FormClasse({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -175,7 +182,6 @@ export function FormClasse({
         />
         {errors.peso_alvo?.message && <p className="field-error">{errors.peso_alvo.message}</p>}
       </div>
-      {errors.root?.message && <p className="error-box col-span-2">{errors.root.message}</p>}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar

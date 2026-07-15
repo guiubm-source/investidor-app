@@ -21,6 +21,8 @@ import {
 } from "@/lib/indicadores/actions";
 import { GRUPOS_IPCA, type GrupoIpca, type MetaInflacaoVigente } from "@/lib/indicadores/ipca-estatisticas";
 import { calcularMediaMovel } from "@/lib/indicadores/selic-estatisticas";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 const formatarData = (iso: string) => {
   const [ano, mes, dia] = iso.split("-");
@@ -670,6 +672,11 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [editando, setEditando] = useState<string | null>(null);
   const [criandoNova, setCriandoNova] = useState<{ base?: IpcaCompetencia } | null>(null);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const [confirmandoLote, setConfirmandoLote] = useState(false);
+  const [excluindoLote, setExcluindoLote] = useState(false);
+  const toast = useToast();
 
   const filtradas = busca.trim() ? ipca.competencias.filter((c) => c.anoMes.includes(busca)) : ipca.competencias;
 
@@ -680,12 +687,6 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
       else novo.add(id);
       return novo;
     });
-  };
-
-  const excluirSelecionados = async () => {
-    await excluirIpcaCompetencias(Array.from(selecionados));
-    setSelecionados(new Set());
-    await onAtualizar();
   };
 
   const exportarCsv = () => {
@@ -717,7 +718,7 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
             className="input w-40 text-xs"
           />
           {selecionados.size > 0 && (
-            <button onClick={excluirSelecionados} className="text-xs text-danger hover:underline">
+            <button onClick={() => setConfirmandoLote(true)} className="text-xs text-danger hover:underline">
               Excluir selecionados ({selecionados.size})
             </button>
           )}
@@ -730,6 +731,24 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
         </div>
       </div>
 
+      {confirmandoLote && (
+        <ConfirmModal
+          title={`Excluir ${selecionados.size} competência(s)?`}
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLote}
+          onCancel={() => setConfirmandoLote(false)}
+          onConfirm={async () => {
+            setExcluindoLote(true);
+            await excluirIpcaCompetencias(Array.from(selecionados));
+            setSelecionados(new Set());
+            setConfirmandoLote(false);
+            await onAtualizar();
+            setExcluindoLote(false);
+            toast.success("Competências excluídas.");
+          }}
+        />
+      )}
+
       {criandoNova && (
         <div className="px-4 py-3 border-b border-border">
           <FormIpcaCompetencia
@@ -739,6 +758,7 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
               if (resultado.error) throw new Error(resultado.error);
               setCriandoNova(null);
               await onAtualizar();
+              toast.success("Competência criada.");
             }}
             onCancelar={() => setCriandoNova(null)}
           />
@@ -794,10 +814,7 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
                         Duplicar
                       </button>
                       <button
-                        onClick={async () => {
-                          await excluirIpcaCompetencia(c.id);
-                          await onAtualizar();
-                        }}
+                        onClick={() => setExcluindoId(c.id)}
                         className="text-faint hover:text-danger"
                       >
                         Excluir
@@ -816,6 +833,7 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
                           if (resultado.error) throw new Error(resultado.error);
                           setEditando(null);
                           await onAtualizar();
+                          toast.success("Competência atualizada.");
                         }}
                         onCancelar={() => setEditando(null)}
                       />
@@ -827,6 +845,23 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
           </tbody>
         </table>
       </div>
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir competência?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirIpcaCompetencia(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Competência excluída.");
+          }}
+        />
+      )}
 
       <StatsResumoIpca ipca={ipca} />
     </div>
@@ -848,7 +883,6 @@ function FormIpcaCompetencia({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(ipcaCompetenciaSchema),
     defaultValues: {
@@ -868,11 +902,12 @@ function FormIpcaCompetencia({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvar(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -915,8 +950,6 @@ function FormIpcaCompetencia({
           ))}
         </div>
       </div>
-
-      {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
 
       <div className="flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">

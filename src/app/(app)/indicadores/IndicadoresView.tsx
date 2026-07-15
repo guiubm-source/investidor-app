@@ -25,6 +25,8 @@ import { obterDiretoriaBacen, obterPresidentesBrasil, type DiretorBacen, type Pr
 import AbaSelic from "./AbaSelic";
 import AbaIpca from "./AbaIpca";
 import AbaDolar from "./AbaDolar";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 const formatarMoeda = (valor: number) => valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -154,7 +156,10 @@ function AbaVisaoGeral({ visaoGeral }: { visaoGeral: VisaoGeralView }) {
 
 function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtualizar: () => Promise<void> }) {
   const [addLancamento, setAddLancamento] = useState(false);
-  const { register, handleSubmit, reset, formState, setError } = useForm<FluxoEstrangeiroMensalForm>({
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
+  const { register, handleSubmit, reset, formState } = useForm<FluxoEstrangeiroMensalForm>({
     resolver: zodResolver(fluxoEstrangeiroMensalSchema),
   });
 
@@ -165,8 +170,9 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
       setAddLancamento(false);
       reset();
       await onAtualizar();
+      toast.success("Lançamento registrado.");
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -208,7 +214,6 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
                 Salvar
               </button>
             </div>
-            {formState.errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{formState.errors.root.message}</p>}
           </form>
         )}
         <div className="grid grid-cols-[1fr_1fr_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
@@ -225,10 +230,7 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
             <span className="text-ink">{f.anoMes}</span>
             <span className="text-right text-ink">{formatarMoeda(f.saldoLiquido)}</span>
             <button
-              onClick={async () => {
-                await excluirFluxoEstrangeiroMensal(f.id);
-                await onAtualizar();
-              }}
+              onClick={() => setExcluindoId(f.id)}
               className="text-faint hover:text-danger text-right"
             >
               Excluir
@@ -236,6 +238,23 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
           </div>
         ))}
       </div>
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir lançamento?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirFluxoEstrangeiroMensal(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Lançamento excluído.");
+          }}
+        />
+      )}
     </div>
   );
 }

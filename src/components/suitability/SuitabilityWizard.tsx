@@ -16,6 +16,7 @@ import {
   type SuitabilityCompleto,
 } from "@/lib/suitability/schema";
 import { salvarSuitability } from "@/lib/suitability/actions";
+import { useToast } from "@/components/ToastProvider";
 
 type Step = "financeiro" | "objetivos" | "experiencia" | "risco";
 
@@ -376,16 +377,14 @@ function StepToleranciaRisco({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<ToleranciaRisco>({ resolver: zodResolver(toleranciaRiscoSchema) });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSucesso(data);
     } catch (e) {
-      setError("root", {
-        message: e instanceof Error ? e.message : "Erro ao salvar.",
-      });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -438,8 +437,6 @@ function StepToleranciaRisco({
             <p className="field-error">{errors.reacao_a_perda.message}</p>
           )}
         </div>
-
-        {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
 
         <div className="flex gap-3">
           <button type="button" onClick={onVoltar} className="btn btn-secondary flex-1">

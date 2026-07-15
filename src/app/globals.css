@@ -95,6 +95,14 @@ body {
     background: var(--color-surface-2);
   }
 
+  .btn-danger {
+    background: var(--color-danger);
+    color: #ffffff;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: #c94840;
+  }
+
   .error-box {
     font-size: 13px;
     color: var(--color-danger);

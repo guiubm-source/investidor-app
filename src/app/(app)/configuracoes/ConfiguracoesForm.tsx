@@ -49,6 +49,8 @@ import {
   type PresidenteBrasil,
 } from "@/lib/referencia/actions";
 import { CATEGORIAS_IPCA } from "@/lib/indicadores/schema";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 const NOMES_PERFIL: Record<string, string> = {
   conservador: "Conservador",
@@ -150,12 +152,11 @@ function SecaoDadosPessoais({
   dados: DadosConfiguracoes;
   onSalvo: (novo: DadosConfiguracoes["perfil"]) => void;
 }) {
-  const [sucesso, setSucesso] = useState(false);
+  const toast = useToast();
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<DadosPessoaisEditavel>({
     resolver: zodResolver(dadosPessoaisEditavelSchema),
     defaultValues: {
@@ -166,14 +167,13 @@ function SecaoDadosPessoais({
   });
 
   const onSubmit = handleSubmit(async (data) => {
-    setSucesso(false);
     const resultado = await salvarDadosPessoaisConfig(data);
     if (resultado.error) {
-      setError("root", { message: resultado.error });
+      toast.error(resultado.error);
       return;
     }
     onSalvo({ ...dados.perfil, ...data });
-    setSucesso(true);
+    toast.success("Dados atualizados.");
   });
 
   return (
@@ -213,9 +213,6 @@ function SecaoDadosPessoais({
           <input {...register("phone")} placeholder="(11) 90000-0000" className="input" />
           {errors.phone?.message && <p className="field-error">{errors.phone.message}</p>}
         </div>
-
-        {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
-        {sucesso && <p className="success-box">Dados atualizados.</p>}
 
         <button type="submit" disabled={isSubmitting} className="btn btn-primary">
           {isSubmitting ? "Salvando..." : "Salvar alterações"}
@@ -299,24 +296,22 @@ function SecaoSeguranca({
   dados: DadosConfiguracoes;
   onSenhaDefinida: () => void;
 }) {
-  const [sucesso, setSucesso] = useState(false);
+  const toast = useToast();
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
     reset,
   } = useForm<TrocarSenhaForm>({ resolver: zodResolver(trocarSenhaSchema) });
 
   const onSubmit = handleSubmit(async (data) => {
-    setSucesso(false);
     const resultado = await trocarSenha(data);
     if (resultado.error) {
-      setError("root", { message: resultado.error });
+      toast.error(resultado.error);
       return;
     }
     onSenhaDefinida();
-    setSucesso(true);
+    toast.success("Senha atualizada.");
     reset();
   });
 
@@ -360,9 +355,6 @@ function SecaoSeguranca({
           </p>
         )}
 
-        {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
-        {sucesso && <p className="success-box">Senha atualizada.</p>}
-
         <button type="submit" disabled={isSubmitting} className="btn btn-primary">
           {isSubmitting ? "Salvando..." : dados.temSenha ? "Trocar senha" : "Definir senha"}
         </button>
@@ -392,12 +384,16 @@ function SecaoDiretoriaBacen({
   onAtualizar: () => Promise<void>;
 }) {
   const [modo, setModo] = useState<"lista" | "novo" | string>("lista");
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const salvar = async (dadosForm: BacenDiretorForm, id?: string) => {
     const resultado = id ? await editarDiretorBacen(id, dadosForm) : await criarDiretorBacen(dadosForm);
     if (resultado.error) throw new Error(resultado.error);
     setModo("lista");
     await onAtualizar();
+    toast.success(id ? "Diretor atualizado." : "Diretor cadastrado.");
   };
 
   return (
@@ -448,10 +444,7 @@ function SecaoDiretoriaBacen({
                       Editar
                     </button>
                     <button
-                      onClick={async () => {
-                        await excluirDiretorBacen(d.id);
-                        await onAtualizar();
-                      }}
+                      onClick={() => setExcluindoId(d.id)}
                       className="text-xs text-faint hover:text-danger"
                     >
                       Excluir
@@ -462,6 +455,23 @@ function SecaoDiretoriaBacen({
             </div>
           ))}
         </div>
+      )}
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir diretor?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirDiretorBacen(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Diretor excluído.");
+          }}
+        />
       )}
     </section>
   );
@@ -480,7 +490,6 @@ function FormDiretorBacen({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(bacenDiretorSchema),
     defaultValues: {
@@ -494,11 +503,12 @@ function FormDiretorBacen({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvar(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -542,8 +552,6 @@ function FormDiretorBacen({
         <input {...register("nomeado_por")} className="input" />
       </div>
 
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
-
       <div className="col-span-2 md:col-span-3 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
@@ -569,12 +577,16 @@ function SecaoPresidentesBrasil({
   onAtualizar: () => Promise<void>;
 }) {
   const [modo, setModo] = useState<"lista" | "novo" | string>("lista");
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const salvar = async (dadosForm: BrasilPresidenteForm, id?: string) => {
     const resultado = id ? await editarPresidenteBrasil(id, dadosForm) : await criarPresidenteBrasil(dadosForm);
     if (resultado.error) throw new Error(resultado.error);
     setModo("lista");
     await onAtualizar();
+    toast.success(id ? "Presidente atualizado." : "Presidente cadastrado.");
   };
 
   return (
@@ -622,10 +634,7 @@ function SecaoPresidentesBrasil({
                       Editar
                     </button>
                     <button
-                      onClick={async () => {
-                        await excluirPresidenteBrasil(p.id);
-                        await onAtualizar();
-                      }}
+                      onClick={() => setExcluindoId(p.id)}
                       className="text-xs text-faint hover:text-danger"
                     >
                       Excluir
@@ -636,6 +645,23 @@ function SecaoPresidentesBrasil({
             </div>
           ))}
         </div>
+      )}
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir presidente?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirPresidenteBrasil(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Presidente excluído.");
+          }}
+        />
       )}
     </section>
   );
@@ -654,7 +680,6 @@ function FormPresidenteBrasil({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(brasilPresidenteSchema),
     defaultValues: {
@@ -664,11 +689,12 @@ function FormPresidenteBrasil({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvar(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -692,8 +718,6 @@ function FormPresidenteBrasil({
         <input type="date" {...register("mandato_fim")} className="input" />
         {errors.mandato_fim?.message && <p className="field-error">{errors.mandato_fim.message}</p>}
       </div>
-
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-3 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
@@ -727,12 +751,16 @@ function SecaoPesosIpca({
   onAtualizar: () => Promise<void>;
 }) {
   const [modo, setModo] = useState<"lista" | "novo" | string>("lista");
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const salvar = async (dadosForm: PesoIpcaGrupoForm, id?: string) => {
     const resultado = id ? await editarPesoIpca(id, dadosForm) : await criarPesoIpca(dadosForm);
     if (resultado.error) throw new Error(resultado.error);
     setModo("lista");
     await onAtualizar();
+    toast.success(id ? "Peso atualizado." : "Peso cadastrado.");
   };
 
   return (
@@ -784,10 +812,7 @@ function SecaoPesosIpca({
                       Editar
                     </button>
                     <button
-                      onClick={async () => {
-                        await excluirPesoIpca(p.id);
-                        await onAtualizar();
-                      }}
+                      onClick={() => setExcluindoId(p.id)}
                       className="text-xs text-faint hover:text-danger"
                     >
                       Excluir
@@ -798,6 +823,23 @@ function SecaoPesosIpca({
             </div>
           ))}
         </div>
+      )}
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir peso?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirPesoIpca(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Peso excluído.");
+          }}
+        />
       )}
     </section>
   );
@@ -816,7 +858,6 @@ function FormPesoIpca({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(pesoIpcaGrupoSchema),
     defaultValues: {
@@ -828,11 +869,12 @@ function FormPesoIpca({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvar(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -871,8 +913,6 @@ function FormPesoIpca({
         {errors.vigencia_fim?.message && <p className="field-error">{errors.vigencia_fim.message}</p>}
       </div>
 
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
-
       <div className="col-span-2 md:col-span-3 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
@@ -899,12 +939,16 @@ function SecaoMetasInflacao({
   onAtualizar: () => Promise<void>;
 }) {
   const [modo, setModo] = useState<"lista" | "novo" | string>("lista");
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const salvar = async (dadosForm: MetaInflacaoForm, id?: string) => {
     const resultado = id ? await editarMetaInflacao(id, dadosForm) : await criarMetaInflacao(dadosForm);
     if (resultado.error) throw new Error(resultado.error);
     setModo("lista");
     await onAtualizar();
+    toast.success(id ? "Meta atualizada." : "Meta cadastrada.");
   };
 
   return (
@@ -955,10 +999,7 @@ function SecaoMetasInflacao({
                       Editar
                     </button>
                     <button
-                      onClick={async () => {
-                        await excluirMetaInflacao(m.id);
-                        await onAtualizar();
-                      }}
+                      onClick={() => setExcluindoId(m.id)}
                       className="text-xs text-faint hover:text-danger"
                     >
                       Excluir
@@ -969,6 +1010,23 @@ function SecaoMetasInflacao({
             </div>
           ))}
         </div>
+      )}
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir meta?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirMetaInflacao(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Meta excluída.");
+          }}
+        />
       )}
     </section>
   );
@@ -987,7 +1045,6 @@ function FormMetaInflacao({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(metaInflacaoSchema),
     defaultValues: {
@@ -999,11 +1056,12 @@ function FormMetaInflacao({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvar(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1037,8 +1095,6 @@ function FormMetaInflacao({
         <input type="date" {...register("vigencia_fim")} className="input" />
         {errors.vigencia_fim?.message && <p className="field-error">{errors.vigencia_fim.message}</p>}
       </div>
-
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-3 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">

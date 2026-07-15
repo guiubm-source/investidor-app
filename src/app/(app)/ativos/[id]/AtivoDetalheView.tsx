@@ -47,6 +47,8 @@ import { obterRentabilidadeHistoricaAtivo, type PontoRentabilidade } from "@/lib
 import DesvioBar from "@/components/DesvioBar";
 import TradingViewChart from "@/components/TradingViewChart";
 import SerieLinhaChart from "@/components/SerieLinhaChart";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 import { TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
 import {
   calcularSerieChecklistAcao,
@@ -158,8 +160,11 @@ export default function AtivoDetalheView({
   const [editandoSimbolo, setEditandoSimbolo] = useState(false);
   const [addTransacao, setAddTransacao] = useState(false);
   const [excluindo, setExcluindo] = useState(false);
+  const [excluindoAtivoLoading, setExcluindoAtivoLoading] = useState(false);
+  const [excluindoTransacaoId, setExcluindoTransacaoId] = useState<string | null>(null);
+  const [excluindoTransacaoLoading, setExcluindoTransacaoLoading] = useState(false);
   const [atualizandoCotacao, setAtualizandoCotacao] = useState(false);
-  const [erroCotacao, setErroCotacao] = useState<string | null>(null);
+  const toast = useToast();
 
   const atualizar = async () => {
     const novo = await obterAtivoDetalhe(ativo.id);
@@ -208,6 +213,7 @@ export default function AtivoDetalheView({
               if (resultado.error) throw new Error(resultado.error);
               await atualizarTudo();
               setEditandoIdentidade(false);
+              toast.success("Ativo atualizado.");
             }}
           />
         ) : (
@@ -237,23 +243,23 @@ export default function AtivoDetalheView({
         )}
 
         {excluindo && (
-          <div className="error-box flex items-center justify-between mt-3">
-            <span>Excluir {ativo.ticker} por completo (transações e proventos também somem)?</span>
-            <div className="flex gap-2">
-              <button className="btn btn-secondary" onClick={() => setExcluindo(false)}>
-                Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={async () => {
-                  await excluirAtivo(ativo.id);
-                  router.push("/ativos");
-                }}
-              >
-                Confirmar
-              </button>
-            </div>
-          </div>
+          <ConfirmModal
+            title={`Excluir ${ativo.ticker}?`}
+            message="O ativo é excluído por completo — transações e proventos lançados nele também somem. Essa ação não pode ser desfeita."
+            loading={excluindoAtivoLoading}
+            onCancel={() => setExcluindo(false)}
+            onConfirm={async () => {
+              setExcluindoAtivoLoading(true);
+              const resultado = await excluirAtivo(ativo.id);
+              if (resultado.error) {
+                setExcluindoAtivoLoading(false);
+                toast.error(resultado.error);
+                return;
+              }
+              toast.success("Ativo excluído.");
+              router.push("/ativos");
+            }}
+          />
         )}
       </div>
 
@@ -287,6 +293,7 @@ export default function AtivoDetalheView({
                     if (resultado.error) throw new Error(resultado.error);
                     await atualizar();
                     setEditandoSimbolo(false);
+                    toast.success("Símbolo do gráfico atualizado.");
                   }}
                 />
               ) : (
@@ -316,6 +323,7 @@ export default function AtivoDetalheView({
                   if (resultado.error) throw new Error(resultado.error);
                   await atualizar();
                   setEditandoClassificacao(false);
+                  toast.success("Classificação salva.");
                 }}
               />
             ) : (
@@ -344,6 +352,7 @@ export default function AtivoDetalheView({
                       onClick={async () => {
                         await removerClassificacao(ativo.id);
                         await atualizar();
+                        toast.success("Classificação removida.");
                       }}
                       className="text-xs text-faint hover:text-danger"
                     >
@@ -420,6 +429,7 @@ export default function AtivoDetalheView({
                   if (resultado.error) throw new Error(resultado.error);
                   await atualizarTudo();
                   setEditandoPreco(false);
+                  toast.success("Preço atual atualizado.");
                 }}
               />
             ) : (
@@ -433,16 +443,16 @@ export default function AtivoDetalheView({
                   <button
                     disabled={atualizandoCotacao}
                     onClick={async () => {
-                      setErroCotacao(null);
                       setAtualizandoCotacao(true);
                       const resultado = await atualizarCotacaoAgora(ativo.id);
                       if (resultado.error) {
                         setAtualizandoCotacao(false);
-                        setErroCotacao(resultado.error);
+                        toast.error(resultado.error);
                         return;
                       }
                       await atualizarTudo();
                       setAtualizandoCotacao(false);
+                      toast.success("Cotação atualizada.");
                     }}
                     className="text-xs text-accent hover:underline disabled:opacity-50"
                   >
@@ -451,7 +461,6 @@ export default function AtivoDetalheView({
                 )}
               </div>
             )}
-            {erroCotacao && <p className="error-box mt-2">{erroCotacao}</p>}
           </div>
 
           {ativo.transacoes.length > 0 && (
@@ -497,6 +506,7 @@ export default function AtivoDetalheView({
                   if (resultado.error) throw new Error(resultado.error);
                   await atualizar();
                   setAddTransacao(false);
+                  toast.success("Transação registrada.");
                 }}
               />
             )}
@@ -518,10 +528,7 @@ export default function AtivoDetalheView({
                     <span className="text-muted">{formatarMoeda(t.precoUnitario)}</span>
                     <span className="text-faint">{t.corretoraNome ?? "—"}</span>
                     <button
-                      onClick={async () => {
-                        await excluirTransacao(t.id);
-                        await atualizar();
-                      }}
+                      onClick={() => setExcluindoTransacaoId(t.id)}
                       className="text-faint hover:text-danger"
                     >
                       Excluir
@@ -529,6 +536,27 @@ export default function AtivoDetalheView({
                   </div>
                 ))}
               </div>
+            )}
+
+            {excluindoTransacaoId && (
+              <ConfirmModal
+                title="Excluir transação?"
+                message="Essa ação não pode ser desfeita."
+                loading={excluindoTransacaoLoading}
+                onCancel={() => setExcluindoTransacaoId(null)}
+                onConfirm={async () => {
+                  setExcluindoTransacaoLoading(true);
+                  const resultado = await excluirTransacao(excluindoTransacaoId);
+                  setExcluindoTransacaoLoading(false);
+                  if (resultado.error) {
+                    toast.error(resultado.error);
+                    return;
+                  }
+                  await atualizar();
+                  setExcluindoTransacaoId(null);
+                  toast.success("Transação excluída.");
+                }}
+              />
             )}
           </div>
 
@@ -625,6 +653,7 @@ function SecaoChecklist({
   onAtualizado: () => Promise<void>;
 }) {
   const [editandoSaldo, setEditandoSaldo] = useState(false);
+  const toast = useToast();
 
   return (
     <div className="card p-5">
@@ -690,6 +719,7 @@ function SecaoChecklist({
               if (resultado.error) throw new Error(resultado.error);
               await onAtualizado();
               setEditandoSaldo(false);
+              toast.success("Nota de governança salva.");
             }}
           />
         ) : (
@@ -722,18 +752,18 @@ function FormSaldoAcionistas({
   const {
     register,
     handleSubmit,
-    formState: { errors, isSubmitting },
-    setError,
+    formState: { isSubmitting },
   } = useForm({
     resolver: zodResolver(saldoAcionistasSchema),
     defaultValues: { saldo_acionistas: valorInicial },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -746,7 +776,6 @@ function FormSaldoAcionistas({
         rows={2}
         placeholder="Ex.: controle familiar com acordo de acionistas vigente até 2030..."
       />
-      {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
       <div className="flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
@@ -777,6 +806,9 @@ function SecaoResultadosTrimestrais({
   onAtualizado: () => Promise<void>;
 }) {
   const [editando, setEditando] = useState<"novo" | string | null>(null);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const editandoItem = useMemo(
     () => (editando && editando !== "novo" ? resultados.find((r) => r.id === editando) ?? null : null),
@@ -811,6 +843,7 @@ function SecaoResultadosTrimestrais({
             if (resultado.error) throw new Error(resultado.error);
             await onAtualizado();
             setEditando(null);
+            toast.success("Resultado trimestral salvo.");
           }}
         />
       )}
@@ -901,10 +934,7 @@ function SecaoResultadosTrimestrais({
                         Editar
                       </button>
                       <button
-                        onClick={async () => {
-                          await excluirResultadoTrimestral(r.id);
-                          await onAtualizado();
-                        }}
+                        onClick={() => setExcluindoId(r.id)}
                         className="text-faint hover:text-danger"
                       >
                         Excluir
@@ -916,6 +946,23 @@ function SecaoResultadosTrimestrais({
             </tbody>
           </table>
         </div>
+      )}
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir trimestre?"
+          message="Esse lançamento de resultado trimestral some por completo. Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirResultadoTrimestral(excluindoId);
+            await onAtualizado();
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            toast.success("Trimestre excluído.");
+          }}
+        />
       )}
     </div>
   );
@@ -1065,7 +1112,6 @@ function FormResultadoTrimestral({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(resultadoTrimestralSchema),
     defaultValues: {
@@ -1092,11 +1138,12 @@ function FormResultadoTrimestral({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1197,7 +1244,6 @@ function FormResultadoTrimestral({
         </>
       )}
 
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-3 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
@@ -1225,7 +1271,6 @@ function FormIdentidade({
     handleSubmit,
     watch,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(ativoSchema),
     defaultValues: {
@@ -1239,11 +1284,12 @@ function FormIdentidade({
 
   const tipoSelecionado = watch("tipo");
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1294,7 +1340,6 @@ function FormIdentidade({
           </select>
         </div>
       )}
-      {errors.root?.message && <p className="error-box col-span-2">{errors.root.message}</p>}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
@@ -1320,18 +1365,18 @@ function FormSimbolo({
     register,
     handleSubmit,
     setValue,
-    formState: { errors, isSubmitting },
-    setError,
+    formState: { isSubmitting },
   } = useForm<SimboloTradingviewForm>({
     resolver: zodResolver(simboloTradingviewSchema),
     defaultValues: { simbolo_tradingview: valorInicial },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1356,7 +1401,6 @@ function FormSimbolo({
       <button type="button" className="btn btn-secondary" onClick={onCancelar}>
         Cancelar
       </button>
-      {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
     </form>
   );
 }
@@ -1384,7 +1428,6 @@ function FormClassificacao({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
     setValue,
   } = useForm<ClassificacaoForm>({
     resolver: zodResolver(classificacaoSchema),
@@ -1394,11 +1437,12 @@ function FormClassificacao({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1451,7 +1495,6 @@ function FormClassificacao({
         />
         {errors.peso_alvo?.message && <p className="field-error">{errors.peso_alvo.message}</p>}
       </div>
-      {errors.root?.message && <p className="error-box col-span-2">{errors.root.message}</p>}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
@@ -1477,17 +1520,17 @@ function FormPrecoAtual({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<PrecoAtualForm>({
     resolver: zodResolver(precoAtualSchema),
     defaultValues: { preco_atual: valorInicial },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1507,7 +1550,6 @@ function FormPrecoAtual({
         Cancelar
       </button>
       {errors.preco_atual?.message && <p className="field-error">{errors.preco_atual.message}</p>}
-      {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
     </form>
   );
 }
@@ -1529,7 +1571,6 @@ function FormTransacao({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(transacaoSchema),
     defaultValues: {
@@ -1544,11 +1585,12 @@ function FormTransacao({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -1631,7 +1673,6 @@ function FormTransacao({
         </div>
       )}
 
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-3">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-3 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">

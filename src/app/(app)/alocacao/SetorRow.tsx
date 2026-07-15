@@ -6,6 +6,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { setorSchema, type SetorForm } from "@/lib/alocacao/schema";
 import { editarSetor, excluirSetor, type SetorNode } from "@/lib/alocacao/actions";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 export default function SetorRow({
   setor,
@@ -17,6 +19,8 @@ export default function SetorRow({
   const [expandido, setExpandido] = useState(false);
   const [editando, setEditando] = useState(false);
   const [excluindo, setExcluindo] = useState(false);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   if (editando) {
     return (
@@ -29,6 +33,7 @@ export default function SetorRow({
             if (resultado.error) throw new Error(resultado.error);
             await onChange();
             setEditando(false);
+            toast.success("Setor atualizado.");
           }}
         />
       </div>
@@ -59,23 +64,24 @@ export default function SetorRow({
       </div>
 
       {excluindo && (
-        <div className="error-box flex items-center justify-between mb-2">
-          <span>Excluir o setor {setor.nome}? Os ativos classificados nele ficam sem classificação.</span>
-          <div className="flex gap-2">
-            <button className="btn btn-secondary" onClick={() => setExcluindo(false)}>
-              Cancelar
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={async () => {
-                await excluirSetor(setor.id);
-                onChange();
-              }}
-            >
-              Confirmar
-            </button>
-          </div>
-        </div>
+        <ConfirmModal
+          title={`Excluir o setor ${setor.nome}?`}
+          message="Os ativos classificados nele ficam sem classificação. Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindo(false)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            const resultado = await excluirSetor(setor.id);
+            setExcluindoLoading(false);
+            if (resultado.error) {
+              toast.error(resultado.error);
+              return;
+            }
+            setExcluindo(false);
+            await onChange();
+            toast.success("Setor excluído.");
+          }}
+        />
       )}
 
       {expandido && (
@@ -126,7 +132,6 @@ export function FormSetor({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<SetorForm>({
     resolver: zodResolver(setorSchema),
     defaultValues: {
@@ -135,11 +140,12 @@ export function FormSetor({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -160,7 +166,6 @@ export function FormSetor({
         />
         {errors.peso_alvo?.message && <p className="field-error">{errors.peso_alvo.message}</p>}
       </div>
-      {errors.root?.message && <p className="error-box col-span-2">{errors.root.message}</p>}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar

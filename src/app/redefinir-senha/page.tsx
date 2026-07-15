@@ -1,12 +1,18 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { redefinirSenha, type RedefinirSenhaState } from "./actions";
+import { useToast } from "@/components/ToastProvider";
 
 const estadoInicial: RedefinirSenhaState = {};
 
 export default function RedefinirSenhaPage() {
   const [state, formAction, pending] = useActionState(redefinirSenha, estadoInicial);
+  const toast = useToast();
+
+  useEffect(() => {
+    if (state.error) toast.error(state.error);
+  }, [state.error, toast]);
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
@@ -48,8 +54,6 @@ export default function RedefinirSenhaPage() {
               className="input"
             />
           </div>
-
-          {state.error && <p className="error-box">{state.error}</p>}
 
           <button type="submit" disabled={pending} className="btn btn-primary w-full">
             {pending ? "Salvando..." : "Salvar nova senha"}

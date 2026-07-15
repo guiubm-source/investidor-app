@@ -14,6 +14,8 @@ import {
   type Corretora,
 } from "@/lib/carteira/actions";
 import CorretorasManager from "./CorretorasManager";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -36,6 +38,9 @@ export default function CarteiraView({
 }) {
   const [livro, setLivro] = useState(livroInicial);
   const [addTransacao, setAddTransacao] = useState(false);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const atualizar = async () => {
     const novo = await obterLivroRazao();
@@ -83,6 +88,7 @@ export default function CarteiraView({
               if (resultado.error) throw new Error(resultado.error);
               setAddTransacao(false);
               await atualizar();
+              toast.success("Transação registrada.");
             }}
           />
         </div>
@@ -131,10 +137,7 @@ export default function CarteiraView({
             )}
             {l.categoria === "transacao" ? (
               <button
-                onClick={async () => {
-                  await excluirTransacao(l.id);
-                  await atualizar();
-                }}
+                onClick={() => setExcluindoId(l.id)}
                 className="text-faint hover:text-danger text-right"
               >
                 Excluir
@@ -147,6 +150,27 @@ export default function CarteiraView({
           </div>
         ))}
       </div>
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir transação?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            const resultado = await excluirTransacao(excluindoId);
+            setExcluindoLoading(false);
+            if (resultado.error) {
+              toast.error(resultado.error);
+              return;
+            }
+            setExcluindoId(null);
+            await atualizar();
+            toast.success("Transação excluída.");
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -167,7 +191,6 @@ function FormTransacao({
     handleSubmit,
     watch,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(transacaoSchema),
     defaultValues: {
@@ -185,11 +208,12 @@ function FormTransacao({
   const ativoIdSelecionado = watch("ativo_id");
   const tipoAtivoSelecionado = ativos.find((a) => a.id === ativoIdSelecionado)?.tipo;
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -281,8 +305,6 @@ function FormTransacao({
           {errors.cambio?.message && <p className="field-error">{errors.cambio.message}</p>}
         </div>
       )}
-
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-4">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-4 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">

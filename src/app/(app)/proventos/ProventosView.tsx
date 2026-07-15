@@ -13,6 +13,8 @@ import {
   obterLivroProventos,
   type LivroProventos,
 } from "@/lib/proventos/actions";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -39,6 +41,9 @@ export default function ProventosView({
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [confirmandoLote, setConfirmandoLote] = useState(false);
   const [excluindoLote, setExcluindoLote] = useState(false);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
 
   const atualizar = async () => {
     const novo = await obterLivroProventos();
@@ -148,6 +153,7 @@ export default function ProventosView({
               if (resultado.error) throw new Error(resultado.error);
               await atualizar();
               setAddProvento(false);
+              toast.success("Provento registrado.");
             }}
           />
         </div>
@@ -156,42 +162,33 @@ export default function ProventosView({
       {selecionados.size > 0 && (
         <div className="card p-3 flex items-center justify-between gap-3 bg-surface-2">
           <span className="text-xs text-muted">{selecionados.size} selecionado(s)</span>
-          {confirmandoLote ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-danger">Excluir os selecionados?</span>
-              <button
-                className="btn btn-secondary"
-                onClick={() => setConfirmandoLote(false)}
-                disabled={excluindoLote}
-              >
-                Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
-                disabled={excluindoLote}
-                onClick={async () => {
-                  setExcluindoLote(true);
-                  await excluirProventosEmLote([...selecionados]);
-                  setSelecionados(new Set());
-                  setConfirmandoLote(false);
-                  await atualizar();
-                  setExcluindoLote(false);
-                }}
-              >
-                {excluindoLote ? "Excluindo..." : "Confirmar"}
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <button className="text-xs text-faint hover:text-ink" onClick={() => setSelecionados(new Set())}>
-                Limpar seleção
-              </button>
-              <button className="text-xs text-danger hover:underline" onClick={() => setConfirmandoLote(true)}>
-                Excluir selecionados
-              </button>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            <button className="text-xs text-faint hover:text-ink" onClick={() => setSelecionados(new Set())}>
+              Limpar seleção
+            </button>
+            <button className="text-xs text-danger hover:underline" onClick={() => setConfirmandoLote(true)}>
+              Excluir selecionados
+            </button>
+          </div>
         </div>
+      )}
+
+      {confirmandoLote && (
+        <ConfirmModal
+          title={`Excluir ${selecionados.size} provento(s)?`}
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLote}
+          onCancel={() => setConfirmandoLote(false)}
+          onConfirm={async () => {
+            setExcluindoLote(true);
+            await excluirProventosEmLote([...selecionados]);
+            setSelecionados(new Set());
+            setConfirmandoLote(false);
+            await atualizar();
+            setExcluindoLote(false);
+            toast.success("Proventos excluídos.");
+          }}
+        />
       )}
 
       <div className="card overflow-hidden">
@@ -227,6 +224,7 @@ export default function ProventosView({
                   if (resultado.error) throw new Error(resultado.error);
                   await atualizar();
                   setEditando(null);
+                  toast.success("Provento atualizado.");
                 }}
               />
             </div>
@@ -252,10 +250,7 @@ export default function ProventosView({
                   Editar
                 </button>
                 <button
-                  onClick={async () => {
-                    await excluirProvento(l.id);
-                    await atualizar();
-                  }}
+                  onClick={() => setExcluindoId(l.id)}
                   className="text-faint hover:text-danger"
                 >
                   Excluir
@@ -265,6 +260,23 @@ export default function ProventosView({
           )
         )}
       </div>
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir provento?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirProvento(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await atualizar();
+            toast.success("Provento excluído.");
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -286,7 +298,6 @@ function FormProvento({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<ProventoForm>({
     resolver: zodResolver(proventoSchema),
     defaultValues: valoresIniciais ?? {
@@ -297,11 +308,12 @@ function FormProvento({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvo(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -346,8 +358,6 @@ function FormProvento({
         />
         {errors.valor_total?.message && <p className="field-error">{errors.valor_total.message}</p>}
       </div>
-
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-4">{errors.root.message}</p>}
 
       <div className="col-span-2 md:col-span-4 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">

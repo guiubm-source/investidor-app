@@ -1118,6 +1118,70 @@ ativo_preco_diario_manual (id, profile_id, ativo_id, data, preco, created_at)
   existir a partir da primeira vez que o usuário salva um preço manual
   depois desta feature existir.
 
+### 8.13 UX/UI — confirmação de exclusão padronizada + toast/snackbar (2026-07-15)
+
+Itens #121 e #122 do backlog, atacados juntos por serem a mesma classe de
+mudança (padrão de feedback ao usuário) tocando praticamente todas as telas
+do app. Decisões levantadas via protocolo da seção 1 (uma pergunta por vez):
+
+1. **Confirmação de exclusão: modal centralizado, não banner inline.** Já
+   existia um padrão de confirmação inline (banner "Excluir?" com
+   Cancelar/Confirmar embutido na própria linha, usado em `SetorRow.tsx`/
+   `ClasseRow.tsx`/`AtivoDetalheView.tsx`) convivendo com várias telas que
+   excluíam **sem confirmação nenhuma** (transações, corretoras, resultados
+   trimestrais, lançamentos de indicadores, cadastros de referência em
+   Configurações). Escolhido consolidar tudo num único componente
+   `src/components/ConfirmModal.tsx` — backdrop escurecido + card
+   centralizado (`title`, `message`, `confirmLabel`, `onConfirm`, `onCancel`,
+   `loading`) — em vez de generalizar o banner inline, para dar um padrão
+   visualmente inequívoco (o usuário não confunde com o resto da UI) e
+   consistente em toda tela, incluindo exclusões em lote (mesma modal,
+   mensagem com a contagem). Aplicado a TODA ação de exclusão do app —
+   inclusive as 3 que já tinham o banner antigo, substituído pela modal.
+
+2. **Toast/snackbar substitui as duas variantes do padrão anterior
+   (`.error-box`/`.success-box` ligados a `errors.root` do react-hook-form
+   ou a estado local ad-hoc).** Novo `src/components/ToastProvider.tsx`
+   (Context + hook `useToast()`, `success()`/`error()`, auto-dismiss em 4s/6s)
+   montado uma única vez no layout raiz (`src/app/layout.tsx`, não no layout
+   do grupo `(app)`) para funcionar também nas telas fora da área logada
+   (login, cadastro, esqueci-senha, redefinir-senha, suitability). Cobre
+   tanto confirmações de sucesso ("Transação excluída.", "Ativo salvo.")
+   quanto erros de ação (falha ao salvar/excluir, falha de login) — em todo
+   catch de submit que antes fazia `setError("root", { message })` +
+   renderizava `.error-box`, a chamada virou `toast.error(...)`.
+
+3. **Exceção deliberada: erro de campo específico (`field-error`,
+   validação Zod por input) fica exatamente onde está, nunca vira toast.**
+   Um toast não indica QUAL campo está errado e desaparece antes que o
+   usuário necessariamente leia e corrija — então só o padrão "ação falhou
+   como um todo" (`errors.root`/estado de erro solto, não ligado a um campo)
+   foi convertido. As duas páginas de fluxo de senha que usam
+   `useActionState` (não react-hook-form) seguem o mesmo princípio via
+   `useEffect` observando `state.error` e chamando `toast.error(...)`.
+
+4. **Exceção deliberada: painéis de resultado ricos (import em lote de
+   Selic/IPCA, "aguarde confirmação por email" em `esqueci-senha`) NÃO
+   viraram toast.** Esses blocos carregam informação estruturada que precisa
+   ficar visível além de alguns segundos (contagem de linhas importadas +
+   lista de avisos; instrução "confira sua caixa de entrada e o spam") — um
+   toast de 4-6s cortaria a leitura ou removeria a única indicação de que
+   algo aconteceu (a tela ficaria em branco depois do toast sumir, já que o
+   formulário correspondente desaparece nesses dois casos). Mantidos como
+   painel inline persistente; só o erro de importação em si (`resultado.error`
+   dentro desse mesmo painel) segue as mesmas classes CSS de sempre, sem
+   toast, por ser parte do mesmo bloco de resultado — não um erro de ação
+   solto.
+
+Arquivos tocados (não exaustivo, ~15 arquivos): `AtivoDetalheView.tsx`,
+`AtivosView.tsx`, `SetorRow.tsx`, `ClasseRow.tsx`, `AlocacaoView.tsx`,
+`CarteiraView.tsx`, `CorretorasManager.tsx`, `ProventosView.tsx`,
+`IndicadoresView.tsx`, `AbaSelic.tsx`, `AbaIpca.tsx`,
+`ConfiguracoesForm.tsx`, `login/page.tsx`, `esqueci-senha/page.tsx`,
+`redefinir-senha/page.tsx`, `cadastro/CadastroWizard.tsx`,
+`components/suitability/SuitabilityWizard.tsx`. Nova classe `.btn-danger`
+em `globals.css` para o botão de confirmar exclusão da modal.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

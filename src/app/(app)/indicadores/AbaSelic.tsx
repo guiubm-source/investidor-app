@@ -22,6 +22,8 @@ import {
 } from "@/lib/indicadores/actions";
 import { calcularMediaMovel, type DecisaoTipo } from "@/lib/indicadores/selic-estatisticas";
 import type { DiretorBacen, PresidenteBrasil } from "@/lib/referencia/actions";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 const formatarData = (iso: string) => {
   const [ano, mes, dia] = iso.split("-");
@@ -430,6 +432,11 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
   const [lancando, setLancando] = useState<string | null>(null);
   const [editando, setEditando] = useState<string | null>(null);
   const [criandoNova, setCriandoNova] = useState<{ base?: SelicView["reunioes"][number] } | null>(null);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const [confirmandoLote, setConfirmandoLote] = useState(false);
+  const [excluindoLote, setExcluindoLote] = useState(false);
+  const toast = useToast();
 
   const reunioesDesc = [...selic.reunioes].reverse();
   const filtradas = busca.trim()
@@ -445,7 +452,6 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
     handleSubmit,
     reset,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(decisaoSelicSchema),
     defaultValues: { reuniao_id: "", numero_reuniao: NaN, taxa_definida: NaN },
@@ -458,8 +464,9 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
       setLancando(null);
       reset();
       await onAtualizar();
+      toast.success("Decisão lançada.");
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -470,12 +477,6 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
       else novo.add(id);
       return novo;
     });
-  };
-
-  const excluirSelecionados = async () => {
-    await excluirReunioesSelic(Array.from(selecionados));
-    setSelecionados(new Set());
-    await onAtualizar();
   };
 
   return (
@@ -490,7 +491,7 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
             className="input w-48 text-xs"
           />
           {selecionados.size > 0 && (
-            <button onClick={excluirSelecionados} className="text-xs text-danger hover:underline">
+            <button onClick={() => setConfirmandoLote(true)} className="text-xs text-danger hover:underline">
               Excluir selecionados ({selecionados.size})
             </button>
           )}
@@ -499,6 +500,24 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
           </button>
         </div>
       </div>
+
+      {confirmandoLote && (
+        <ConfirmModal
+          title={`Excluir ${selecionados.size} reunião(ões)?`}
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLote}
+          onCancel={() => setConfirmandoLote(false)}
+          onConfirm={async () => {
+            setExcluindoLote(true);
+            await excluirReunioesSelic(Array.from(selecionados));
+            setSelecionados(new Set());
+            setConfirmandoLote(false);
+            await onAtualizar();
+            setExcluindoLote(false);
+            toast.success("Reuniões excluídas.");
+          }}
+        />
+      )}
 
       {criandoNova && (
         <div className="px-4 py-3 border-b border-border">
@@ -509,6 +528,7 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
               if (resultado.error) throw new Error(resultado.error);
               setCriandoNova(null);
               await onAtualizar();
+              toast.success("Reunião criada.");
             }}
             onCancelar={() => setCriandoNova(null)}
           />
@@ -562,10 +582,7 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
                 Duplicar
               </button>
               <button
-                onClick={async () => {
-                  await excluirReuniaoSelic(r.id);
-                  await onAtualizar();
-                }}
+                onClick={() => setExcluindoId(r.id)}
                 className="text-faint hover:text-danger"
               >
                 Excluir
@@ -591,7 +608,6 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
               <button type="submit" disabled={isSubmitting} className="btn btn-primary">
                 {isSubmitting ? "Salvando..." : "Salvar"}
               </button>
-              {errors.root?.message && <p className="field-error">{errors.root.message}</p>}
             </form>
           )}
 
@@ -605,6 +621,7 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
                   if (resultado.error) throw new Error(resultado.error);
                   setEditando(null);
                   await onAtualizar();
+                  toast.success("Reunião atualizada.");
                 }}
                 onCancelar={() => setEditando(null)}
               />
@@ -612,6 +629,23 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
           )}
         </div>
       ))}
+
+      {excluindoId && (
+        <ConfirmModal
+          title="Excluir reunião?"
+          message="Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindoId(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirReuniaoSelic(excluindoId);
+            setExcluindoLoading(false);
+            setExcluindoId(null);
+            await onAtualizar();
+            toast.success("Reunião excluída.");
+          }}
+        />
+      )}
 
       <StatsResumo selic={selic} />
     </div>
@@ -633,7 +667,6 @@ function FormReuniao({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm({
     resolver: zodResolver(idExistente ? selicReuniaoEditSchema.omit({ id: true }) : novaReuniaoSelicSchema),
     defaultValues: {
@@ -644,11 +677,12 @@ function FormReuniao({
     },
   });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     try {
       await onSalvar(data);
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -680,7 +714,6 @@ function FormReuniao({
           {isSubmitting ? "Salvando..." : "Salvar"}
         </button>
       </div>
-      {errors.root?.message && <p className="error-box col-span-2 md:col-span-5">{errors.root.message}</p>}
     </form>
   );
 }

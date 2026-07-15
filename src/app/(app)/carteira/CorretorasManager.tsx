@@ -5,6 +5,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { corretoraSchema, type CorretoraForm } from "@/lib/carteira/schema";
 import { criarCorretora, excluirCorretora, type Corretora } from "@/lib/carteira/actions";
+import ConfirmModal from "@/components/ConfirmModal";
+import { useToast } from "@/components/ToastProvider";
 
 export default function CorretorasManager({
   corretoras,
@@ -14,12 +16,14 @@ export default function CorretorasManager({
   onChange: () => void;
 }) {
   const [adicionando, setAdicionando] = useState(false);
+  const [excluindo, setExcluindo] = useState<Corretora | null>(null);
+  const [excluindoLoading, setExcluindoLoading] = useState(false);
+  const toast = useToast();
   const {
     register,
     handleSubmit,
     reset,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<CorretoraForm>({
     resolver: zodResolver(corretoraSchema),
     defaultValues: { nome: "" },
@@ -32,8 +36,9 @@ export default function CorretorasManager({
       reset();
       setAdicionando(false);
       onChange();
+      toast.success("Corretora cadastrada.");
     } catch (e) {
-      setError("root", { message: e instanceof Error ? e.message : "Erro ao salvar." });
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
     }
   });
 
@@ -60,10 +65,7 @@ export default function CorretorasManager({
           >
             {c.nome}
             <button
-              onClick={async () => {
-                await excluirCorretora(c.id);
-                onChange();
-              }}
+              onClick={() => setExcluindo(c)}
               className="text-faint hover:text-danger"
               aria-label={`Excluir ${c.nome}`}
             >
@@ -92,7 +94,23 @@ export default function CorretorasManager({
         </form>
       )}
       {errors.nome?.message && <p className="field-error">{errors.nome.message}</p>}
-      {errors.root?.message && <p className="error-box mt-2">{errors.root.message}</p>}
+
+      {excluindo && (
+        <ConfirmModal
+          title={`Excluir a corretora ${excluindo.nome}?`}
+          message="Transações já lançadas com essa corretora ficam sem corretora associada. Essa ação não pode ser desfeita."
+          loading={excluindoLoading}
+          onCancel={() => setExcluindo(null)}
+          onConfirm={async () => {
+            setExcluindoLoading(true);
+            await excluirCorretora(excluindo.id);
+            setExcluindoLoading(false);
+            setExcluindo(null);
+            onChange();
+            toast.success("Corretora excluída.");
+          }}
+        />
+      )}
     </div>
   );
 }

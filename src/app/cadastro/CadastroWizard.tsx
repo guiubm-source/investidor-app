@@ -19,6 +19,7 @@ import {
   type StatusCadastro,
 } from "./actions";
 import SuitabilityWizard from "@/components/suitability/SuitabilityWizard";
+import { useToast } from "@/components/ToastProvider";
 
 type Step =
   | "conta"
@@ -128,16 +129,16 @@ function StepConta({
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<ContaForm>({ resolver: zodResolver(contaSchema) });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     const resultado = await criarConta({
       email: data.email,
       password: data.password,
     });
     if (resultado.error) {
-      setError("root", { message: resultado.error });
+      toast.error(resultado.error);
       return;
     }
     onSucesso(data.email, resultado.sessaoCriada);
@@ -182,8 +183,6 @@ function StepConta({
             <p className="field-error">{errors.confirmarPassword.message}</p>
           )}
         </div>
-
-        {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
 
         <button type="submit" disabled={isSubmitting} className="btn btn-primary w-full">
           {isSubmitting ? "Criando conta..." : "Criar conta e continuar"}
@@ -238,13 +237,13 @@ function StepDadosPessoais({ onSucesso }: { onSucesso: () => void }) {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-    setError,
   } = useForm<DadosPessoais>({ resolver: zodResolver(dadosPessoaisSchema) });
 
+  const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
     const resultado = await salvarDadosPessoais(data);
     if (resultado.error) {
-      setError("root", { message: resultado.error });
+      toast.error(resultado.error);
       return;
     }
     onSucesso();
@@ -290,8 +289,6 @@ function StepDadosPessoais({ onSucesso }: { onSucesso: () => void }) {
           <input {...register("phone")} placeholder="(11) 90000-0000" className="input" />
           {errors.phone?.message && <p className="field-error">{errors.phone.message}</p>}
         </div>
-
-        {errors.root?.message && <p className="error-box">{errors.root.message}</p>}
 
         <button type="submit" disabled={isSubmitting} className="btn btn-primary w-full">
           {isSubmitting ? "Salvando..." : "Continuar"}
