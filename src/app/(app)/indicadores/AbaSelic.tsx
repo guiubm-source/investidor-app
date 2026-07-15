@@ -4,6 +4,16 @@ import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import type { TooltipProps } from "recharts";
+import {
   decisaoSelicSchema,
   importarSelicSchema,
   novaReuniaoSelicSchema,
@@ -56,6 +66,9 @@ export default function AbaSelic({
   return (
     <div className="space-y-4">
       <BlocoCards selic={selic} />
+      <div className="card p-4">
+        <StatsResumo selic={selic} />
+      </div>
       <BlocoBancoCentral presidenteBc={selic.presidenteBc} />
       <BlocoGrafico selic={selic} diretoriaBacen={diretoriaBacen} presidentesBrasil={presidentesBrasil} />
       <BlocoHistorico selic={selic} onAtualizar={onAtualizar} />
@@ -183,8 +196,8 @@ function BlocoBancoCentral({ presidenteBc }: { presidenteBc: SelicView["presiden
 }
 
 // ---------------------------------------------------------------------------
-// Bloco 3 — Gráfico de evolução (SVG artesanal, ver docs/MAPA-DE-DADOS.md
-// §8.7 — sem dependência de lib de gráficos)
+// Bloco 3 — Gráfico de evolução (Recharts — ver docs/MAPA-DE-DADOS.md §8.7,
+// decisão 2026-07-15: trocado de SVG artesanal para Recharts)
 // ---------------------------------------------------------------------------
 
 type PeriodoFiltro = "todos" | "12m" | "24m" | "5a" | "10a" | "personalizado";
@@ -336,89 +349,84 @@ function BlocoGrafico({
       {pontos.length < 2 ? (
         <p className="text-sm text-faint">Poucos pontos para desenhar o gráfico com esse filtro (mínimo 2).</p>
       ) : (
-        <GraficoSvg pontos={pontos} mediaMovel={mediaMovelAtiva ? mediaMovel : null} />
+        <GraficoSelicRecharts pontos={pontos} mediaMovel={mediaMovelAtiva ? mediaMovel : null} />
       )}
     </div>
   );
 }
 
-function GraficoSvg({
+type PontoGraficoSelic = { dataInicio: string; taxa: number; mediaMovel: number | null };
+
+function TooltipSelic({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload || payload.length === 0 || typeof label !== "string") return null;
+  const taxa = payload.find((p) => p.dataKey === "taxa")?.value as number | undefined;
+  const mm = payload.find((p) => p.dataKey === "mediaMovel")?.value as number | undefined;
+  return (
+    <div className="rounded-md border border-border-strong bg-surface-2 px-3 py-2 shadow-sm">
+      <p className="text-xs text-ink mb-1">{formatarData(label)}</p>
+      {taxa != null && <p className="text-xs text-accent">Selic: {taxa.toFixed(2)}%</p>}
+      {mm != null && <p className="text-xs text-muted">Média móvel: {mm.toFixed(2)}%</p>}
+    </div>
+  );
+}
+
+function GraficoSelicRecharts({
   pontos,
   mediaMovel,
 }: {
   pontos: SelicView["reunioes"];
   mediaMovel: (number | null)[] | null;
 }) {
-  const W = 900;
-  const H = 260;
-  const padL = 44;
-  const padR = 12;
-  const padT = 14;
-  const padB = 26;
-
-  const datas = pontos.map((p) => new Date(`${p.dataInicio}T00:00:00`).getTime());
-  const minData = Math.min(...datas);
-  const maxData = Math.max(...datas);
-  const rangeData = Math.max(1, maxData - minData);
-
-  const taxas = pontos.map((p) => p.taxaDefinida!);
-  const todasTaxas = mediaMovel ? [...taxas, ...(mediaMovel.filter((v) => v !== null) as number[])] : taxas;
-  const minTaxa = Math.min(...todasTaxas);
-  const maxTaxa = Math.max(...todasTaxas);
-  const padding = Math.max(0.25, (maxTaxa - minTaxa) * 0.15);
-  const yMin = Math.max(0, minTaxa - padding);
-  const yMax = maxTaxa + padding;
-  const rangeTaxa = Math.max(0.01, yMax - yMin);
-
-  const x = (t: number) => padL + ((t - minData) / rangeData) * (W - padL - padR);
-  const y = (v: number) => H - padB - ((v - yMin) / rangeTaxa) * (H - padT - padB);
-
-  const linhaPrincipal = pontos.map((p, i) => `${i === 0 ? "M" : "L"} ${x(datas[i]).toFixed(1)} ${y(p.taxaDefinida!).toFixed(1)}`).join(" ");
-
-  let linhaMedia = "";
-  if (mediaMovel) {
-    let comecouSubpath = false;
-    mediaMovel.forEach((v, i) => {
-      if (v === null) {
-        comecouSubpath = false;
-        return;
-      }
-      linhaMedia += `${comecouSubpath ? "L" : "M"} ${x(datas[i]).toFixed(1)} ${y(v).toFixed(1)} `;
-      comecouSubpath = true;
-    });
-  }
-
-  const yTicks = [yMin, (yMin + yMax) / 2, yMax];
-  const xTicksIdx = pontos.length <= 4 ? pontos.map((_, i) => i) : [0, Math.floor(pontos.length / 2), pontos.length - 1];
+  const dados: PontoGraficoSelic[] = pontos.map((p, i) => ({
+    dataInicio: p.dataInicio,
+    taxa: p.taxaDefinida!,
+    mediaMovel: mediaMovel ? mediaMovel[i] : null,
+  }));
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Gráfico de evolução da Selic">
-      {yTicks.map((t) => (
-        <g key={t}>
-          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="var(--color-border)" strokeWidth={1} />
-          <text x={4} y={y(t) + 3} fontSize={9} fill="var(--color-faint)">
-            {t.toFixed(2)}%
-          </text>
-        </g>
-      ))}
-
-      {xTicksIdx.map((i) => (
-        <text key={i} x={x(datas[i])} y={H - 6} fontSize={9} fill="var(--color-faint)" textAnchor="middle">
-          {formatarData(pontos[i].dataInicio)}
-        </text>
-      ))}
-
-      {linhaMedia && <path d={linhaMedia} fill="none" stroke="var(--color-muted)" strokeWidth={1.5} strokeDasharray="4 3" />}
-      <path d={linhaPrincipal} fill="none" stroke="var(--color-accent)" strokeWidth={2} />
-
-      {pontos.map((p, i) => (
-        <circle key={p.id} cx={x(datas[i])} cy={y(p.taxaDefinida!)} r={3} fill="var(--color-accent)">
-          <title>
-            {formatarData(p.dataInicio)}: {p.taxaDefinida!.toFixed(2)}%
-          </title>
-        </circle>
-      ))}
-    </svg>
+    <ResponsiveContainer width="100%" height={300}>
+      <LineChart data={dados} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          dataKey="dataInicio"
+          tickFormatter={formatarData}
+          tick={{ fontSize: 10, fill: "var(--color-faint)" }}
+          axisLine={{ stroke: "var(--color-border)" }}
+          tickLine={false}
+          minTickGap={40}
+        />
+        <YAxis
+          tickFormatter={(v: number) => `${v.toFixed(2)}%`}
+          tick={{ fontSize: 10, fill: "var(--color-faint)" }}
+          axisLine={false}
+          tickLine={false}
+          width={54}
+          domain={["auto", "auto"]}
+        />
+        <RechartsTooltip content={<TooltipSelic />} cursor={{ stroke: "var(--color-border-strong)", strokeDasharray: "3 3" }} />
+        {mediaMovel && (
+          <Line
+            type="monotone"
+            dataKey="mediaMovel"
+            stroke="var(--color-muted)"
+            strokeDasharray="4 3"
+            strokeWidth={1.5}
+            dot={false}
+            connectNulls
+            name="Média móvel"
+          />
+        )}
+        <Line
+          type="monotone"
+          dataKey="taxa"
+          stroke="var(--color-accent)"
+          strokeWidth={2}
+          dot={{ r: 3, fill: "var(--color-accent)", strokeWidth: 0 }}
+          activeDot={{ r: 5 }}
+          name="Selic"
+        />
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -647,7 +655,9 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
         />
       )}
 
-      <StatsResumo selic={selic} />
+      <div className="px-4 py-3 border-t border-border">
+        <StatsResumo selic={selic} />
+      </div>
     </div>
   );
 }
@@ -745,7 +755,7 @@ function StatsResumo({ selic }: { selic: SelicView }) {
   ];
 
   return (
-    <div className="px-4 py-3 border-t border-border">
+    <div>
       <p className="text-xs text-faint mb-2">Estatísticas do histórico</p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {itens.map((it) => (

@@ -1,6 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import type { TooltipProps } from "recharts";
 import { calcularMediaMovel } from "@/lib/indicadores/selic-estatisticas";
 import { calcularVariacaoPct, type PontoDolar } from "@/lib/indicadores/dolar-estatisticas";
 import type { DolarView } from "@/lib/indicadores/actions";
@@ -258,13 +269,36 @@ function BlocoGrafico({ dolar }: { dolar: DolarView }) {
       {filtrados.length < 2 ? (
         <p className="text-sm text-faint">Poucos pontos para desenhar o gráfico com esse filtro (mínimo 2).</p>
       ) : (
-        <GraficoDolarSvg pontos={filtrados} mediasCompletas={mediasCompletas} offset={offset} />
+        <GraficoDolarRecharts pontos={filtrados} mediasCompletas={mediasCompletas} offset={offset} />
       )}
     </div>
   );
 }
 
-function GraficoDolarSvg({
+function TooltipDolar({
+  active,
+  payload,
+  label,
+  series,
+}: TooltipProps<number, string> & { series: { key: string; label: string; cor: string }[] }) {
+  if (!active || !payload || payload.length === 0 || typeof label !== "string") return null;
+  return (
+    <div className="rounded-md border border-border-strong bg-surface-2 px-3 py-2 shadow-sm">
+      <p className="text-xs text-ink mb-1">{formatarData(label)}</p>
+      {series.map((s) => {
+        const v = payload.find((p) => p.dataKey === s.key)?.value as number | undefined;
+        if (v == null) return null;
+        return (
+          <p key={s.key} className="text-xs" style={{ color: s.cor }}>
+            {s.label}: R$ {v.toFixed(4)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function GraficoDolarRecharts({
   pontos,
   mediasCompletas,
   offset,
@@ -273,96 +307,73 @@ function GraficoDolarSvg({
   mediasCompletas: Record<number, (number | null)[]>;
   offset: number;
 }) {
-  const W = 900;
-  const H = 280;
-  const padL = 52;
-  const padR = 12;
-  const padT = 14;
-  const padB = 26;
+  const periodosMm = useMemo(
+    () =>
+      Object.keys(mediasCompletas)
+        .map(Number)
+        .sort((a, b) => a - b),
+    [mediasCompletas]
+  );
 
-  const series = Object.entries(mediasCompletas).map(([periodo, valores]) => ({
-    periodo: Number(periodo),
-    valores: valores.slice(offset, offset + pontos.length),
-  }));
+  const dados = useMemo(() => {
+    return pontos.map((p, i) => {
+      const linha: Record<string, number | string | null> = { data: p.data, cotacao: p.cotacao };
+      for (const periodoMm of periodosMm) {
+        linha[`mm${periodoMm}`] = mediasCompletas[periodoMm]?.slice(offset, offset + pontos.length)[i] ?? null;
+      }
+      return linha;
+    });
+  }, [pontos, mediasCompletas, offset, periodosMm]);
 
-  const todosValores = [
-    ...pontos.map((p) => p.cotacao),
-    ...series.flatMap((s) => s.valores).filter((v): v is number => v !== null),
-  ];
-
-  const minV = Math.min(...todosValores);
-  const maxV = Math.max(...todosValores);
-  const padding = Math.max(0.01, (maxV - minV) * 0.1);
-  const yMin = minV - padding;
-  const yMax = maxV + padding;
-  const rangeV = Math.max(0.0001, yMax - yMin);
-
-  const n = pontos.length;
-  const x = (i: number) => padL + (n <= 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
-  const y = (v: number) => H - padB - ((v - yMin) / rangeV) * (H - padT - padB);
-
-  const yTicks = [yMin, (yMin + yMax) / 2, yMax];
-  const xTicksIdx = n <= 4 ? pontos.map((_, i) => i) : [0, Math.floor(n / 2), n - 1];
-
-  let dLinha = "";
-  pontos.forEach((p, i) => {
-    dLinha += `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.cotacao).toFixed(1)} `;
-  });
+  const tooltipSeries = useMemo(
+    () => [
+      { key: "cotacao", label: "USD/BRL", cor: "var(--color-accent)" },
+      ...periodosMm.map((p) => ({ key: `mm${p}`, label: `MM${p}`, cor: CORES_MM[p] })),
+    ],
+    [periodosMm]
+  );
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Gráfico de evolução do dólar">
-      {yTicks.map((t) => (
-        <g key={t}>
-          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="var(--color-border)" strokeWidth={1} />
-          <text x={4} y={y(t) + 3} fontSize={9} fill="var(--color-faint)">
-            R$ {t.toFixed(2)}
-          </text>
-        </g>
-      ))}
-
-      {xTicksIdx.map((i) => (
-        <text key={i} x={x(i)} y={H - 6} fontSize={9} fill="var(--color-faint)" textAnchor="middle">
-          {formatarData(pontos[i].data)}
-        </text>
-      ))}
-
-      <path d={dLinha} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} />
-
-      {series.map((s) => {
-        let d = "";
-        let comecou = false;
-        s.valores.forEach((v, i) => {
-          if (v === null) {
-            comecou = false;
-            return;
-          }
-          d += `${comecou ? "L" : "M"} ${x(i).toFixed(1)} ${y(v).toFixed(1)} `;
-          comecou = true;
-        });
-        return d ? (
-          <path key={s.periodo} d={d} fill="none" stroke={CORES_MM[s.periodo]} strokeWidth={1.5} strokeDasharray="4 2" />
-        ) : null;
-      })}
-
-      {series.length > 0 && (
-        <g>
-          <g transform={`translate(${padL}, ${padT})`}>
-            <rect width={8} height={8} fill="var(--color-accent)" />
-            <text x={12} y={8} fontSize={9} fill="var(--color-muted)">
-              USD/BRL
-            </text>
-          </g>
-          {series.map((s, i) => (
-            <g key={s.periodo} transform={`translate(${padL + 90 + i * 70}, ${padT})`}>
-              <rect width={8} height={8} fill={CORES_MM[s.periodo]} />
-              <text x={12} y={8} fontSize={9} fill="var(--color-muted)">
-                MM{s.periodo}
-              </text>
-            </g>
-          ))}
-        </g>
-      )}
-    </svg>
+    <ResponsiveContainer width="100%" height={300}>
+      <LineChart data={dados} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          dataKey="data"
+          tickFormatter={formatarData}
+          tick={{ fontSize: 10, fill: "var(--color-faint)" }}
+          axisLine={{ stroke: "var(--color-border)" }}
+          tickLine={false}
+          minTickGap={40}
+        />
+        <YAxis
+          tickFormatter={(v: number) => `R$ ${v.toFixed(2)}`}
+          tick={{ fontSize: 10, fill: "var(--color-faint)" }}
+          axisLine={false}
+          tickLine={false}
+          width={64}
+          domain={["auto", "auto"]}
+        />
+        <RechartsTooltip
+          content={<TooltipDolar series={tooltipSeries} />}
+          cursor={{ stroke: "var(--color-border-strong)", strokeDasharray: "3 3" }}
+        />
+        <Line type="monotone" dataKey="cotacao" stroke="var(--color-accent)" strokeWidth={1.5} dot={false} activeDot={{ r: 5 }} name="USD/BRL" />
+        {periodosMm.map((p) => (
+          <Line
+            key={p}
+            type="monotone"
+            dataKey={`mm${p}`}
+            stroke={CORES_MM[p]}
+            strokeWidth={1.5}
+            strokeDasharray="4 2"
+            dot={false}
+            connectNulls
+            name={`MM${p}`}
+          />
+        ))}
+        {periodosMm.length > 0 && <Legend wrapperStyle={{ fontSize: 11, color: "var(--color-muted)" }} />}
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
 

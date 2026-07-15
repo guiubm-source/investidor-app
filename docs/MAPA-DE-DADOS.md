@@ -1182,6 +1182,95 @@ Arquivos tocados (não exaustivo, ~15 arquivos): `AtivoDetalheView.tsx`,
 `components/suitability/SuitabilityWizard.tsx`. Nova classe `.btn-danger`
 em `globals.css` para o botão de confirmar exclusão da modal.
 
+### 8.14 Indicadores — migração para Recharts, banda de meta em degraus, stats duplicadas no topo, e dois bugs do Dólar (2026-07-15)
+
+Guilherme reportou, a partir de screenshots da aba Indicadores em produção,
+que os três gráficos (Selic/IPCA/Dólar) precisavam de mais informação e
+tooltip ao passar o mouse, que o gráfico do IPCA não desenhava a meta de
+inflação cadastrada em Configurações, que as estatísticas do histórico
+(Selic e IPCA) só apareciam no rodapé, e que o Dólar não estava trazendo o
+histórico de cotação atualizado. Decisões levantadas via protocolo da seção
+1 (uma pergunta por vez, com mockups visuais antes de cada pergunta):
+
+1. **Troca de motor de gráfico: SVG artesanal → Recharts.** A decisão
+   original (§8.7, "sem nova dependência") foi revertida deliberadamente —
+   Guilherme escolheu "Trocar por Recharts" ao ver os dois modelos lado a
+   lado, priorizando tooltip nativo com valor + competência/data e menos
+   código de desenho manual (paths SVG, ticks, eixo) sobre o risco de
+   instalação de dependência nova. `recharts@2.15.4` foi instalado com
+   sucesso (`npm install recharts@2 --save`). Os três gráficos
+   (`GraficoSelicRecharts` em `AbaSelic.tsx`, `GraficoIpcaRecharts` em
+   `AbaIpca.tsx`, `GraficoDolarRecharts` em `AbaDolar.tsx`) foram
+   reescritos usando `ResponsiveContainer`/`LineChart`/`ComposedChart` +
+   um componente de tooltip customizado por aba (`TooltipSelic`,
+   `TooltipIpca`, `TooltipDolar`) que lê o `payload` do Recharts e formata
+   valor(es) + data/competência no mesmo estilo visual do resto do app
+   (`bg-surface-2`, `border-border-strong`). O componente genérico
+   `SerieLinhaChart.tsx` (usado em Ativo/rentabilidade) **não foi tocado**
+   — é compartilhado com outras features e ficou fora do escopo deste
+   pedido; cada aba de Indicadores agora tem seu próprio componente de
+   gráfico Recharts local, não um componente genérico entre as três.
+2. **Banda de meta do IPCA: histórica "em degraus", não só a meta de
+   hoje.** O gráfico do IPCA passou a desenhar a banda
+   (`bandaInferior`/`bandaSuperior`) e a linha central (`metaCentral`) da
+   meta de inflação vigente **em cada época**, não uma banda fixa com o
+   valor atual aplicado a todo o histórico — reaproveita
+   `encontrarMetaVigente()` (já existente em `ipca-estatisticas.ts`, mesma
+   função usada no servidor em `obterIpca()`) competência a competência,
+   agrupando em segmentos contíguos (`segmentosMetaPorCompetencia()`, novo,
+   em `AbaIpca.tsx`) sempre que a meta vigente muda de `id`. Cada segmento
+   vira um par `ReferenceArea` (banda) + `ReferenceLine` (linha central) do
+   Recharts, renderizados só entre o `anoMesInicio`/`anoMesFim` daquele
+   segmento — visualmente, a banda "sobe e desce em degraus" acompanhando
+   as metas históricas cadastradas.
+3. **Estatísticas do histórico duplicadas no topo, bloco completo (não
+   resumido).** Tanto em Selic quanto em IPCA, o bloco de estatísticas
+   (`StatsResumo`/`StatsResumoIpca`) — que antes só existia dentro de
+   `BlocoHistorico`, no rodapé — passou a ser renderizado **também** logo
+   após os cards, no topo da aba, com o mesmo nível de detalhe completo nos
+   dois lugares (não uma versão condensada no topo). Decisão explícita do
+   Guilherme ("bloco completo e tudo no topo") ao comparar com a alternativa
+   de uma faixa resumida. Implementado como duplicação direta do mesmo
+   componente em dois pontos da árvore — sem introduzir estado novo nem
+   lógica condicional — porque o bloco já é derivado (calculado a partir de
+   `ipca`/`selic` na leitura, ver §3 "fonte única de verdade"): duplicar a
+   *exibição* de um valor já calculado não viola a regra, só duplicaria
+   dado se fosse armazenado duas vezes no banco.
+4. **Dólar: dois bugs reais encontrados e corrigidos, não relacionados à
+   troca de gráfico.** O sintoma relatado ("não está com o histórico da
+   cotação atual") foi diagnosticado em duas camadas:
+   - **Bug real (causa raiz): `obterDolar()` em `lib/indicadores/actions.ts`
+     buscava a tabela `indicador_dolar_diario` sem paginação.** O Supabase/
+     PostgREST tem um teto rígido de linhas por resposta (`db-max-rows`,
+     default 1000) que um `.range()` maior no cliente **não consegue
+     ultrapassar** — o servidor corta em 1000 linhas independentemente do
+     range pedido. Como a tabela tem ~6900 linhas (desde 1999) ordenadas
+     ascendente, a UI só via as 1000 mais antigas — daí a tela mostrar
+     cotação de 2002. Corrigido com um novo helper
+     `buscarTodasCotacoesDolar()` que pagina em loop (`.range(pagina*1000,
+     pagina*1000+999)`) até uma página vir com menos de 1000 linhas. O
+     mesmo bug existia em `detectarBuracos()` (rota de diagnóstico do cron,
+     `src/app/api/cron/dolar/route.ts`) e foi corrigido do mesmo jeito.
+     **Esse foi o fix que efetivamente resolveu o problema em produção**,
+     confirmado pelo Guilherme.
+   - **Robustez defensiva no cron (não era a causa raiz, mas ficou
+     corrigida):** `JANELA_MAX_DIAS` reduzida de 3650 para 1095 dias por
+     chamada à API do Bacen (menor risco de truncamento silencioso de uma
+     janela grande), e o cursor de busca passou a avançar a partir da
+     **última data efetivamente recebida** na resposta do Bacen — não do
+     fim da janela pedida — para que um truncamento silencioso não deixe
+     mais um buraco permanente no histórico. Dois novos modos de
+     diagnóstico/manutenção na mesma rota: `?modo=diagnostico` (só leitura:
+     total de linhas, primeira/última data, buracos) e
+     `?modo=preencherGaps` (detecta e busca especificamente os intervalos
+     faltantes).
+
+Arquivos tocados: `src/app/(app)/indicadores/AbaSelic.tsx`, `AbaIpca.tsx`,
+`AbaDolar.tsx` (reescritos com Recharts), `src/lib/indicadores/actions.ts`
+(paginação de `obterDolar()`), `src/app/api/cron/dolar/route.ts`
+(paginação de `detectarBuracos()` + robustez de janela/cursor + modos de
+diagnóstico), `package.json` (nova dependência `recharts@2`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

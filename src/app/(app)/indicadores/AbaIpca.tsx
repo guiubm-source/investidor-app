@@ -4,6 +4,21 @@ import { Fragment, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  Area,
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ReferenceArea,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import type { TooltipProps } from "recharts";
+import {
   CATEGORIAS_IPCA,
   ipcaCompetenciaSchema,
   importarIpcaSchema,
@@ -19,7 +34,8 @@ import {
   type IpcaCompetencia,
   type IpcaView,
 } from "@/lib/indicadores/actions";
-import { GRUPOS_IPCA, type GrupoIpca, type MetaInflacaoVigente } from "@/lib/indicadores/ipca-estatisticas";
+import type { MetaInflacao } from "@/lib/referencia/actions";
+import { encontrarMetaVigente, GRUPOS_IPCA, type GrupoIpca } from "@/lib/indicadores/ipca-estatisticas";
 import { calcularMediaMovel } from "@/lib/indicadores/selic-estatisticas";
 import ConfirmModal from "@/components/ConfirmModal";
 import { useToast } from "@/components/ToastProvider";
@@ -69,6 +85,9 @@ export default function AbaIpca({ ipca, onAtualizar }: { ipca: IpcaView; onAtual
   return (
     <div className="space-y-4">
       <BlocoCards ipca={ipca} />
+      <div className="card">
+        <StatsResumoIpca ipca={ipca} />
+      </div>
       <BlocoInsights insights={ipca.insights} />
       <BlocoGrafico ipca={ipca} />
       <BlocoHistorico ipca={ipca} onAtualizar={onAtualizar} />
@@ -214,8 +233,8 @@ function BlocoInsights({ insights }: { insights: string[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Bloco 2 — Gráfico de evolução (SVG artesanal, mesmo padrão da Selic — ver
-// docs/MAPA-DE-DADOS.md §8.7/§8.8) + Heatmap dos 9 grupos × competências.
+// Bloco 2 — Gráfico de evolução (Recharts — ver docs/MAPA-DE-DADOS.md §8.7/§8.8)
+// + Heatmap dos 9 grupos × competências.
 // ---------------------------------------------------------------------------
 
 type PeriodoFiltro = "todos" | "12m" | "24m" | "5a" | "10a" | "personalizado";
@@ -390,14 +409,14 @@ function BlocoGrafico({ ipca }: { ipca: IpcaView }) {
       ) : filtradas.length < 2 ? (
         <p className="text-sm text-faint">Poucos pontos para desenhar o gráfico com esse filtro (mínimo 2).</p>
       ) : (
-        <GraficoIpcaSvg
+        <GraficoIpcaRecharts
           competencias={filtradas}
           modo={modo}
           grupo={grupoSelecionado}
           grupos={gruposSelecionados}
           tipo={tipo}
           mediaMovel={mediaMovel}
-          metaVigente={mostrarMeta ? ipca.metaVigente : null}
+          metas={mostrarMeta ? ipca.metas : null}
         />
       )}
     </div>
@@ -416,14 +435,79 @@ const CORES_GRUPOS = [
   "#f97316",
 ];
 
-function GraficoIpcaSvg({
+/**
+ * Agrupa as competências em segmentos onde a meta vigente é a MESMA
+ * (identificada por `id`), formando os "degraus" da banda — decisão
+ * 2026-07-15: a banda reflete a meta que valia em cada época, não só a
+ * meta de hoje. `encontrarMetaVigente` já existe em ipca-estatisticas.ts
+ * (mesma lógica usada no servidor em obterIpca()).
+ */
+function segmentosMetaPorCompetencia(
+  competencias: IpcaCompetencia[],
+  metas: MetaInflacao[]
+): { anoMesInicio: string; anoMesFim: string; bandaInferior: number; bandaSuperior: number; metaCentral: number }[] {
+  const segmentos: { id: string; anoMesInicio: string; anoMesFim: string; bandaInferior: number; bandaSuperior: number; metaCentral: number }[] = [];
+
+  for (const c of competencias) {
+    const vigente = encontrarMetaVigente(metas, c.anoMes) as MetaInflacao | null;
+    if (!vigente) continue;
+    const ultimo = segmentos[segmentos.length - 1];
+    if (ultimo && ultimo.id === vigente.id) {
+      ultimo.anoMesFim = c.anoMes;
+    } else {
+      segmentos.push({
+        id: vigente.id,
+        anoMesInicio: c.anoMes,
+        anoMesFim: c.anoMes,
+        bandaInferior: vigente.bandaInferior,
+        bandaSuperior: vigente.bandaSuperior,
+        metaCentral: vigente.metaCentral,
+      });
+    }
+  }
+
+  return segmentos;
+}
+
+function TooltipIpca({
+  active,
+  payload,
+  label,
+  series,
+}: TooltipProps<number, string> & { series: { key: string; label: string; cor: string }[] }) {
+  if (!active || !payload || payload.length === 0 || typeof label !== "string") return null;
+  return (
+    <div className="rounded-md border border-border-strong bg-surface-2 px-3 py-2 shadow-sm">
+      <p className="text-xs text-ink mb-1">{formatarCompetencia(label)}</p>
+      {series.map((s) => {
+        const v = payload.find((p) => p.dataKey === s.key)?.value as number | undefined;
+        if (v == null) return null;
+        return (
+          <p key={s.key} className="text-xs" style={{ color: s.cor }}>
+            {s.label}: {v.toFixed(2)}%
+          </p>
+        );
+      })}
+      {(() => {
+        const mm = payload.find((p) => p.dataKey === "mediaMovel")?.value as number | undefined;
+        return mm != null ? <p className="text-xs text-muted">Média móvel: {mm.toFixed(2)}%</p> : null;
+      })()}
+      {(() => {
+        const meta = payload.find((p) => p.dataKey === "metaCentral")?.value as number | undefined;
+        return meta != null ? <p className="text-xs text-faint">Meta central: {meta.toFixed(2)}%</p> : null;
+      })()}
+    </div>
+  );
+}
+
+function GraficoIpcaRecharts({
   competencias,
   modo,
   grupo,
   grupos,
   tipo,
   mediaMovel,
-  metaVigente,
+  metas,
 }: {
   competencias: IpcaCompetencia[];
   modo: ModoVisualizacao;
@@ -431,184 +515,139 @@ function GraficoIpcaSvg({
   grupos: Set<GrupoIpca>;
   tipo: TipoGrafico;
   mediaMovel: (number | null)[] | null;
-  metaVigente: MetaInflacaoVigente | null;
+  metas: IpcaView["metas"] | null;
 }) {
-  const W = 900;
-  const H = 280;
-  const padL = 44;
-  const padR = 12;
-  const padT = 14;
-  const padB = 26;
-
-  type Serie = { label: string; cor: string; valores: (number | null)[] };
+  type Serie = { key: string; label: string; cor: string };
   const series: Serie[] = useMemo(() => {
     if (modo === "geral") {
-      return [{ label: "IPCA geral", cor: "var(--color-accent)", valores: competencias.map((c) => c.geral) }];
+      return [{ key: "geral", label: "IPCA geral", cor: "var(--color-accent)" }];
     }
     if (modo === "grupo") {
-      return [{ label: labelGrupo(grupo), cor: "var(--color-accent)", valores: competencias.map((c) => c.grupos[grupo]) }];
+      return [{ key: "valor", label: labelGrupo(grupo), cor: "var(--color-accent)" }];
     }
     const lista = GRUPOS_IPCA.filter((g) => grupos.has(g));
-    return lista.map((g, i) => ({
-      label: labelGrupo(g),
-      cor: CORES_GRUPOS[i % CORES_GRUPOS.length],
-      valores: competencias.map((c) => c.grupos[g]),
-    }));
-  }, [modo, grupo, grupos, competencias]);
+    return lista.map((g, i) => ({ key: g, label: labelGrupo(g), cor: CORES_GRUPOS[i % CORES_GRUPOS.length] }));
+  }, [modo, grupo, grupos]);
 
-  const todosValores = series.flatMap((s) => s.valores).filter((v): v is number => v !== null);
-  if (mediaMovel) todosValores.push(...mediaMovel.filter((v): v is number => v !== null));
-  if (metaVigente) todosValores.push(metaVigente.bandaInferior, metaVigente.bandaSuperior, metaVigente.metaCentral);
+  const dados = useMemo(() => {
+    return competencias.map((c, i) => {
+      const linha: Record<string, number | string | null> = { anoMes: c.anoMes };
+      if (modo === "geral") linha.geral = c.geral;
+      else if (modo === "grupo") linha.valor = c.grupos[grupo];
+      else for (const g of GRUPOS_IPCA) if (grupos.has(g)) linha[g] = c.grupos[g];
+      linha.mediaMovel = mediaMovel ? mediaMovel[i] : null;
+      return linha;
+    });
+  }, [competencias, modo, grupo, grupos, mediaMovel]);
 
-  if (todosValores.length === 0 || series.length === 0) {
+  const segmentosMeta = useMemo(() => {
+    if (!metas) return [];
+    return segmentosMetaPorCompetencia(competencias, metas);
+  }, [competencias, metas]);
+
+  if (series.length === 0) {
     return <p className="text-sm text-faint">Sem dados suficientes para desenhar.</p>;
   }
 
-  const minV = Math.min(...todosValores, 0);
-  const maxV = Math.max(...todosValores);
-  const padding = Math.max(0.1, (maxV - minV) * 0.15);
-  const yMin = minV - padding;
-  const yMax = maxV + padding;
-  const rangeV = Math.max(0.01, yMax - yMin);
-
-  const n = competencias.length;
-  const x = (i: number) => padL + (n <= 1 ? 0 : (i / (n - 1)) * (W - padL - padR));
-  const y = (v: number) => H - padB - ((v - yMin) / rangeV) * (H - padT - padB);
-
-  const yTicks = [yMin, (yMin + yMax) / 2, yMax];
-  const xTicksIdx = n <= 4 ? competencias.map((_, i) => i) : [0, Math.floor(n / 2), n - 1];
-  const larguraColuna = Math.max(2, ((W - padL - padR) / Math.max(1, n)) * 0.6);
-
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Gráfico de evolução do IPCA">
-      {yTicks.map((t) => (
-        <g key={t}>
-          <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="var(--color-border)" strokeWidth={1} />
-          <text x={4} y={y(t) + 3} fontSize={9} fill="var(--color-faint)">
-            {t.toFixed(2)}%
-          </text>
-        </g>
-      ))}
+    <ResponsiveContainer width="100%" height={320}>
+      <ComposedChart data={dados} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+        <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          dataKey="anoMes"
+          tickFormatter={formatarCompetencia}
+          tick={{ fontSize: 10, fill: "var(--color-faint)" }}
+          axisLine={{ stroke: "var(--color-border)" }}
+          tickLine={false}
+          minTickGap={40}
+        />
+        <YAxis
+          tickFormatter={(v: number) => `${v.toFixed(1)}%`}
+          tick={{ fontSize: 10, fill: "var(--color-faint)" }}
+          axisLine={false}
+          tickLine={false}
+          width={48}
+          domain={["auto", "auto"]}
+        />
+        <RechartsTooltip content={<TooltipIpca series={series} />} cursor={{ stroke: "var(--color-border-strong)", strokeDasharray: "3 3" }} />
 
-      {xTicksIdx.map((i) => (
-        <text key={i} x={x(i)} y={H - 6} fontSize={9} fill="var(--color-faint)" textAnchor="middle">
-          {formatarCompetencia(competencias[i].anoMes)}
-        </text>
-      ))}
-
-      {metaVigente && (
-        <>
-          <rect
-            x={padL}
-            y={y(metaVigente.bandaSuperior)}
-            width={W - padL - padR}
-            height={Math.max(0, y(metaVigente.bandaInferior) - y(metaVigente.bandaSuperior))}
+        {segmentosMeta.map((s) => (
+          <ReferenceArea
+            key={`banda-${s.anoMesInicio}`}
+            x1={s.anoMesInicio}
+            x2={s.anoMesFim}
+            y1={s.bandaInferior}
+            y2={s.bandaSuperior}
             fill="var(--color-accent)"
             fillOpacity={0.08}
+            stroke="none"
+            ifOverflow="extendDomain"
           />
-          <line
-            x1={padL}
-            x2={W - padR}
-            y1={y(metaVigente.metaCentral)}
-            y2={y(metaVigente.metaCentral)}
+        ))}
+        {segmentosMeta.map((s) => (
+          <ReferenceLine
+            key={`centro-${s.anoMesInicio}`}
+            segment={[
+              { x: s.anoMesInicio, y: s.metaCentral },
+              { x: s.anoMesFim, y: s.metaCentral },
+            ]}
             stroke="var(--color-muted)"
             strokeDasharray="2 2"
             strokeWidth={1}
+            ifOverflow="extendDomain"
           />
-        </>
-      )}
+        ))}
 
-      {tipo === "coluna" &&
-        series[0]?.valores.map((v, i) =>
-          v === null ? null : (
-            <rect
-              key={i}
-              x={x(i) - larguraColuna / 2}
-              y={Math.min(y(v), y(0))}
-              width={larguraColuna}
-              height={Math.max(0.5, Math.abs(y(v) - y(0)))}
-              fill={series[0].cor}
-              fillOpacity={0.7}
-            >
-              <title>
-                {formatarCompetencia(competencias[i].anoMes)}: {v.toFixed(2)}%
-              </title>
-            </rect>
-          )
+        {tipo === "coluna" &&
+          series.map((s) => <Bar key={s.key} dataKey={s.key} fill={s.cor} fillOpacity={0.75} name={s.label} />)}
+
+        {tipo === "area" &&
+          series.map((s) => (
+            <Area
+              key={s.key}
+              type="monotone"
+              dataKey={s.key}
+              stroke={s.cor}
+              strokeWidth={2}
+              fill={s.cor}
+              fillOpacity={0.15}
+              dot={{ r: 2.5, fill: s.cor, strokeWidth: 0 }}
+              name={s.label}
+              connectNulls
+            />
+          ))}
+
+        {tipo === "linha" &&
+          series.map((s) => (
+            <Line
+              key={s.key}
+              type="monotone"
+              dataKey={s.key}
+              stroke={s.cor}
+              strokeWidth={2}
+              dot={{ r: 2.5, fill: s.cor, strokeWidth: 0 }}
+              activeDot={{ r: 5 }}
+              name={s.label}
+              connectNulls
+            />
+          ))}
+
+        {mediaMovel && (
+          <Line
+            type="monotone"
+            dataKey="mediaMovel"
+            stroke="var(--color-muted)"
+            strokeDasharray="4 3"
+            strokeWidth={1.5}
+            dot={false}
+            connectNulls
+            name="Média móvel"
+          />
         )}
 
-      {tipo !== "coluna" &&
-        series.map((s) => {
-          let d = "";
-          let comecou = false;
-          s.valores.forEach((v, i) => {
-            if (v === null) {
-              comecou = false;
-              return;
-            }
-            d += `${comecou ? "L" : "M"} ${x(i).toFixed(1)} ${y(v).toFixed(1)} `;
-            comecou = true;
-          });
-
-          let dArea = "";
-          if (tipo === "area") {
-            const pontosValidos: { x: number; v: number }[] = [];
-            s.valores.forEach((v, i) => {
-              if (v !== null) pontosValidos.push({ x: x(i), v });
-            });
-            if (pontosValidos.length > 0) {
-              dArea =
-                `M ${pontosValidos[0].x} ${y(0)} ` +
-                pontosValidos.map((p) => `L ${p.x} ${y(p.v)}`).join(" ") +
-                ` L ${pontosValidos[pontosValidos.length - 1].x} ${y(0)} Z`;
-            }
-          }
-
-          return (
-            <g key={s.label}>
-              {tipo === "area" && dArea && <path d={dArea} fill={s.cor} fillOpacity={0.15} stroke="none" />}
-              <path d={d} fill="none" stroke={s.cor} strokeWidth={2} />
-              {s.valores.map((v, i) =>
-                v === null ? null : (
-                  <circle key={i} cx={x(i)} cy={y(v)} r={2.5} fill={s.cor}>
-                    <title>
-                      {s.label} — {formatarCompetencia(competencias[i].anoMes)}: {v.toFixed(2)}%
-                    </title>
-                  </circle>
-                )
-              )}
-            </g>
-          );
-        })}
-
-      {mediaMovel &&
-        (() => {
-          let d = "";
-          let comecou = false;
-          mediaMovel.forEach((v, i) => {
-            if (v === null) {
-              comecou = false;
-              return;
-            }
-            d += `${comecou ? "L" : "M"} ${x(i).toFixed(1)} ${y(v).toFixed(1)} `;
-            comecou = true;
-          });
-          return d ? <path d={d} fill="none" stroke="var(--color-muted)" strokeWidth={1.5} strokeDasharray="4 3" /> : null;
-        })()}
-
-      {series.length > 1 && (
-        <g>
-          {series.map((s, i) => (
-            <g key={s.label} transform={`translate(${padL + i * 110}, ${padT})`}>
-              <rect width={8} height={8} fill={s.cor} />
-              <text x={12} y={8} fontSize={9} fill="var(--color-muted)">
-                {s.label}
-              </text>
-            </g>
-          ))}
-        </g>
-      )}
-    </svg>
+        {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: "var(--color-muted)" }} />}
+      </ComposedChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -863,7 +902,9 @@ function BlocoHistorico({ ipca, onAtualizar }: { ipca: IpcaView; onAtualizar: ()
         />
       )}
 
-      <StatsResumoIpca ipca={ipca} />
+      <div className="border-t border-border">
+        <StatsResumoIpca ipca={ipca} />
+      </div>
     </div>
   );
 }
@@ -993,7 +1034,7 @@ function StatsResumoIpca({ ipca }: { ipca: IpcaView }) {
     .sort((a, b) => (b.correlacao ?? 0) - (a.correlacao ?? 0));
 
   return (
-    <div className="px-4 py-3 border-t border-border space-y-4">
+    <div className="px-4 py-3 space-y-4">
       <div>
         <p className="text-xs text-faint mb-2">Estatísticas do histórico (índice geral)</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
