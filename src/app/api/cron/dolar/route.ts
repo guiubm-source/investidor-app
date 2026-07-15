@@ -21,7 +21,12 @@ export const maxDuration = 60;
 
 const SGS_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.1/dados";
 const INICIO_CAMBIO_FLUTUANTE = "1999-01-04";
-const JANELA_MAX_DIAS = 3650; // ~10 anos por chamada — limite prático da API do Bacen para intervalos grandes
+// Janelas menores (~3 anos) — reduz o risco da API do Bacen truncar
+// silenciosamente uma resposta muito grande sem retornar erro (ver
+// correção 2026-07-15 abaixo: mesmo se isso acontecer, o cursor agora
+// avança a partir da ÚLTIMA DATA REALMENTE RECEBIDA, não do fim da janela
+// pedida, então um truncamento não abre mais um buraco permanente).
+const JANELA_MAX_DIAS = 1095;
 
 function autenticado(request: NextRequest): boolean {
   const segredo = process.env.CRON_SECRET;
@@ -70,13 +75,126 @@ async function buscarJanela(inicioIso: string, fimIso: string): Promise<{ data: 
   return resultado;
 }
 
+type SupabaseAdmin = ReturnType<typeof createAdminClient>;
+
+/**
+ * Preenche um intervalo [inicio, fim] em janelas de JANELA_MAX_DIAS,
+ * avançando o cursor pela última data REALMENTE recebida (não pelo fim da
+ * janela pedida) — autocorrige truncamento silencioso da API do Bacen em
+ * vez de pular e deixar um buraco permanente. Usada tanto na atualização
+ * incremental diária quanto no preenchimento de buracos pontuais.
+ */
+async function preencherIntervalo(
+  supabase: SupabaseAdmin,
+  inicio: string,
+  fim: string
+): Promise<{ inseridos: number; avisos: string[] } | { erro: string; status: number }> {
+  let cursor = inicio;
+  let totalInseridos = 0;
+  const avisos: string[] = [];
+
+  while (cursor <= fim) {
+    const fimJanela = adicionarDias(cursor, JANELA_MAX_DIAS) > fim ? fim : adicionarDias(cursor, JANELA_MAX_DIAS);
+
+    try {
+      const linhas = await buscarJanela(cursor, fimJanela);
+
+      if (linhas.length > 0) {
+        const { error: erroUpsert } = await supabase
+          .from("indicador_dolar_diario")
+          .upsert(linhas, { onConflict: "data" });
+
+        if (erroUpsert) {
+          return { erro: `Erro ao gravar intervalo ${cursor} a ${fimJanela}: ${erroUpsert.message}`, status: 500 };
+        }
+        totalInseridos += linhas.length;
+
+        const ultimaDataRecebida = linhas.reduce(
+          (max, l) => (l.data > max ? l.data : max),
+          linhas[0].data
+        );
+        if (ultimaDataRecebida < fimJanela) {
+          avisos.push(
+            `Resposta do Bacen para ${cursor} a ${fimJanela} veio incompleta — só chegou até ${ultimaDataRecebida}. Retomando dali.`
+          );
+        }
+        cursor = adicionarDias(ultimaDataRecebida, 1);
+      } else {
+        avisos.push(`Sem dados do Bacen entre ${cursor} e ${fimJanela} (feriados/fim de semana ou intervalo sem pregão).`);
+        cursor = adicionarDias(fimJanela, 1);
+      }
+    } catch (e) {
+      return {
+        erro: e instanceof Error ? e.message : "Erro desconhecido ao buscar dados do Bacen.",
+        status: 502,
+      };
+    }
+  }
+
+  return { inseridos: totalInseridos, avisos };
+}
+
+const LIMIAR_BURACO_DIAS = 10; // acima disso não é feriado/fim de semana normal — é buraco de verdade
+
+function diffDias(a: string, b: string): number {
+  const ta = new Date(`${a}T00:00:00Z`).getTime();
+  const tb = new Date(`${b}T00:00:00Z`).getTime();
+  return Math.round((tb - ta) / 86400000);
+}
+
+/** Varre todas as datas salvas e retorna os intervalos [fim-anterior+1, começo-seguinte-1] onde falta dado. */
+async function detectarBuracos(supabase: SupabaseAdmin): Promise<{ de: string; ate: string; diasFaltando: number }[]> {
+  const { data: linhas, error } = await supabase
+    .from("indicador_dolar_diario")
+    .select("data")
+    .order("data", { ascending: true })
+    .range(0, 19999);
+
+  if (error || !linhas || linhas.length < 2) return [];
+
+  const buracos: { de: string; ate: string; diasFaltando: number }[] = [];
+  for (let i = 1; i < linhas.length; i++) {
+    const anterior = linhas[i - 1].data as string;
+    const atual = linhas[i].data as string;
+    const dias = diffDias(anterior, atual);
+    if (dias > LIMIAR_BURACO_DIAS) {
+      buracos.push({ de: adicionarDias(anterior, 1), ate: adicionarDias(atual, -1), diasFaltando: dias - 1 });
+    }
+  }
+  return buracos;
+}
+
 export async function GET(request: NextRequest) {
   if (!autenticado(request)) {
     return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
   }
 
   const supabase = createAdminClient();
+  const modo = request.nextUrl.searchParams.get("modo");
 
+  // Modo diagnóstico: só lista buracos no histórico, não escreve nada.
+  if (modo === "diagnostico") {
+    const buracos = await detectarBuracos(supabase);
+    return NextResponse.json({ ok: true, buracos });
+  }
+
+  // Modo preencher buracos: detecta e busca no Bacen especificamente os
+  // intervalos faltantes (além da atualização incremental normal).
+  if (modo === "preencherGaps") {
+    const buracos = await detectarBuracos(supabase);
+    const resultados: { de: string; ate: string; inseridos?: number; erro?: string }[] = [];
+    for (const buraco of buracos) {
+      const resultado = await preencherIntervalo(supabase, buraco.de, buraco.ate);
+      if ("erro" in resultado) {
+        resultados.push({ de: buraco.de, ate: buraco.ate, erro: resultado.erro });
+      } else {
+        resultados.push({ de: buraco.de, ate: buraco.ate, inseridos: resultado.inseridos });
+      }
+    }
+    return NextResponse.json({ ok: true, buracosEncontrados: buracos.length, resultados });
+  }
+
+  // Modo padrão: atualização incremental (última data salva + 1 até hoje).
   const { data: ultimaLinha, error: erroConsulta } = await supabase
     .from("indicador_dolar_diario")
     .select("data")
@@ -95,40 +213,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, mensagem: "Já está atualizado — nenhum dia novo pra buscar.", inseridos: 0 });
   }
 
-  let cursor = inicio;
-  let totalInseridos = 0;
-  const avisos: string[] = [];
-
-  while (cursor <= fim) {
-    const fimJanela = adicionarDias(cursor, JANELA_MAX_DIAS) > fim ? fim : adicionarDias(cursor, JANELA_MAX_DIAS);
-
-    try {
-      const linhas = await buscarJanela(cursor, fimJanela);
-
-      if (linhas.length > 0) {
-        const { error: erroUpsert } = await supabase
-          .from("indicador_dolar_diario")
-          .upsert(linhas, { onConflict: "data" });
-
-        if (erroUpsert) {
-          return NextResponse.json(
-            { error: `Erro ao gravar intervalo ${cursor} a ${fimJanela}: ${erroUpsert.message}`, inseridosAntes: totalInseridos },
-            { status: 500 }
-          );
-        }
-        totalInseridos += linhas.length;
-      } else {
-        avisos.push(`Sem dados do Bacen entre ${cursor} e ${fimJanela} (feriados/fim de semana ou intervalo sem pregão).`);
-      }
-    } catch (e) {
-      return NextResponse.json(
-        { error: e instanceof Error ? e.message : "Erro desconhecido ao buscar dados do Bacen.", inseridosAntes: totalInseridos },
-        { status: 502 }
-      );
-    }
-
-    cursor = adicionarDias(fimJanela, 1);
+  const resultado = await preencherIntervalo(supabase, inicio, fim);
+  if ("erro" in resultado) {
+    return NextResponse.json({ error: resultado.erro }, { status: resultado.status });
   }
 
-  return NextResponse.json({ ok: true, periodo: { inicio, fim }, inseridos: totalInseridos, avisos });
+  return NextResponse.json({ ok: true, periodo: { inicio, fim }, inseridos: resultado.inseridos, avisos: resultado.avisos });
 }
