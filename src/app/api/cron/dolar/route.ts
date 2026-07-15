@@ -142,7 +142,12 @@ function diffDias(a: string, b: string): number {
   return Math.round((tb - ta) / 86400000);
 }
 
-/** Varre todas as datas salvas e retorna os intervalos [fim-anterior+1, começo-seguinte-1] onde falta dado. */
+/**
+ * Varre todas as datas salvas e retorna os intervalos onde falta dado:
+ * buracos internos (entre duas linhas existentes) E o buraco inicial, se a
+ * primeira linha salva for muito depois de INICIO_CAMBIO_FLUTUANTE (sinal de
+ * que o backfill de 1999 nunca rodou até o fim).
+ */
 async function detectarBuracos(supabase: SupabaseAdmin): Promise<{ de: string; ate: string; diasFaltando: number }[]> {
   const { data: linhas, error } = await supabase
     .from("indicador_dolar_diario")
@@ -150,9 +155,16 @@ async function detectarBuracos(supabase: SupabaseAdmin): Promise<{ de: string; a
     .order("data", { ascending: true })
     .range(0, 19999);
 
-  if (error || !linhas || linhas.length < 2) return [];
+  if (error || !linhas || linhas.length === 0) return [];
 
   const buracos: { de: string; ate: string; diasFaltando: number }[] = [];
+
+  const primeira = linhas[0].data as string;
+  const diasAntes = diffDias(INICIO_CAMBIO_FLUTUANTE, primeira);
+  if (diasAntes > LIMIAR_BURACO_DIAS) {
+    buracos.push({ de: INICIO_CAMBIO_FLUTUANTE, ate: adicionarDias(primeira, -1), diasFaltando: diasAntes });
+  }
+
   for (let i = 1; i < linhas.length; i++) {
     const anterior = linhas[i - 1].data as string;
     const atual = linhas[i].data as string;
@@ -175,7 +187,29 @@ export async function GET(request: NextRequest) {
   // Modo diagnóstico: só lista buracos no histórico, não escreve nada.
   if (modo === "diagnostico") {
     const buracos = await detectarBuracos(supabase);
-    return NextResponse.json({ ok: true, buracos });
+    const { count } = await supabase
+      .from("indicador_dolar_diario")
+      .select("data", { count: "exact", head: true });
+    const { data: primeira } = await supabase
+      .from("indicador_dolar_diario")
+      .select("data")
+      .order("data", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    const { data: ultima } = await supabase
+      .from("indicador_dolar_diario")
+      .select("data")
+      .order("data", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return NextResponse.json({
+      ok: true,
+      totalLinhas: count,
+      primeiraData: primeira?.data ?? null,
+      ultimaData: ultima?.data ?? null,
+      inicioEsperado: INICIO_CAMBIO_FLUTUANTE,
+      buracos,
+    });
   }
 
   // Modo preencher buracos: detecta e busca no Bacen especificamente os
