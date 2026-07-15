@@ -816,19 +816,50 @@ const DOLAR_VIEW_VAZIA: DolarView = {
   ],
 };
 
+type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Busca TODAS as linhas de `indicador_dolar_diario`, paginando em lotes.
+ * Motivo: o Supabase tem um teto rígido de linhas por página no PostgREST
+ * (db-max-rows, 1000 por padrão) que um `.range()` maior NÃO consegue
+ * ultrapassar — o servidor ignora o range pedido e corta em 1000 do mesmo
+ * jeito. Como a ordenação é ascendente, isso trazia só os dados mais ANTIGOS
+ * (~1999–2002) em vez dos mais recentes — causa raiz do "dólar desatualizado"
+ * (corrigido 2026-07-15). Paginar em loop é a única forma confiável de trazer
+ * a série inteira sem depender de mudar a config do projeto no Supabase.
+ */
+async function buscarTodasCotacoesDolar(supabase: SupabaseServerClient): Promise<PontoDolar[]> {
+  const TAMANHO_PAGINA = 1000;
+  const pontos: PontoDolar[] = [];
+  let pagina = 0;
+
+  while (true) {
+    const inicio = pagina * TAMANHO_PAGINA;
+    const fim = inicio + TAMANHO_PAGINA - 1;
+    const { data, error } = await supabase
+      .from("indicador_dolar_diario")
+      .select("data, cotacao")
+      .order("data", { ascending: true })
+      .range(inicio, fim);
+
+    if (error || !data || data.length === 0) break;
+
+    pontos.push(...data.map((d) => ({ data: d.data, cotacao: Number(d.cotacao) })));
+    if (data.length < TAMANHO_PAGINA) break;
+    pagina++;
+  }
+
+  return pontos;
+}
+
 export async function obterDolar(): Promise<DolarView> {
   const supabase = await createClient();
-  const [{ data }, selic, ipca] = await Promise.all([
-    // .range() explícito: sem isso o Supabase corta em 1000 linhas por
-    // padrão, e como a ordenação é ascendente isso trazia só os dados mais
-    // ANTIGOS (~1999–2002) em vez dos mais recentes — causa raiz do "dólar
-    // desatualizado" (corrigido 2026-07-15). 19999 dá folga para décadas.
-    supabase.from("indicador_dolar_diario").select("data, cotacao").order("data", { ascending: true }).range(0, 19999),
+  const [pontosAsc, selic, ipca] = await Promise.all([
+    buscarTodasCotacoesDolar(supabase),
     obterSelic(),
     obterIpca(),
   ]);
 
-  const pontosAsc: PontoDolar[] = (data ?? []).map((d) => ({ data: d.data, cotacao: Number(d.cotacao) }));
   if (pontosAsc.length === 0) return DOLAR_VIEW_VAZIA;
 
   const cotacoesAsc = pontosAsc.map((p) => p.cotacao);

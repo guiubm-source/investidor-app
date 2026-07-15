@@ -149,13 +149,28 @@ function diffDias(a: string, b: string): number {
  * que o backfill de 1999 nunca rodou até o fim).
  */
 async function detectarBuracos(supabase: SupabaseAdmin): Promise<{ de: string; ate: string; diasFaltando: number }[]> {
-  const { data: linhas, error } = await supabase
-    .from("indicador_dolar_diario")
-    .select("data")
-    .order("data", { ascending: true })
-    .range(0, 19999);
+  // Paginado em lotes de 1000: o Supabase tem um teto rígido de linhas por
+  // página no PostgREST (db-max-rows) que um `.range()` maior sozinho NÃO
+  // ultrapassa — o servidor corta em 1000 independente do range pedido (ver
+  // mesma correção em lib/indicadores/actions.ts, 2026-07-15).
+  const TAMANHO_PAGINA = 1000;
+  const linhas: { data: string }[] = [];
+  let pagina = 0;
+  while (true) {
+    const inicio = pagina * TAMANHO_PAGINA;
+    const fim = inicio + TAMANHO_PAGINA - 1;
+    const { data: pagina_, error } = await supabase
+      .from("indicador_dolar_diario")
+      .select("data")
+      .order("data", { ascending: true })
+      .range(inicio, fim);
+    if (error || !pagina_ || pagina_.length === 0) break;
+    linhas.push(...pagina_);
+    if (pagina_.length < TAMANHO_PAGINA) break;
+    pagina++;
+  }
 
-  if (error || !linhas || linhas.length === 0) return [];
+  if (linhas.length === 0) return [];
 
   const buracos: { de: string; ate: string; diasFaltando: number }[] = [];
 
