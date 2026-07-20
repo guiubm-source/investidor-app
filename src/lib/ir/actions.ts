@@ -42,11 +42,15 @@ const CATEGORIAS_APURACAO_ANUAL: CategoriaIR[] = ["cripto_estrangeira", "interna
 
 type TransacaoRaw = {
   ativo_id: string;
-  tipo: "compra" | "venda";
+  tipo: "compra" | "venda" | "desdobramento" | "grupamento" | "bonificacao";
   data: string;
-  quantidade: number;
-  preco_unitario: number;
-  custos: number;
+  quantidade: number | null;
+  preco_unitario: number | null;
+  custos: number | null;
+  /** Só desdobramento/grupamento (ver docs/MAPA-DE-DADOS.md §8.22). */
+  fator_proporcao: number | null;
+  /** Só bonificação (ver §8.22). */
+  valor_capitalizado: number | null;
   created_at: string;
 };
 
@@ -135,13 +139,38 @@ function apurarVendasDoAtivo(ativo: AtivoRaw, transacoes: TransacaoRaw[]): Venda
 
   for (const data of datasOrdenadas) {
     const doDia = porData.get(data)!;
+
+    // Ver docs/MAPA-DE-DADOS.md §8.22: eventos societários (desdobramento/
+    // grupamento/bonificação) reorganizam a posição já existente — aplicados
+    // ANTES das compras/vendas do mesmo dia (mesma convenção de mercado: o
+    // split já vale para negociações daquele pregão). Sem isso, o preço
+    // médio usado pra apurar ganho de venda ficaria com base pré-evento,
+    // gerando ganho/prejuízo incorreto no relatório de IR depois de
+    // qualquer desdobramento/grupamento/bonificação.
+    const eventosDia = doDia.filter(
+      (t) => t.tipo === "desdobramento" || t.tipo === "grupamento" || t.tipo === "bonificacao"
+    );
+    for (const evento of eventosDia) {
+      if (evento.tipo === "desdobramento" || evento.tipo === "grupamento") {
+        const fator = evento.fator_proporcao ?? 1;
+        quantidade *= fator;
+        if (ehRendaFixa) for (const lote of fifoRendaFixa) lote.quantidade *= fator;
+      } else {
+        // bonificacao: soma quantidade recebida + valor capitalizado ao
+        // custo total (nunca "custo zero" isolado nas ações novas).
+        quantidade += evento.quantidade ?? 0;
+        custoTotal += evento.valor_capitalizado ?? 0;
+        if (ehRendaFixa) fifoRendaFixa.push({ data, quantidade: evento.quantidade ?? 0 });
+      }
+    }
+
     const comprasDia = doDia.filter((t) => t.tipo === "compra");
     const vendasDia = doDia.filter((t) => t.tipo === "venda");
 
-    const qtdCompradaDia = comprasDia.reduce((s, t) => s + t.quantidade, 0);
-    const custoCompradoDia = comprasDia.reduce((s, t) => s + t.quantidade * t.preco_unitario + t.custos, 0);
-    const qtdVendidaDia = vendasDia.reduce((s, t) => s + t.quantidade, 0);
-    const receitaVendidaDia = vendasDia.reduce((s, t) => s + t.quantidade * t.preco_unitario - t.custos, 0);
+    const qtdCompradaDia = comprasDia.reduce((s, t) => s + (t.quantidade ?? 0), 0);
+    const custoCompradoDia = comprasDia.reduce((s, t) => s + (t.quantidade ?? 0) * (t.preco_unitario ?? 0) + (t.custos ?? 0), 0);
+    const qtdVendidaDia = vendasDia.reduce((s, t) => s + (t.quantidade ?? 0), 0);
+    const receitaVendidaDia = vendasDia.reduce((s, t) => s + (t.quantidade ?? 0) * (t.preco_unitario ?? 0) - (t.custos ?? 0), 0);
 
     const dayTradeQty = ehAcaoOuFundo ? Math.min(qtdCompradaDia, qtdVendidaDia) : 0;
 
@@ -304,7 +333,7 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
       .eq("profile_id", user.id),
     supabase
       .from("transacoes")
-      .select("ativo_id, tipo, data, quantidade, preco_unitario, custos, created_at")
+      .select("ativo_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at")
       .eq("profile_id", user.id),
   ]);
 

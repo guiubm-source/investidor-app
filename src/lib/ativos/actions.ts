@@ -34,11 +34,13 @@ export type TipoAtivo =
 
 export type TransacaoItem = {
   id: string;
-  tipo: "compra" | "venda";
+  tipo: "compra" | "venda" | "desdobramento" | "grupamento" | "bonificacao";
   data: string;
-  quantidade: number;
-  precoUnitario: number;
-  custos: number;
+  quantidade: number | null;
+  precoUnitario: number | null;
+  custos: number | null;
+  fatorProporcao: number | null;
+  valorCapitalizado: number | null;
   corretoraId: string | null;
   corretoraNome: string | null;
 };
@@ -145,7 +147,9 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       .order("ticker"),
     supabase
       .from("transacoes")
-      .select("id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, created_at, corretoras(nome)")
+      .select(
+        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, corretoras(nome)"
+      )
       .eq("profile_id", user.id),
     supabase.from("proventos").select("id, ativo_id, tipo, data, valor_total").eq("profile_id", user.id),
   ]);
@@ -167,16 +171,23 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     const setor = Array.isArray(ativo.setor) ? ativo.setor[0] : ativo.setor;
     const classe = setor ? (Array.isArray(setor.classe) ? setor.classe[0] : setor.classe) : null;
 
+    // Ver docs/MAPA-DE-DADOS.md §8.22: `fator_proporcao`/`valor_capitalizado`
+    // precisam vir junto pra `aplicarTransacaoNaPosicao` (posicao-calculo.ts)
+    // conseguir aplicar desdobramento/grupamento/bonificação — sem isso a
+    // posição do ativo ficaria "surda" a eventos societários lançados no
+    // Livro-razão.
     const transacoesDoAtivo = transacoes
       .filter((t) => t.ativo_id === ativo.id)
       .map((t) => {
         const corretora = Array.isArray(t.corretoras) ? t.corretoras[0] : t.corretoras;
         return {
-          tipo: t.tipo as "compra" | "venda",
+          tipo: t.tipo as TransacaoCalc["tipo"],
           data: t.data as string,
-          quantidade: Number(t.quantidade),
-          precoUnitario: Number(t.preco_unitario),
-          custos: Number(t.custos),
+          quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+          precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+          custos: t.custos !== null ? Number(t.custos) : null,
+          fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+          valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
           createdAt: t.created_at as string,
           _id: t.id as string,
           _corretoraId: t.corretora_id as string | null,
@@ -268,7 +279,7 @@ export async function obterQuantidadeDisponivelEmData(
 
   let query = supabase
     .from("transacoes")
-    .select("tipo, data, quantidade, preco_unitario, custos, created_at")
+    .select("tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at")
     .eq("profile_id", user.id)
     .eq("ativo_id", ativoId)
     .lte("data", dataLimite);
@@ -276,12 +287,18 @@ export async function obterQuantidadeDisponivelEmData(
 
   const { data } = await query;
 
+  // Sem os campos de eventos societários aqui, uma quantidade recebida por
+  // bonificação (ou multiplicada por um desdobramento) antes da data-limite
+  // não entraria nesta conta — a validação de venda retroativa liberaria
+  // menos quantidade do que realmente existia naquele ponto do tempo (ver §8.22).
   const transacoes = (data ?? []).map((t) => ({
-    tipo: t.tipo as "compra" | "venda",
+    tipo: t.tipo as TransacaoCalc["tipo"],
     data: t.data as string,
-    quantidade: Number(t.quantidade),
-    precoUnitario: Number(t.preco_unitario),
-    custos: Number(t.custos),
+    quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+    precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+    custos: t.custos !== null ? Number(t.custos) : null,
+    fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+    valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
     createdAt: t.created_at as string,
   }));
 
@@ -309,7 +326,9 @@ export async function obterAtivoDetalhe(ativoId: string): Promise<AtivoDetalhe |
     obterAtivosComPosicao(),
     supabase
       .from("transacoes")
-      .select("id, corretora_id, tipo, data, quantidade, preco_unitario, custos, created_at, corretoras(nome)")
+      .select(
+        "id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, corretoras(nome)"
+      )
       .eq("profile_id", user.id)
       .eq("ativo_id", ativoId),
     supabase
@@ -338,11 +357,13 @@ export async function obterAtivoDetalhe(ativoId: string): Promise<AtivoDetalhe |
       const corretora = Array.isArray(t.corretoras) ? t.corretoras[0] : t.corretoras;
       return {
         id: t.id,
-        tipo: t.tipo as "compra" | "venda",
+        tipo: t.tipo as TransacaoItem["tipo"],
         data: t.data as string,
-        quantidade: Number(t.quantidade),
-        precoUnitario: Number(t.preco_unitario),
-        custos: Number(t.custos),
+        quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+        precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+        custos: t.custos !== null ? Number(t.custos) : null,
+        fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+        valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
         corretoraId: t.corretora_id,
         corretoraNome: corretora?.nome ?? null,
         _createdAt: t.created_at as string,

@@ -1772,6 +1772,99 @@ Arquivos tocados (2ª ocorrência): `src/lib/carteira/visao-mensal-tipos.ts`
 (novo), `src/lib/carteira/visao-mensal.ts` (só `obterVisaoMensal` exportado),
 `src/app/(app)/carteira/VisaoMensalView.tsx` (imports ajustados).
 
+### 8.22 Eventos societários — implementação (schema, cálculo, form, IR) (2026-07-20)
+
+Continuação da pesquisa da §8.20. Três decisões de modelagem foram
+levantadas ao Guilherme uma de cada vez (protocolo da seção 1) e decididas
+assim:
+
+1. **Onde morar no banco:** tipo especial dentro de `transacoes` (não uma
+   tabela separada) — `tipo` ganhou 3 valores novos: `desdobramento`,
+   `grupamento`, `bonificacao`. Mantém fonte única de verdade (uma tabela só
+   pra tudo que afeta a posição de um ativo).
+2. **Desdobramento/grupamento:** informado como **fator de proporção**
+   (`fator_proporcao`, numeric) — 2 para desdobrar 1:2, 0,1 para agrupar
+   10:1 — em vez de o usuário digitar a quantidade resultante manualmente
+   (evita erro de conta).
+3. **Bonificação:** informada como **quantidade recebida** (reaproveita a
+   coluna `quantidade`) + **valor total capitalizado** (`valor_capitalizado`,
+   numeric, 0 se a empresa não atribuiu valor).
+
+**Schema (`supabase/schema.sql` §17 — migração ainda NÃO rodada no banco
+real, ver nota no fim desta seção).** `transacoes.tipo` aceita os 5 valores;
+`quantidade`/`preco_unitario` viraram `NULL`-áveis (só compra/venda exigem
+os dois); `fator_proporcao`/`valor_capitalizado` são colunas novas,
+`NULL`-áveis; uma CHECK constraint (`transacoes_campos_por_tipo`) garante
+por tipo quais campos são obrigatórios/proibidos — a linha nunca fica num
+estado ambíguo (ex.: uma venda sem preço, ou uma bonificação com
+`fator_proporcao` preenchido).
+
+**Motor de cálculo (`lib/ativos/posicao-calculo.ts`).** `TransacaoCalc.tipo`
+virou união de 5 valores; `aplicarTransacaoNaPosicao` ganhou 2 ramos novos:
+desdobramento/grupamento multiplicam `quantidade` pelo fator (custo total
+não muda — o preço médio se ajusta sozinho, `custoTotal/quantidade`);
+bonificação soma a quantidade recebida E o valor capitalizado ao custo
+total (nunca trata as ações novas como "custo zero" isoladamente — ver
+regra de IR da §8.20). `valorCaixaTransacao` retorna `0` para qualquer tipo
+que não seja compra/venda — esse é o único mecanismo que exclui eventos
+societários do fluxo de caixa (Livro-razão "comprado/vendido" e Visão
+mensal aporte/retirada); não há filtro duplicado em nenhum outro lugar.
+
+**Todos os pontos de leitura de `transacoes` foram auditados e corrigidos**
+para selecionar `fator_proporcao`/`valor_capitalizado` e repassá-los pro
+motor de cálculo — sem isso, um evento societário lançado no Livro-razão
+teria efeito ZERO em todo lugar exceto na própria lista do Livro-razão
+(bug descoberto e corrigido nesta sessão, antes de qualquer commit/deploy):
+- `lib/carteira/actions.ts#obterLivroRazao` (feed cru da lista).
+- `lib/carteira/posicao.ts#obterPosicaoConsolidada` (sub-aba Posição).
+- `lib/ativos/actions.ts#obterAtivosComPosicao`/`obterQuantidadeDisponivelEmData`/`obterAtivoDetalhe`
+  (registro mestre, validação de venda retroativa, transações do Ativo).
+- `lib/ativos/preco-historico.ts#obterTransacoesOrdenadas` (rentabilidade
+  histórica dia a dia — sem isso um desdobramento antigo "sumiria" da série
+  histórica de quantidade/custo médio).
+- `lib/ir/actions.ts#apurarVendasDoAtivo` (relatório de IR) — este é
+  especial: o motor de IR **não** reaproveita `aplicarTransacaoNaPosicao`
+  (tem sua própria passada com day trade/FIFO auxiliar), então os 2 ramos de
+  evento societário foram replicados manualmente ali, aplicados no início
+  do processamento de cada data (ANTES de compra/venda do mesmo dia, mesma
+  convenção de mercado — o split já vale pro pregão daquele dia). Sem essa
+  cópia, o custo médio usado pra apurar ganho de venda ficaria com base
+  pré-evento, gerando ganho/prejuízo errado no relatório de IR depois de
+  qualquer desdobramento/grupamento/bonificação já lançado.
+
+`lib/carteira/visao-mensal.ts` foi deliberadamente NÃO alterado: como
+`valorCaixaTransacao` já devolve 0 pra eventos societários independente do
+campo `fator_proporcao`/`valor_capitalizado` estar presente, a Visão mensal
+já exclui esses lançamentos dos totais de compra/venda corretamente sem
+precisar dos campos novos.
+
+**Zod (`lib/carteira/schema.ts`).** `transacaoSchema` virou um
+`.object().superRefine().transform()`: os campos de cada tipo são opcionais
+no objeto de entrada (`z.union([z.number(), z.nan()]).optional()`), o
+`superRefine` valida obrigatoriedade por `tipo` (ex.: compra/venda exigem
+quantidade > 0 e preço >= 0; desdobramento/grupamento exigem
+`fator_proporcao` > 0; bonificação exige quantidade > 0 e
+`valor_capitalizado` >= 0), e o `.transform` normaliza tudo pra `null`
+uniforme no formato que `criarTransacao`/`editarTransacao` recebem.
+
+**UI.** `FormTransacao` (tanto em `LivroRazaoView.tsx` quanto em
+`AtivoDetalheView.tsx` — existem 2 cópias do formulário, uma por tela, e as
+duas foram atualizadas) mostra só os campos relevantes pro `tipo`
+selecionado (quantidade/preço/custos para compra-venda; fator de proporção
+para desdobramento/grupamento; quantidade recebida + valor capitalizado
+para bonificação). A lista de transações (Livro-razão e página do Ativo)
+usa os mesmos helpers de rótulo/cor/célula pra exibir o tipo e o
+valor/quantidade certos por linha, reaproveitando `TIPOS_TRANSACAO` de
+`lib/carteira/schema.ts` como fonte única do rótulo em português.
+
+**⚠️ Pendência: migração SQL ainda não rodada no Supabase de produção.**
+Diferente da feature anterior (Visão mensal, que só lia tabelas já
+existentes), esta feature adiciona colunas/constraints novas —
+`supabase/schema.sql` §17 precisa ser rodado manualmente no Supabase
+Dashboard > SQL Editor antes do deploy funcionar em produção (mesmo
+workflow de sempre: o Guilherme roda o SQL, eu não tenho acesso a
+credenciais do banco de produção).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

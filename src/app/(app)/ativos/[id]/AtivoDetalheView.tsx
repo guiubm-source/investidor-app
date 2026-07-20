@@ -40,6 +40,7 @@ import {
   type ChecklistAtivoView,
   type ClasseOpcao,
   type ResultadoTrimestralItem,
+  type TransacaoItem,
 } from "@/lib/ativos/actions";
 import { transacaoSchema, TIPOS_TRANSACAO, type TransacaoForm } from "@/lib/carteira/schema";
 import { TIPOS_PROVENTO } from "@/lib/proventos/schema";
@@ -68,6 +69,36 @@ const formatarMoeda = (valor: number) =>
 const formatarData = (iso: string) => {
   const [ano, mes, dia] = iso.split("-");
   return `${dia}/${mes}/${ano}`;
+};
+
+/**
+ * Eventos societários (ver docs/MAPA-DE-DADOS.md §8.22) reaproveitam as
+ * mesmas colunas de "Quantidade"/"Valor" da lista de transações do Ativo,
+ * igual ao Livro-razão — mesmo padrão de exibição, sem duplicar a decisão
+ * de layout.
+ */
+const labelTipoTransacaoAtivo = (tipo: TransacaoItem["tipo"]) =>
+  TIPOS_TRANSACAO.find((t) => t.valor === tipo)?.label ?? tipo;
+
+const corTipoTransacaoAtivo = (tipo: TransacaoItem["tipo"]) => {
+  if (tipo === "compra") return "text-success";
+  if (tipo === "venda") return "text-danger";
+  return "text-accent";
+};
+
+const celulaQuantidadeAtivo = (t: TransacaoItem) => {
+  if (t.tipo === "desdobramento" || t.tipo === "grupamento") return "—";
+  return t.quantidade !== null ? `${t.quantidade.toLocaleString("pt-BR")} un` : "—";
+};
+
+const celulaValorAtivo = (t: TransacaoItem) => {
+  if (t.tipo === "compra" || t.tipo === "venda") {
+    return t.precoUnitario !== null ? formatarMoeda(t.precoUnitario) : "—";
+  }
+  if (t.tipo === "bonificacao") {
+    return t.valorCapitalizado !== null ? `${formatarMoeda(t.valorCapitalizado)} capitalizado` : "—";
+  }
+  return t.fatorProporcao !== null ? `Fator ${t.fatorProporcao.toLocaleString("pt-BR")}` : "—";
 };
 
 function formatarTempoRelativo(iso: string | null): string {
@@ -524,12 +555,10 @@ export default function AtivoDetalheView({
                     key={t.id}
                     className="flex items-center justify-between text-xs bg-surface-2 rounded-md px-3 py-2"
                   >
-                    <span className={t.tipo === "compra" ? "text-success" : "text-danger"}>
-                      {t.tipo === "compra" ? "Compra" : "Venda"}
-                    </span>
+                    <span className={corTipoTransacaoAtivo(t.tipo)}>{labelTipoTransacaoAtivo(t.tipo)}</span>
                     <span className="text-muted">{formatarData(t.data)}</span>
-                    <span className="text-muted">{t.quantidade.toLocaleString("pt-BR")} un</span>
-                    <span className="text-muted">{formatarMoeda(t.precoUnitario)}</span>
+                    <span className="text-muted">{celulaQuantidadeAtivo(t)}</span>
+                    <span className="text-muted">{celulaValorAtivo(t)}</span>
                     <span className="text-faint">{t.corretoraNome ?? "—"}</span>
                     <button
                       onClick={() => setExcluindoTransacaoId(t.id)}
@@ -1588,6 +1617,7 @@ function FormTransacao({
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(transacaoSchema),
@@ -1599,9 +1629,19 @@ function FormTransacao({
       quantidade: 0,
       preco_unitario: 0,
       custos: 0,
+      fator_proporcao: NaN,
+      valor_capitalizado: NaN,
       cambio: NaN,
     },
   });
+
+  // Ver docs/MAPA-DE-DADOS.md §8.22: eventos societários usam campos
+  // diferentes de compra/venda — mesmo padrão condicional do form do
+  // Livro-razão (LivroRazaoView.tsx), reaproveitado aqui.
+  const tipoSelecionado = watch("tipo");
+  const ehCompraOuVenda = tipoSelecionado === "compra" || tipoSelecionado === "venda";
+  const ehDesdobramentoOuGrupamento = tipoSelecionado === "desdobramento" || tipoSelecionado === "grupamento";
+  const ehBonificacao = tipoSelecionado === "bonificacao";
 
   const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
@@ -1645,38 +1685,72 @@ function FormTransacao({
         </select>
       </div>
 
-      <div>
-        <label className="label">Quantidade</label>
-        <input
-          type="number"
-          step="0.00000001"
-          {...register("quantidade", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.quantidade?.message && <p className="field-error">{errors.quantidade.message}</p>}
-      </div>
+      {(ehCompraOuVenda || ehBonificacao) && (
+        <div>
+          <label className="label">{ehBonificacao ? "Quantidade recebida" : "Quantidade"}</label>
+          <input
+            type="number"
+            step="0.00000001"
+            {...register("quantidade", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.quantidade?.message && <p className="field-error">{errors.quantidade.message}</p>}
+        </div>
+      )}
 
-      <div>
-        <label className="label">Preço unitário (R$)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register("preco_unitario", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.preco_unitario?.message && <p className="field-error">{errors.preco_unitario.message}</p>}
-      </div>
+      {ehCompraOuVenda && (
+        <div>
+          <label className="label">Preço unitário (R$)</label>
+          <input
+            type="number"
+            step="0.01"
+            {...register("preco_unitario", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.preco_unitario?.message && <p className="field-error">{errors.preco_unitario.message}</p>}
+        </div>
+      )}
 
-      <div>
-        <label className="label">Custos/taxas (R$)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register("custos", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
-      </div>
+      {ehCompraOuVenda && (
+        <div>
+          <label className="label">Custos/taxas (R$)</label>
+          <input
+            type="number"
+            step="0.01"
+            {...register("custos", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
+        </div>
+      )}
+
+      {ehDesdobramentoOuGrupamento && (
+        <div>
+          <label className="label">Fator de proporção</label>
+          <input
+            type="number"
+            step="0.000001"
+            placeholder="Ex.: 2 (desdobra 1:2) ou 0,1 (agrupa 10:1)"
+            {...register("fator_proporcao", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.fator_proporcao?.message && <p className="field-error">{errors.fator_proporcao.message}</p>}
+        </div>
+      )}
+
+      {ehBonificacao && (
+        <div>
+          <label className="label">Valor capitalizado (R$)</label>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="0 se a empresa não atribuiu valor"
+            {...register("valor_capitalizado", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.valor_capitalizado?.message && <p className="field-error">{errors.valor_capitalizado.message}</p>}
+        </div>
+      )}
 
       {tipoAtivo === "internacional" && (
         <div>

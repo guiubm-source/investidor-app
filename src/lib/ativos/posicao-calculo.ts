@@ -17,12 +17,33 @@
  * arquivo (ver docs/MAPA-DE-DADOS.md §3).
  */
 
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.22: além de compra/venda, `tipo` também cobre
+ * eventos societários — desdobramento/grupamento (só `fatorProporcao`, sem
+ * quantidade/preço) e bonificação (`quantidade` recebida + `valorCapitalizado`,
+ * sem preço). Por isso quantidade/precoUnitario/custos viraram opcionais:
+ * cada tipo usa só o subconjunto de campos que faz sentido pra ele — ver
+ * `aplicarTransacaoNaPosicao` pra qual campo é obrigatório em qual tipo.
+ */
 export type TransacaoCalc = {
-  tipo: "compra" | "venda";
+  tipo: "compra" | "venda" | "desdobramento" | "grupamento" | "bonificacao";
   data: string;
-  quantidade: number;
-  precoUnitario: number;
-  custos: number;
+  /**
+   * compra/venda: quantidade negociada. bonificação: quantidade de ações
+   * recebidas. Ausente/nulo em desdobramento/grupamento. `| null` além de
+   * opcional porque quem lê direto do banco (ex. `LancamentoTransacao` em
+   * lib/carteira/actions.ts) sempre traz a coluna como `number | null`, nunca
+   * `undefined` — aceitar os dois evita conversão manual em cada chamador.
+   */
+  quantidade?: number | null;
+  /** Só compra/venda. */
+  precoUnitario?: number | null;
+  /** Só compra/venda (default 0 se ausente). */
+  custos?: number | null;
+  /** Só desdobramento/grupamento: fator multiplicador da quantidade em carteira (2 = desdobra 1:2, 0.1 = agrupa 10:1). */
+  fatorProporcao?: number | null;
+  /** Só bonificação: valor total (R$) atribuído pela empresa à capitalização — 0 se não houver (bonificação se comporta como split puro). */
+  valorCapitalizado?: number | null;
 };
 
 export type EstadoPosicao = {
@@ -58,23 +79,53 @@ export const ESTADO_POSICAO_INICIAL: EstadoPosicao = {
  * renda variável): na compra, o preço médio é recalculado proporcionalmente;
  * na venda, o preço médio NÃO muda — apenas reduz a quantidade e apura lucro
  * ou prejuízo realizado (preço de venda − preço médio, descontados custos).
+ *
+ * Eventos societários (ver docs/MAPA-DE-DADOS.md §8.22) NÃO mexem em
+ * `lucroRealizado` nem `totalInvestidoBruto` — não há venda nem novo aporte
+ * de verdade, só reorganização da mesma posição:
+ * - desdobramento/grupamento: `custoTotal` não muda, só a quantidade (×
+ *   fator) — o preço médio se ajusta sozinho (custoTotal/quantidade).
+ * - bonificação: soma a quantidade recebida E o valor capitalizado ao
+ *   custoTotal — redistribui o mesmo custo total (mais o capitalizado) sobre
+ *   mais ações, nunca trata as novas como "custo zero" isoladamente.
  */
 export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCalc): EstadoPosicao {
   if (t.tipo === "compra") {
-    const valorComprado = t.quantidade * t.precoUnitario + t.custos;
+    const valorComprado = (t.quantidade ?? 0) * (t.precoUnitario ?? 0) + (t.custos ?? 0);
     return {
-      quantidade: estado.quantidade + t.quantidade,
+      quantidade: estado.quantidade + (t.quantidade ?? 0),
       custoTotal: estado.custoTotal + valorComprado,
       lucroRealizado: estado.lucroRealizado,
       totalInvestidoBruto: estado.totalInvestidoBruto + valorComprado,
     };
   }
-  const precoMedioAtual = estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
-  const qtdVenda = Math.min(t.quantidade, estado.quantidade);
+
+  if (t.tipo === "venda") {
+    const precoMedioAtual = estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
+    const qtdVenda = Math.min(t.quantidade ?? 0, estado.quantidade);
+    return {
+      quantidade: estado.quantidade - qtdVenda,
+      custoTotal: estado.custoTotal - precoMedioAtual * qtdVenda,
+      lucroRealizado: estado.lucroRealizado + ((t.precoUnitario ?? 0) - precoMedioAtual) * qtdVenda - (t.custos ?? 0),
+      totalInvestidoBruto: estado.totalInvestidoBruto,
+    };
+  }
+
+  if (t.tipo === "desdobramento" || t.tipo === "grupamento") {
+    const fator = t.fatorProporcao ?? 1;
+    return {
+      quantidade: estado.quantidade * fator,
+      custoTotal: estado.custoTotal,
+      lucroRealizado: estado.lucroRealizado,
+      totalInvestidoBruto: estado.totalInvestidoBruto,
+    };
+  }
+
+  // bonificacao
   return {
-    quantidade: estado.quantidade - qtdVenda,
-    custoTotal: estado.custoTotal - precoMedioAtual * qtdVenda,
-    lucroRealizado: estado.lucroRealizado + (t.precoUnitario - precoMedioAtual) * qtdVenda - t.custos,
+    quantidade: estado.quantidade + (t.quantidade ?? 0),
+    custoTotal: estado.custoTotal + (t.valorCapitalizado ?? 0),
+    lucroRealizado: estado.lucroRealizado,
     totalInvestidoBruto: estado.totalInvestidoBruto,
   };
 }
@@ -90,10 +141,18 @@ export function precoMedioDoEstado(estado: EstadoPosicao): number {
  * Livro-razão (`LivroRazaoView.tsx`) quanto na Visão mensal
  * (`lib/carteira/visao-mensal.ts`) — fonte única pra não deixar as duas
  * telas divergirem na definição de "valor da transação" (ver §3/§8.18).
+ *
+ * Eventos societários (desdobramento/grupamento/bonificação, ver §8.22)
+ * sempre retornam 0 aqui — não há desembolso nem entrada de caixa de
+ * verdade, é só reorganização da posição já existente. Retorno 0 nesta
+ * função é o mecanismo que os exclui automaticamente do "comprado/vendido"
+ * do Livro-razão e do aporte/retirada da Visão mensal, sem precisar filtrar
+ * em cada lugar que chama esta função.
  */
 export function valorCaixaTransacao(t: TransacaoCalc): number {
-  const bruto = t.quantidade * t.precoUnitario;
-  return t.tipo === "compra" ? bruto + t.custos : bruto - t.custos;
+  if (t.tipo !== "compra" && t.tipo !== "venda") return 0;
+  const bruto = (t.quantidade ?? 0) * (t.precoUnitario ?? 0);
+  return t.tipo === "compra" ? bruto + (t.custos ?? 0) : bruto - (t.custos ?? 0);
 }
 
 /** Fold de `aplicarTransacaoNaPosicao` sobre a lista inteira — "posição final". */

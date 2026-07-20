@@ -191,7 +191,9 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       .eq("profile_id", user.id),
     supabase
       .from("transacoes")
-      .select("id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, created_at")
+      .select(
+        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at"
+      )
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
   ]);
@@ -233,14 +235,21 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
 
   const posicoesBase: PosicaoBase[] = ativos
     .map((ativo) => {
+      // Ver docs/MAPA-DE-DADOS.md §8.22: sem `fator_proporcao`/`valor_capitalizado`
+      // aqui, um desdobramento/grupamento/bonificação lançado no Livro-razão
+      // seria um no-op silencioso na Posição — o motor de cálculo
+      // (`aplicarTransacaoNaPosicao`) já sabe tratar esses tipos, só precisa
+      // receber os campos.
       const transacoesDoAtivo: (TransacaoCalc & { createdAt: string })[] = transacoesFiltradas
         .filter((t) => t.ativo_id === ativo.id)
         .map((t) => ({
-          tipo: t.tipo as "compra" | "venda",
+          tipo: t.tipo as TransacaoCalc["tipo"],
           data: t.data as string,
-          quantidade: Number(t.quantidade),
-          precoUnitario: Number(t.preco_unitario),
-          custos: Number(t.custos),
+          quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+          precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+          custos: t.custos !== null ? Number(t.custos) : null,
+          fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+          valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
           createdAt: t.created_at as string,
         }));
 

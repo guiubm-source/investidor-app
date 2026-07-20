@@ -971,3 +971,54 @@ create index if not exists idx_ativo_preco_diario_manual_ativo
 
 alter table public.ativos add column if not exists subtipo_internacional text
   check (subtipo_internacional in ('acao','etf'));
+
+-- ============================================================================
+-- 17. Eventos societários (bonificação/desdobramento/grupamento) — decisões em
+--     docs/MAPA-DE-DADOS.md §8.22 (2026-07-20). Modelados como um TIPO
+--     ESPECIAL dentro de `transacoes` (não uma tabela separada), pra manter
+--     fonte única de verdade e reaproveitar o motor de custo médio ponderado
+--     já existente (calcularPosicao/aplicarTransacaoNaPosicao). Cada tipo usa
+--     um subconjunto diferente de colunas:
+--     - compra/venda: `quantidade` + `preco_unitario` (como sempre).
+--     - desdobramento/grupamento: só `fator_proporcao` (ex. 2 = desdobra 1:2,
+--       0.1 = agrupa 10:1) — sem preço nem quantidade digitados, o motor
+--       multiplica a quantidade em carteira pelo fator.
+--     - bonificação: `quantidade` (ações recebidas) + `valor_capitalizado`
+--       (total atribuído pela empresa à capitalização, 0 se não houver) — o
+--       motor soma esse valor ao custoTotal e a quantidade recebida à
+--       quantidade em carteira, redistribuindo o custo médio (nunca "custo
+--       zero" isolado pras ações bonificadas).
+--     `quantidade`/`preco_unitario` deixam de ser NOT NULL (viram opcionais
+--     conforme o tipo); a validação de qual campo é obrigatório por tipo
+--     migra do CHECK simples de coluna pra um CHECK combinado por linha.
+-- ============================================================================
+
+alter table public.transacoes drop constraint if exists transacoes_tipo_check;
+alter table public.transacoes add constraint transacoes_tipo_check
+  check (tipo in ('compra','venda','desdobramento','grupamento','bonificacao'));
+
+alter table public.transacoes alter column quantidade drop not null;
+alter table public.transacoes alter column preco_unitario drop not null;
+alter table public.transacoes drop constraint if exists transacoes_quantidade_check;
+alter table public.transacoes drop constraint if exists transacoes_preco_unitario_check;
+
+alter table public.transacoes add column if not exists fator_proporcao numeric(12,6) check (fator_proporcao > 0);
+alter table public.transacoes add column if not exists valor_capitalizado numeric(14,2) check (valor_capitalizado >= 0);
+
+comment on column public.transacoes.fator_proporcao is 'Só para desdobramento/grupamento: fator multiplicador da quantidade em carteira (2 = desdobra 1:2, 0.1 = agrupa 10:1). Nulo para os demais tipos.';
+comment on column public.transacoes.valor_capitalizado is 'Só para bonificação: valor total (R$) que a empresa atribuiu à capitalização de reservas/lucro — 0 se não houver valor atribuído (bonificação se comporta como split puro). Nulo para os demais tipos.';
+
+alter table public.transacoes drop constraint if exists transacoes_campos_por_tipo;
+alter table public.transacoes add constraint transacoes_campos_por_tipo check (
+  (tipo in ('compra','venda')
+    and quantidade > 0 and preco_unitario >= 0
+    and fator_proporcao is null and valor_capitalizado is null)
+  or
+  (tipo in ('desdobramento','grupamento')
+    and fator_proporcao is not null and fator_proporcao > 0
+    and quantidade is null and preco_unitario is null and valor_capitalizado is null)
+  or
+  (tipo = 'bonificacao'
+    and quantidade > 0 and valor_capitalizado is not null and valor_capitalizado >= 0
+    and preco_unitario is null and fator_proporcao is null)
+);

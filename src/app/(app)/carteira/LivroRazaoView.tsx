@@ -14,6 +14,7 @@ import {
   obterLivroRazao,
   type LivroRazao,
   type Corretora,
+  type LancamentoTransacao,
 } from "@/lib/carteira/actions";
 import CorretorasManager from "./CorretorasManager";
 import ConfirmModal from "@/components/ConfirmModal";
@@ -38,6 +39,37 @@ const formatarMoeda = (valor: number) =>
 const formatarData = (iso: string) => {
   const [ano, mes, dia] = iso.split("-");
   return `${dia}/${mes}/${ano}`;
+};
+
+/**
+ * Eventos societários (ver docs/MAPA-DE-DADOS.md §8.22) reaproveitam as
+ * mesmas 2 colunas de "Quantidade"/"Valor" da lista, com conteúdo diferente
+ * por tipo, em vez de abrir colunas novas só pra eles (menos poluição visual
+ * já que são bem mais raros que compra/venda no dia a dia).
+ */
+const labelTipoTransacao = (tipo: LancamentoTransacao["tipo"]) =>
+  TIPOS_TRANSACAO.find((t) => t.valor === tipo)?.label ?? tipo;
+
+const corTipoTransacao = (tipo: LancamentoTransacao["tipo"]) => {
+  if (tipo === "compra") return "text-success";
+  if (tipo === "venda") return "text-danger";
+  return "text-accent";
+};
+
+const celulaQuantidade = (l: LancamentoTransacao) => {
+  if (l.tipo === "desdobramento" || l.tipo === "grupamento") return "—";
+  return l.quantidade !== null ? l.quantidade.toLocaleString("pt-BR") : "—";
+};
+
+const celulaValor = (l: LancamentoTransacao) => {
+  if (l.tipo === "compra" || l.tipo === "venda") {
+    return l.precoUnitario !== null ? formatarMoeda(l.precoUnitario) : "—";
+  }
+  if (l.tipo === "bonificacao") {
+    return l.valorCapitalizado !== null ? `${formatarMoeda(l.valorCapitalizado)} capitalizado` : "—";
+  }
+  // desdobramento/grupamento
+  return l.fatorProporcao !== null ? `Fator ${l.fatorProporcao.toLocaleString("pt-BR")}` : "—";
 };
 
 export type AtivoOpcao = { id: string; ticker: string; tipo: string };
@@ -113,8 +145,10 @@ export default function LivroRazaoView({
     let compra = 0;
     let venda = 0;
     for (const l of lancamentosFiltrados) {
+      // valorCaixaTransacao já devolve 0 pra eventos societários (ver §8.22)
+      // — só compra/venda entram nesse total de qualquer jeito.
       if (l.tipo === "compra") compra += valorCaixaTransacao(l);
-      else venda += valorCaixaTransacao(l);
+      else if (l.tipo === "venda") venda += valorCaixaTransacao(l);
     }
     return { compra, venda, liquido: compra - venda };
   }, [lancamentosFiltrados]);
@@ -331,9 +365,11 @@ export default function LivroRazaoView({
                   corretora_id: l.corretoraId,
                   tipo: l.tipo,
                   data: l.data,
-                  quantidade: l.quantidade,
-                  preco_unitario: l.precoUnitario,
+                  quantidade: l.quantidade ?? NaN,
+                  preco_unitario: l.precoUnitario ?? NaN,
                   custos: l.custos,
+                  fator_proporcao: l.fatorProporcao ?? NaN,
+                  valor_capitalizado: l.valorCapitalizado ?? NaN,
                   cambio: l.cambio ?? NaN,
                 }}
                 textoSalvar="Salvar"
@@ -356,11 +392,9 @@ export default function LivroRazaoView({
               <Link href={`/ativos/${l.ativoId}`} className="text-ink font-medium hover:underline">
                 {l.ativoTicker}
               </Link>
-              <span className={l.tipo === "compra" ? "text-success" : "text-danger"}>
-                {l.tipo === "compra" ? "Compra" : "Venda"}
-              </span>
-              <span className="text-right text-muted">{l.quantidade.toLocaleString("pt-BR")}</span>
-              <span className="text-right text-ink">{formatarMoeda(l.precoUnitario)}</span>
+              <span className={corTipoTransacao(l.tipo)}>{labelTipoTransacao(l.tipo)}</span>
+              <span className="text-right text-muted">{celulaQuantidade(l)}</span>
+              <span className="text-right text-ink">{celulaValor(l)}</span>
               <span className="text-faint truncate">{l.corretoraNome ?? "—"}</span>
               <span className="text-right">
                 <button onClick={() => setEditando(l.id)} className="text-faint hover:text-ink mr-2">
@@ -478,12 +512,23 @@ function FormTransacao({
       quantidade: 0,
       preco_unitario: 0,
       custos: 0,
+      fator_proporcao: NaN,
+      valor_capitalizado: NaN,
       cambio: NaN,
     },
   });
 
   const ativoIdSelecionado = watch("ativo_id");
   const tipoAtivoSelecionado = ativos.find((a) => a.id === ativoIdSelecionado)?.tipo;
+
+  // Ver docs/MAPA-DE-DADOS.md §8.22: eventos societários usam campos
+  // diferentes de compra/venda — o form mostra só o que faz sentido pro
+  // tipo selecionado, em vez de sempre os mesmos 3 campos de quantidade/
+  // preço/custos.
+  const tipoSelecionado = watch("tipo");
+  const ehCompraOuVenda = tipoSelecionado === "compra" || tipoSelecionado === "venda";
+  const ehDesdobramentoOuGrupamento = tipoSelecionado === "desdobramento" || tipoSelecionado === "grupamento";
+  const ehBonificacao = tipoSelecionado === "bonificacao";
 
   const toast = useToast();
   const onSubmit = handleSubmit(async (data) => {
@@ -537,38 +582,72 @@ function FormTransacao({
         </select>
       </div>
 
-      <div>
-        <label className="label">Quantidade</label>
-        <input
-          type="number"
-          step="0.00000001"
-          {...register("quantidade", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.quantidade?.message && <p className="field-error">{errors.quantidade.message}</p>}
-      </div>
+      {(ehCompraOuVenda || ehBonificacao) && (
+        <div>
+          <label className="label">{ehBonificacao ? "Quantidade recebida" : "Quantidade"}</label>
+          <input
+            type="number"
+            step="0.00000001"
+            {...register("quantidade", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.quantidade?.message && <p className="field-error">{errors.quantidade.message}</p>}
+        </div>
+      )}
 
-      <div>
-        <label className="label">Preço unitário (R$)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register("preco_unitario", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.preco_unitario?.message && <p className="field-error">{errors.preco_unitario.message}</p>}
-      </div>
+      {ehCompraOuVenda && (
+        <div>
+          <label className="label">Preço unitário (R$)</label>
+          <input
+            type="number"
+            step="0.01"
+            {...register("preco_unitario", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.preco_unitario?.message && <p className="field-error">{errors.preco_unitario.message}</p>}
+        </div>
+      )}
 
-      <div>
-        <label className="label">Custos/taxas (R$)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register("custos", { valueAsNumber: true })}
-          className="input"
-        />
-        {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
-      </div>
+      {ehCompraOuVenda && (
+        <div>
+          <label className="label">Custos/taxas (R$)</label>
+          <input
+            type="number"
+            step="0.01"
+            {...register("custos", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.custos?.message && <p className="field-error">{errors.custos.message}</p>}
+        </div>
+      )}
+
+      {ehDesdobramentoOuGrupamento && (
+        <div>
+          <label className="label">Fator de proporção</label>
+          <input
+            type="number"
+            step="0.000001"
+            placeholder="Ex.: 2 (desdobra 1:2) ou 0,1 (agrupa 10:1)"
+            {...register("fator_proporcao", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.fator_proporcao?.message && <p className="field-error">{errors.fator_proporcao.message}</p>}
+        </div>
+      )}
+
+      {ehBonificacao && (
+        <div>
+          <label className="label">Valor capitalizado (R$)</label>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="0 se a empresa não atribuiu valor"
+            {...register("valor_capitalizado", { valueAsNumber: true })}
+            className="input"
+          />
+          {errors.valor_capitalizado?.message && <p className="field-error">{errors.valor_capitalizado.message}</p>}
+        </div>
+      )}
 
       {tipoAtivoSelecionado === "internacional" && (
         <div>

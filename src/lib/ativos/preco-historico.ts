@@ -56,16 +56,23 @@ async function obterTransacoesOrdenadas(profileId: string, ativoId: string) {
   const supabase = await createClient();
   const { data } = await supabase
     .from("transacoes")
-    .select("tipo, data, quantidade, preco_unitario, custos, created_at")
+    .select("tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at")
     .eq("profile_id", profileId)
     .eq("ativo_id", ativoId);
 
+  // Ver docs/MAPA-DE-DADOS.md §8.22: eventos societários (desdobramento/
+  // grupamento/bonificação) também precisam entrar na rentabilidade
+  // histórica — sem `fator_proporcao`/`valor_capitalizado` aqui, um
+  // desdobramento passado ficaria invisível pra série "quantidade/custo
+  // médio ao longo do tempo", cortando o gráfico historicamente errado.
   const transacoes: (TransacaoCalc & { createdAt: string })[] = (data ?? []).map((t) => ({
-    tipo: t.tipo as "compra" | "venda",
+    tipo: t.tipo as TransacaoCalc["tipo"],
     data: t.data as string,
-    quantidade: Number(t.quantidade),
-    precoUnitario: Number(t.preco_unitario),
-    custos: Number(t.custos),
+    quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+    precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+    custos: t.custos !== null ? Number(t.custos) : null,
+    fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+    valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
     createdAt: t.created_at as string,
   }));
 

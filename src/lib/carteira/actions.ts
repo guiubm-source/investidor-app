@@ -19,16 +19,26 @@ export type AcaoResultado = {
 
 export type Corretora = { id: string; nome: string };
 
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.22: `tipo` inclui eventos societários
+ * (desdobramento/grupamento/bonificação) além de compra/venda. `quantidade`/
+ * `precoUnitario` viram nullable (só compra/venda e, no caso de
+ * `quantidade`, também bonificação — ações recebidas); `fatorProporcao`/
+ * `valorCapitalizado` só existem em desdobramento-grupamento/bonificação
+ * respectivamente.
+ */
 export type LancamentoTransacao = {
   categoria: "transacao";
   id: string;
   ativoId: string;
   ativoTicker: string;
-  tipo: "compra" | "venda";
+  tipo: "compra" | "venda" | "desdobramento" | "grupamento" | "bonificacao";
   data: string;
-  quantidade: number;
-  precoUnitario: number;
+  quantidade: number | null;
+  precoUnitario: number | null;
   custos: number;
+  fatorProporcao: number | null;
+  valorCapitalizado: number | null;
   cambio: number | null;
   corretoraId: string | null;
   corretoraNome: string | null;
@@ -63,11 +73,13 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
     supabase
       .from("transacoes")
       .select(
-        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, cambio, ativos(ticker), corretoras(nome)"
+        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, cambio, ativos(ticker), corretoras(nome)"
       )
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
   ]);
+
+  const numOuNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
   const transacoes: LancamentoTransacao[] = (transacoesRaw ?? []).map((t) => {
     const ativo = Array.isArray(t.ativos) ? t.ativos[0] : t.ativos;
@@ -77,11 +89,13 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
       id: t.id,
       ativoId: t.ativo_id,
       ativoTicker: ativo?.ticker ?? "—",
-      tipo: t.tipo as "compra" | "venda",
+      tipo: t.tipo as LancamentoTransacao["tipo"],
       data: t.data as string,
-      quantidade: Number(t.quantidade),
-      precoUnitario: Number(t.preco_unitario),
+      quantidade: numOuNull(t.quantidade),
+      precoUnitario: numOuNull(t.preco_unitario),
       custos: Number(t.custos),
+      fatorProporcao: numOuNull(t.fator_proporcao),
+      valorCapitalizado: numOuNull(t.valor_capitalizado),
       cambio: t.cambio === null || t.cambio === undefined ? null : Number(t.cambio),
       corretoraId: t.corretora_id,
       corretoraNome: corretora?.nome ?? null,
@@ -149,6 +163,12 @@ export async function excluirCorretora(id: string): Promise<AcaoResultado> {
  * custo de corretagem levemente diferente ainda são "a mesma transação"
  * pro propósito desse aviso. `excluirId` evita que uma edição que não muda
  * nenhum desses 5 campos acuse "duplicata" contra si mesma.
+ *
+ * Só se aplica a compra/venda (ver §8.22) — eventos societários
+ * (desdobramento/grupamento/bonificação) não têm quantidade+preço
+ * comparáveis do mesmo jeito (quantidade/preço ficam nulos, `.eq()` do
+ * PostgREST não compara null de forma útil), e duplicidade ali é bem menos
+ * comum/preocupante do que em compra/venda.
  */
 async function existeTransacaoDuplicada(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -156,6 +176,8 @@ async function existeTransacaoDuplicada(
   input: TransacaoForm,
   excluirId?: string
 ): Promise<boolean> {
+  if (input.tipo !== "compra" && input.tipo !== "venda") return false;
+
   let query = supabase
     .from("transacoes")
     .select("id")
@@ -196,7 +218,7 @@ export async function criarTransacao(
     // ponto da linha do tempo, mesmo que o total (somando tudo) feche
     // positivo. Ver docs/MAPA-DE-DADOS.md §8.11.
     const disponivel = await obterQuantidadeDisponivelEmData(input.ativo_id, input.data);
-    if (input.quantidade > disponivel) {
+    if ((input.quantidade ?? 0) > disponivel) {
       return {
         error: `Quantidade maior do que a disponível em carteira na data informada (${disponivel.toLocaleString("pt-BR")}).`,
       };
@@ -215,7 +237,9 @@ export async function criarTransacao(
     data: input.data,
     quantidade: input.quantidade,
     preco_unitario: input.preco_unitario,
-    custos: input.custos,
+    custos: input.custos ?? 0,
+    fator_proporcao: input.fator_proporcao,
+    valor_capitalizado: input.valor_capitalizado,
     cambio: input.cambio || null,
   });
 
@@ -239,7 +263,7 @@ export async function editarTransacao(
     // própria transação sendo editada (ver comentário de
     // obterQuantidadeDisponivelEmData em lib/ativos/actions.ts).
     const disponivel = await obterQuantidadeDisponivelEmData(input.ativo_id, input.data, id);
-    if (input.quantidade > disponivel) {
+    if ((input.quantidade ?? 0) > disponivel) {
       return {
         error: `Quantidade maior do que a disponível em carteira na data informada (${disponivel.toLocaleString("pt-BR")}).`,
       };
@@ -259,7 +283,9 @@ export async function editarTransacao(
       data: input.data,
       quantidade: input.quantidade,
       preco_unitario: input.preco_unitario,
-      custos: input.custos,
+      custos: input.custos ?? 0,
+      fator_proporcao: input.fator_proporcao,
+      valor_capitalizado: input.valor_capitalizado,
       cambio: input.cambio || null,
     })
     .eq("id", id)
