@@ -1326,6 +1326,96 @@ e novo `src/app/(app)/dashboard/EvolucaoCarteiraBlock.tsx` (toggle R$/%),
 `src/app/(app)/ativos/[id]/AtivoDetalheView.tsx` (texto explicativo
 atualizado pra refletir a nova fórmula).
 
+### 8.16 Carteira → sub-aba Posição (visão consolidada por classe) + Livro-razão só compra/venda (2026-07-16 a 2026-07-20)
+
+Guilherme mandou 4 prints de uma "POSIÇÃO NA CARTEIRA" estilo MyProfit/Status
+Invest (seções por classe — Ações, FIIs, Tesouro, Stocks, ETF Exterior —
+cada uma com resumo HOJE/TOTAL, badge de % da carteira, tabela ordenável) e
+pediu pra elaborar a aba Carteira nesse padrão, lendo do que já é lançado no
+livro-razão. Investigação + decisões via protocolo da seção 1:
+
+1. **Carteira virou aba-mãe com 2 sub-abas.** `Posição` (nova, default) e
+   `Livro-razão` (a antiga tela única da Carteira, sem mudança de
+   comportamento além do item 6 abaixo). Mesmo padrão de sub-abas de
+   `ConfiguracoesForm.tsx`/`IndicadoresView.tsx` (estado local `useState<AbaId>`,
+   sem sync com URL) — implementado em `CarteiraView.tsx`, que agora só é o
+   wrapper das duas; o conteúdo de cada sub-aba mora em `PosicaoView.tsx` e
+   `LivroRazaoView.tsx` (novo, extraído do antigo `CarteiraView.tsx`).
+2. **Stock vs ETF Exterior exige campo novo.** O tipo `internacional` sempre
+   foi um bucket único (ação e ETF exterior misturados, ver §14.1) — pra
+   replicar os grupos separados do print, criei `subtipo_internacional`
+   (`'acao' | 'etf' | null`) em `ativos`, mesmo espírito de
+   `subtipo_renda_fixa`/`cripto_exchange` (opcional, sem efeito em cotação/IR,
+   só na visualização). Migração em `supabase/schema.sql` §16. Exposto em
+   `AtivoResumo` e nos dois formulários de ativo (criação e edição) como
+   select "Ação ou ETF? (para agrupar na Posição)", com opção "Não informar
+   agora" — quem não preencher cai num grupo `internacional_outros` separado
+   em vez de a Posição adivinhar.
+3. **Escopo: fidelidade total ao print, tudo de uma vez** (decisão do
+   Guilherme entre as opções apresentadas) — sorting por coluna, paginação
+   por linhas/página (10/25/50/100), filtro de corretora/banco e exportação
+   CSV entraram todos nesta entrega, não em fatias.
+4. **"Variação hoje" — regra de comparação.** Decisão do Guilherme: comparar
+   sempre com o último preço salvo, seja de quando for (não só "ontem"). Para
+   tipos com cotação automática (`TIPOS_COTACAO_AUTOMATICA`), os 2 últimos
+   pontos vêm de `ativo_preco_diario_mercado` (tabela compartilhada por
+   tipo+ticker, cron diário) numa janela de 15 dias corridos — folga
+   suficiente pra pular fim de semana/feriado sem custar uma query por
+   ativo. Para tipos manuais (`renda_fixa`, `fundo`, `outro`), os 2 últimos
+   snapshots vêm de `ativo_preco_diario_manual`, **sem corte de data**
+   (snapshot manual pode ficar semanas parado — cortar por janela quebraria a
+   regra "seja de quando for"). Ativo com menos de 2 pontos conhecidos mostra
+   "—" em vez de zero (não distorce a agregação do grupo).
+5. **"Variação total" — fórmula unificada, não nova.** Reaproveita a mesma
+   "retorno simples acumulado" da §8.15 (já exposta em `AtivoResumo` como
+   `rentabilidadeTotalValor`/`rentabilidadeTotalPct`), agregada por grupo e
+   pro total da carteira somando `lucroRealizado`/`totalInvestidoBruto` dos
+   ativos do grupo antes de aplicar a fórmula — não é média das % de cada
+   ativo (evita viés de ativo pequeno pesando igual a um grande).
+6. **Livro-razão perdeu toda leitura de provento** (não só a lista — pergunta
+   feita ao Guilherme sobre manter o card-resumo "Proventos recebidos
+   (total)" como referência: resposta foi remover também). `obterLivroRazao`
+   não faz mais `select` em `proventos`; `LancamentoProvento`/`proventosTotal`
+   foram removidos de `lib/carteira/actions.ts`. Leitura/escrita de provento
+   é 100% exclusiva de `lib/proventos/actions.ts` (aba Proventos) — sem
+   duplicar em nenhum outro lugar.
+7. **Filtro por corretora recalcula posição, não filtra o resultado.**
+   `corretora_id` mora em `transacoes`, não em `ativos` — não dá pra "filtrar"
+   a posição já calculada. `obterPosicaoConsolidada(corretoraId?)` refaz o
+   fold `ordenarTransacoes`/`calcularPosicao` (mesmas funções puras de
+   `posicao-calculo.ts`, fonte única) só sobre as transações daquela
+   corretora antes de somar — cada corretora é tratada como um sub-livro
+   independente do mesmo ativo. Ativo que zera sob o filtro (ex.: só foi
+   comprado noutra corretora) some da Posição filtrada, mesmo se em outras
+   corretoras ainda tiver posição — comportamento esperado, é "o que estou
+   naquela corretora".
+8. **Agrupamento por classe** (`grupoDoAtivo` em `lib/carteira/posicao.ts`):
+   `acao`→Ações, `fii`→FIIs, `etf`→ETF Brasil, `renda_fixa` com
+   `subtipo_renda_fixa === 'tesouro'`→Tesouro Direto (senão→Renda Fixa),
+   `fundo`→Fundos de Investimento, `cripto`→Criptomoedas,
+   `internacional`→Stocks/ETF Exterior/Internacional (não classificado)
+   conforme item 2, `outro`→Outros. Ordem de exibição fixa
+   (`ORDEM_GRUPOS`), replicando a sequência do print. Ativo com quantidade
+   zero (sob o filtro de corretora aplicado, se houver) não entra na
+   Posição — "posição" é só o que ainda está em carteira.
+
+Arquivos tocados: `supabase/schema.sql` §16 (`subtipo_internacional`),
+`src/lib/ativos/posicao-calculo.ts` (`calcularPosicao` passou a expor
+`totalInvestidoBruto`), `src/lib/ativos/schema.ts` (`SUBTIPOS_INTERNACIONAL`
++ campo no `ativoSchema`), `src/lib/ativos/actions.ts` (`AtivoResumo`
+estendido com `subtipoInternacional`/`totalInvestidoBruto`/
+`rentabilidadeTotalValor`/`rentabilidadeTotalPct`; `criarAtivo`/`editarAtivo`
+persistindo o novo campo), `src/app/(app)/ativos/AtivosView.tsx` e
+`src/app/(app)/ativos/[id]/AtivoDetalheView.tsx` (select de subtipo
+internacional nos dois formulários), novo `src/lib/carteira/posicao.ts`
+(motor da Posição consolidada), `src/lib/carteira/actions.ts` (proventos
+removidos de `obterLivroRazao`/`LivroRazao`), novo
+`src/app/(app)/carteira/PosicaoView.tsx`, novo
+`src/app/(app)/carteira/LivroRazaoView.tsx` (extraído do antigo
+`CarteiraView.tsx`), `src/app/(app)/carteira/CarteiraView.tsx` (virou
+wrapper de sub-abas) e `src/app/(app)/carteira/page.tsx` (busca
+`obterPosicaoConsolidada()` além do livro-razão).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

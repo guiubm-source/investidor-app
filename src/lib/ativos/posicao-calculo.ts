@@ -87,7 +87,12 @@ export function precoMedioDoEstado(estado: EstadoPosicao): number {
 export function calcularPosicao(transacoesOrdenadas: TransacaoCalc[]) {
   let estado = ESTADO_POSICAO_INICIAL;
   for (const t of transacoesOrdenadas) estado = aplicarTransacaoNaPosicao(estado, t);
-  return { quantidade: estado.quantidade, precoMedio: precoMedioDoEstado(estado), lucroRealizado: estado.lucroRealizado };
+  return {
+    quantidade: estado.quantidade,
+    precoMedio: precoMedioDoEstado(estado),
+    lucroRealizado: estado.lucroRealizado,
+    totalInvestidoBruto: estado.totalInvestidoBruto,
+  };
 }
 
 export function ordenarTransacoes<T extends { data: string; createdAt: string }>(itens: T[]): T[] {

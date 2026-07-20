@@ -57,6 +57,8 @@ export type AtivoResumo = {
   tipo: TipoAtivo;
   subtipoRendaFixa: string | null;
   criptoExchange: string | null;
+  /** Ação (Stock) vs ETF dentro de `tipo === "internacional"` — ver docs/MAPA-DE-DADOS.md §8.16. */
+  subtipoInternacional: string | null;
   precoAtual: number;
   precoAtualizadoEm: string | null;
   precoFonte: "yahoo_finance" | "manual" | null;
@@ -77,6 +79,16 @@ export type AtivoResumo = {
   lucroRealizado: number;
   proventosRecebidos: number;
   retornoTotal: number;
+  /** Soma bruta de compras (nunca reduz na venda) — denominador da rentabilidade unificada, ver §8.16. */
+  totalInvestidoBruto: number;
+  /**
+   * "Retorno simples acumulado" — mesma fórmula unificada usada na
+   * rentabilidade histórica (§8.15): (valorAtual + lucroRealizado) −
+   * totalInvestidoBruto, em R$, e o mesmo dividido por totalInvestidoBruto
+   * em %. `null` antes da primeira compra (totalInvestidoBruto === 0).
+   */
+  rentabilidadeTotalValor: number | null;
+  rentabilidadeTotalPct: number | null;
 };
 
 export type AtivoDetalhe = AtivoResumo & {
@@ -127,7 +139,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     supabase
       .from("ativos")
       .select(
-        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, preco_atual, preco_atualizado_em, preco_fonte, cotacao_automatica, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
+        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, subtipo_internacional, preco_atual, preco_atualizado_em, preco_fonte, cotacao_automatica, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
       )
       .eq("profile_id", user.id)
       .order("ticker"),
@@ -164,7 +176,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       });
 
     const transacoesOrdenadas = ordenarTransacoes(transacoesDoAtivo);
-    const { quantidade, precoMedio, lucroRealizado } = calcularPosicao(transacoesOrdenadas);
+    const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto } = calcularPosicao(transacoesOrdenadas);
 
     const proventosDoAtivo = proventos.filter((p) => p.ativo_id === ativo.id);
     const proventosRecebidos = proventosDoAtivo.reduce((s, p) => s + Number(p.valor_total), 0);
@@ -175,6 +187,14 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     const lucroNaoRealizado = valorAtual - valorAplicado;
     const lucroNaoRealizadoPct = valorAplicado > 0 ? (lucroNaoRealizado / valorAplicado) * 100 : 0;
 
+    // "Retorno simples acumulado" — mesma fórmula da rentabilidade histórica
+    // (§8.15), unificada aqui pro "hoje" (ver §8.16): soma o que já foi
+    // embolsado em vendas parciais/totais ao que ainda está de pé, sobre
+    // tudo que já foi pago em compras até agora.
+    const rentabilidadeTotalValor = totalInvestidoBruto > 0 ? valorAtual + lucroRealizado - totalInvestidoBruto : null;
+    const rentabilidadeTotalPct =
+      totalInvestidoBruto > 0 ? ((valorAtual + lucroRealizado) / totalInvestidoBruto - 1) * 100 : null;
+
     return {
       id: ativo.id,
       ticker: ativo.ticker,
@@ -182,6 +202,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       tipo: ativo.tipo as TipoAtivo,
       subtipoRendaFixa: ativo.subtipo_renda_fixa,
       criptoExchange: ativo.cripto_exchange,
+      subtipoInternacional: ativo.subtipo_internacional,
       precoAtual,
       precoAtualizadoEm: ativo.preco_atualizado_em,
       precoFonte: (ativo.preco_fonte as "yahoo_finance" | "manual" | null) ?? null,
@@ -202,6 +223,9 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       lucroRealizado,
       proventosRecebidos,
       retornoTotal: lucroNaoRealizado + lucroRealizado + proventosRecebidos,
+      totalInvestidoBruto,
+      rentabilidadeTotalValor,
+      rentabilidadeTotalPct,
     };
   });
 }
@@ -369,6 +393,7 @@ export async function criarAtivo(input: AtivoForm): Promise<AcaoResultado & { id
       tipo: input.tipo,
       subtipo_renda_fixa: input.subtipo_renda_fixa || null,
       cripto_exchange: input.cripto_exchange || null,
+      subtipo_internacional: input.subtipo_internacional || null,
       cotacao_automatica: TIPOS_COTACAO_AUTOMATICA.includes(input.tipo as TipoAtivo),
     })
     .select("id")
@@ -397,6 +422,7 @@ export async function editarAtivo(id: string, input: AtivoForm): Promise<AcaoRes
       tipo: input.tipo,
       subtipo_renda_fixa: input.subtipo_renda_fixa || null,
       cripto_exchange: input.cripto_exchange || null,
+      subtipo_internacional: input.subtipo_internacional || null,
       cotacao_automatica: TIPOS_COTACAO_AUTOMATICA.includes(input.tipo as TipoAtivo),
     })
     .eq("id", id)

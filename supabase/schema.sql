@@ -957,3 +957,17 @@ create policy "ativo_preco_diario_manual_own" on public.ativo_preco_diario_manua
 
 create index if not exists idx_ativo_preco_diario_manual_ativo
   on public.ativo_preco_diario_manual (ativo_id, data);
+
+-- ============================================================================
+-- 16. Sub-aba Posição (Carteira) — decisões em docs/MAPA-DE-DADOS.md §8.16
+--     (2026-07-16). `internacional` sempre foi um tipo único ("ação/ETF
+--     exterior", ver seção 14.1) e a nova visão de Posição agrupa por classe
+--     mostrando "Stocks" e "ETF Exterior" como grupos separados — sem esse
+--     campo não dá pra saber se um ativo internacional é uma ação individual
+--     (AAPL) ou um ETF (VOO). Mesmo espírito de subtipo_renda_fixa/
+--     cripto_exchange (seção 8): nulo = ainda não informado, sem efeito em
+--     nenhuma regra de cotação/IR, só na visualização/agrupamento da Posição.
+-- ============================================================================
+
+alter table public.ativos add column if not exists subtipo_internacional text
+  check (subtipo_internacional in ('acao','etf'));

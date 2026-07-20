@@ -21,29 +21,22 @@ export type LancamentoTransacao = {
   corretoraNome: string | null;
 };
 
-export type LancamentoProvento = {
-  categoria: "provento";
-  id: string;
-  ativoId: string;
-  ativoTicker: string;
-  tipo: string;
-  data: string;
-  valorTotal: number;
-};
-
-export type Lancamento = LancamentoTransacao | LancamentoProvento;
+export type Lancamento = LancamentoTransacao;
 
 export type LivroRazao = {
   lancamentos: Lancamento[];
   corretoras: Corretora[];
-  proventosTotal: number;
 };
 
 /**
- * Livro-razão: todos os lançamentos (compra/venda/provento) do usuário, num
- * único feed ordenado por data. A Carteira só registra movimentos — os
- * números consolidados por ativo (posição, preço médio, lucro, desvio) vivem
- * na aba Ativos (ver lib/ativos/actions.ts), sem duplicar aqui.
+ * Livro-razão: só lançamentos de compra/venda, num único feed ordenado por
+ * data — desde 2026-07-20 (ver docs/MAPA-DE-DADOS.md §8.16) proventos NÃO
+ * são mais lidos aqui (nem lista nem resumo): quem quiser ver proventos vai
+ * na aba Proventos, que é a única dona dessa leitura/escrita (ver
+ * lib/proventos/actions.ts). Os números consolidados por ativo (posição,
+ * preço médio, lucro, desvio) vivem na aba Ativos (lib/ativos/actions.ts) e
+ * a visão agregada por classe vive em lib/carteira/posicao.ts (sub-aba
+ * Posição) — nenhum dos dois duplica dado, só lê de `transacoes`.
  */
 export async function obterLivroRazao(): Promise<LivroRazao> {
   const supabase = await createClient();
@@ -51,16 +44,12 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { lancamentos: [], corretoras: [], proventosTotal: 0 };
+  if (!user) return { lancamentos: [], corretoras: [] };
 
-  const [{ data: transacoesRaw }, { data: proventosRaw }, { data: corretorasRaw }] = await Promise.all([
+  const [{ data: transacoesRaw }, { data: corretorasRaw }] = await Promise.all([
     supabase
       .from("transacoes")
       .select("id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, ativos(ticker), corretoras(nome)")
-      .eq("profile_id", user.id),
-    supabase
-      .from("proventos")
-      .select("id, ativo_id, tipo, data, valor_total, ativos(ticker)")
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
   ]);
@@ -82,26 +71,9 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
     };
   });
 
-  const proventos: LancamentoProvento[] = (proventosRaw ?? []).map((p) => {
-    const ativo = Array.isArray(p.ativos) ? p.ativos[0] : p.ativos;
-    return {
-      categoria: "provento",
-      id: p.id,
-      ativoId: p.ativo_id,
-      ativoTicker: ativo?.ticker ?? "—",
-      tipo: p.tipo as string,
-      data: p.data as string,
-      valorTotal: Number(p.valor_total),
-    };
-  });
+  const lancamentos: Lancamento[] = transacoes.sort((a, b) => (a.data < b.data ? 1 : a.data > b.data ? -1 : 0));
 
-  const lancamentos: Lancamento[] = [...transacoes, ...proventos].sort((a, b) =>
-    a.data < b.data ? 1 : a.data > b.data ? -1 : 0
-  );
-
-  const proventosTotal = proventos.reduce((s, p) => s + p.valorTotal, 0);
-
-  return { lancamentos, corretoras: corretorasRaw ?? [], proventosTotal };
+  return { lancamentos, corretoras: corretorasRaw ?? [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +173,6 @@ export async function excluirTransacao(id: string): Promise<AcaoResultado> {
   return {};
 }
 
-// Cadastrar/excluir provento agora é responsabilidade exclusiva de
-// lib/proventos/actions.ts (aba Proventos). A Carteira continua só LENDO
-// proventos acima, em obterLivroRazao(), para o livro-razão combinado.
+// Cadastro/leitura/exclusão de provento é responsabilidade exclusiva de
+// lib/proventos/actions.ts (aba Proventos) — lib/carteira não lê proventos
+// em nenhum ponto desde 2026-07-20 (ver docs/MAPA-DE-DADOS.md §8.16).

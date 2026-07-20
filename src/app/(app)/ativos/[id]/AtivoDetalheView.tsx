@@ -13,6 +13,7 @@ import {
   resultadoTrimestralSchema,
   saldoAcionistasSchema,
   simboloTradingviewSchema,
+  SUBTIPOS_INTERNACIONAL,
   SUBTIPOS_RENDA_FIXA,
   TIPOS_ATIVO,
   type AtivoForm,
@@ -206,6 +207,7 @@ export default function AtivoDetalheView({
               tipo: ativo.tipo,
               subtipo_renda_fixa: ativo.subtipoRendaFixa as AtivoForm["subtipo_renda_fixa"],
               cripto_exchange: ativo.criptoExchange as AtivoForm["cripto_exchange"],
+              subtipo_internacional: ativo.subtipoInternacional as AtivoForm["subtipo_internacional"],
             }}
             onCancelar={() => setEditandoIdentidade(false)}
             onSalvo={async (dados) => {
@@ -1281,6 +1283,7 @@ function FormIdentidade({
       tipo: valoresIniciais.tipo ?? "acao",
       subtipo_renda_fixa: valoresIniciais.subtipo_renda_fixa || "",
       cripto_exchange: valoresIniciais.cripto_exchange || "",
+      subtipo_internacional: valoresIniciais.subtipo_internacional || "",
     },
   });
 
@@ -1337,6 +1340,19 @@ function FormIdentidade({
             {EXCHANGES_CRIPTO.map((e) => (
               <option key={e.valor} value={e.valor}>
                 {e.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {tipoSelecionado === "internacional" && (
+        <div className="col-span-2">
+          <label className="label">Ação ou ETF? (para agrupar na Posição)</label>
+          <select {...register("subtipo_internacional")} className="input" defaultValue="">
+            <option value="">Não informar agora</option>
+            {SUBTIPOS_INTERNACIONAL.map((s) => (
+              <option key={s.valor} value={s.valor}>
+                {s.label}
               </option>
             ))}
           </select>

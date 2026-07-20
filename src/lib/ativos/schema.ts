@@ -32,6 +32,18 @@ export const EXCHANGES_CRIPTO = [
   { valor: "estrangeira", label: "Exchange estrangeira" },
 ] as const;
 
+/**
+ * Só usado pela sub-aba Posição (ver docs/MAPA-DE-DADOS.md §8.16) — distingue,
+ * dentro de `internacional`, ação individual exterior de ETF exterior, pra
+ * agrupar em "Stocks" vs "ETF Exterior" (decisão 2026-07-16). Sem efeito em
+ * nenhuma regra de IR/cotação — igual em espírito a subtipo_renda_fixa, mas
+ * sem relação com tributação.
+ */
+export const SUBTIPOS_INTERNACIONAL = [
+  { valor: "acao", label: "Ação (Stock)" },
+  { valor: "etf", label: "ETF" },
+] as const;
+
 export const ativoSchema = z.object({
   ticker: z
     .string()
@@ -49,6 +61,9 @@ export const ativoSchema = z.object({
     .transform((v) => (v ? v : null)),
   cripto_exchange: z
     .union([z.enum(["nacional", "estrangeira"]), z.literal("")])
+    .transform((v) => (v ? v : null)),
+  subtipo_internacional: z
+    .union([z.enum(["acao", "etf"]), z.literal("")])
     .transform((v) => (v ? v : null)),
 });
 export type AtivoForm = z.infer<typeof ativoSchema>;

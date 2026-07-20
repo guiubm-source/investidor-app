@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { obterLivroRazao } from "@/lib/carteira/actions";
+import { obterPosicaoConsolidada } from "@/lib/carteira/posicao";
 import { obterAtivosComPosicao } from "@/lib/ativos/actions";
 import CarteiraView from "./CarteiraView";
 
@@ -12,7 +13,11 @@ export default async function CarteiraPage() {
 
   if (!user) redirect("/login");
 
-  const [livro, ativosComPosicao] = await Promise.all([obterLivroRazao(), obterAtivosComPosicao()]);
+  const [posicao, livro, ativosComPosicao] = await Promise.all([
+    obterPosicaoConsolidada(),
+    obterLivroRazao(),
+    obterAtivosComPosicao(),
+  ]);
   const ativos = ativosComPosicao.map((a) => ({ id: a.id, ticker: a.ticker, tipo: a.tipo }));
 
   return (
@@ -20,11 +25,11 @@ export default async function CarteiraPage() {
       <div className="max-w-5xl mx-auto">
         <h1 className="text-2xl font-medium text-ink mb-1">Carteira</h1>
         <p className="text-sm text-muted mb-8">
-          Livro-razão de compras e vendas. Proventos aparecem aqui só como referência — cadastre-os
-          na aba Proventos. Posição, preço médio e desvio de cada ativo ficam na página dele, na
-          aba Ativos.
+          Posição consolidada por classe e livro-razão de compras e vendas. Proventos são
+          exclusivos da aba Proventos. Preço médio e desvio de alocação de cada ativo ficam na
+          página dele, na aba Ativos.
         </p>
-        <CarteiraView livroInicial={livro} ativos={ativos} />
+        <CarteiraView posicaoInicial={posicao} livroInicial={livro} ativos={ativos} />
       </div>
     </div>
   );

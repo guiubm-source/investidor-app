@@ -4,7 +4,14 @@ import { useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ativoSchema, EXCHANGES_CRIPTO, SUBTIPOS_RENDA_FIXA, TIPOS_ATIVO, type AtivoForm } from "@/lib/ativos/schema";
+import {
+  ativoSchema,
+  EXCHANGES_CRIPTO,
+  SUBTIPOS_INTERNACIONAL,
+  SUBTIPOS_RENDA_FIXA,
+  TIPOS_ATIVO,
+  type AtivoForm,
+} from "@/lib/ativos/schema";
 import { criarAtivo, obterAtivosComPosicao, type AtivoResumo } from "@/lib/ativos/actions";
 import { useToast } from "@/components/ToastProvider";
 
@@ -102,7 +109,14 @@ function FormNovoAtivo({
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(ativoSchema),
-    defaultValues: { ticker: "", nome: "", tipo: "acao" as const, subtipo_renda_fixa: "" as const, cripto_exchange: "" as const },
+    defaultValues: {
+      ticker: "",
+      nome: "",
+      tipo: "acao" as const,
+      subtipo_renda_fixa: "" as const,
+      cripto_exchange: "" as const,
+      subtipo_internacional: "" as const,
+    },
   });
 
   const tipoSelecionado = watch("tipo");
@@ -158,6 +172,19 @@ function FormNovoAtivo({
             {EXCHANGES_CRIPTO.map((e) => (
               <option key={e.valor} value={e.valor}>
                 {e.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {tipoSelecionado === "internacional" && (
+        <div className="col-span-2">
+          <label className="label">Ação ou ETF? (para agrupar na Posição)</label>
+          <select {...register("subtipo_internacional")} className="input" defaultValue="">
+            <option value="">Não informar agora</option>
+            {SUBTIPOS_INTERNACIONAL.map((s) => (
+              <option key={s.valor} value={s.valor}>
+                {s.label}
               </option>
             ))}
           </select>
