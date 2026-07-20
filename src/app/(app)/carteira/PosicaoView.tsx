@@ -67,6 +67,7 @@ function exportarCsv(posicao: PosicaoConsolidada) {
     "ativo",
     "quantidade",
     "preco_medio",
+    "preco_medio_ajustado",
     "preco_atual",
     "diferenca",
     "patrimonio_atual",
@@ -74,6 +75,7 @@ function exportarCsv(posicao: PosicaoConsolidada) {
     "variacao_hoje_pct",
     "variacao_total_valor",
     "variacao_total_pct",
+    "dividendos_recebidos",
     "pct_dentro_da_classe",
     "pct_na_carteira",
     // Colunas só preenchidas pra linhas de "Ativos encerrados" (ver §8.25) —
@@ -82,8 +84,8 @@ function exportarCsv(posicao: PosicaoConsolidada) {
     "total_comprado",
     "total_vendido",
     "lucro_realizado",
-    "dividendos_recebidos",
     "contribuicao_total",
+    "custo_ajustado",
     "primeira_compra",
     "ultima_venda",
   ].join(",");
@@ -95,6 +97,7 @@ function exportarCsv(posicao: PosicaoConsolidada) {
         a.ticker,
         a.quantidade,
         a.precoMedio.toFixed(2),
+        a.precoMedioAjustado.toFixed(2),
         a.precoAtual.toFixed(2),
         a.diferenca.toFixed(2),
         a.patrimonioAtual.toFixed(2),
@@ -102,6 +105,7 @@ function exportarCsv(posicao: PosicaoConsolidada) {
         a.variacaoHojePct?.toFixed(2) ?? "",
         a.variacaoTotalValor?.toFixed(2) ?? "",
         a.variacaoTotalPct?.toFixed(2) ?? "",
+        a.dividendosRecebidos.toFixed(2),
         a.pctDentroDaClasse.toFixed(2),
         a.pctNaCarteira.toFixed(2),
         "",
@@ -129,12 +133,14 @@ function exportarCsv(posicao: PosicaoConsolidada) {
       "",
       "",
       "",
+      a.dividendosRecebidos.toFixed(2),
+      "",
       "",
       a.totalComprado.toFixed(2),
       a.totalVendido.toFixed(2),
       a.lucroRealizado.toFixed(2),
-      a.dividendosRecebidos.toFixed(2),
       a.contribuicaoTotal.toFixed(2),
+      a.custoAjustado.toFixed(2),
       a.primeiraCompra ?? "",
       a.ultimaVenda ?? "",
     ].join(",")
@@ -296,12 +302,16 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                         <tr className="text-faint text-left border-b border-t border-border">
                           <ColunaOrdenavel label="Ativo" sortKey="ticker" sort={sort} onClick={() => alternarSort(grupo.grupo, "ticker")} />
                           <ColunaOrdenavel label="Preço médio" sortKey="precoMedio" sort={sort} onClick={() => alternarSort(grupo.grupo, "precoMedio")} align="right" />
+                          <th className="py-2 pr-3 text-right" title="Custo de aquisição líquido de proventos já recebidos (dividendo/JCP/rendimento/aluguel), dividido pela quantidade atual — indicador informal, não usado no IR.">
+                            Preço médio ajustado
+                          </th>
                           <ColunaOrdenavel label="Preço atual" sortKey="precoAtual" sort={sort} onClick={() => alternarSort(grupo.grupo, "precoAtual")} align="right" />
                           <ColunaOrdenavel label="Diferença" sortKey="diferenca" sort={sort} onClick={() => alternarSort(grupo.grupo, "diferenca")} align="right" />
                           <ColunaOrdenavel label="Quantidade" sortKey="quantidade" sort={sort} onClick={() => alternarSort(grupo.grupo, "quantidade")} align="right" />
                           <ColunaOrdenavel label="Patrimônio atual" sortKey="patrimonioAtual" sort={sort} onClick={() => alternarSort(grupo.grupo, "patrimonioAtual")} align="right" />
                           <ColunaOrdenavel label="Variação hoje" sortKey="variacaoHoje" sort={sort} onClick={() => alternarSort(grupo.grupo, "variacaoHoje")} align="right" />
                           <ColunaOrdenavel label="Variação total" sortKey="variacaoTotal" sort={sort} onClick={() => alternarSort(grupo.grupo, "variacaoTotal")} align="right" />
+                          <th className="py-2 pr-3 text-right">Dividendos</th>
                           <ColunaOrdenavel label="% classe" sortKey="pctDentroDaClasse" sort={sort} onClick={() => alternarSort(grupo.grupo, "pctDentroDaClasse")} align="right" />
                           <ColunaOrdenavel label="% carteira" sortKey="pctNaCarteira" sort={sort} onClick={() => alternarSort(grupo.grupo, "pctNaCarteira")} align="right" />
                           <th className="py-2 pr-4"></th>
@@ -311,7 +321,9 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                         {ativosPagina.map((a) => (
                           <tr key={a.ativoId} className="border-b border-border/50 last:border-0">
                             <td className="py-1.5 pl-4 pr-3 text-ink font-medium">
-                              {a.ticker}
+                              <Link href={`/ativos/${a.ativoId}`} className="hover:underline underline-offset-2">
+                                {a.ticker}
+                              </Link>
                               {!a.precoDefinido && (
                                 <Link
                                   href={`/ativos/${a.ativoId}`}
@@ -322,6 +334,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                               )}
                             </td>
                             <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.precoMedio)}</td>
+                            <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.precoMedioAjustado)}</td>
                             <td className="py-1.5 pr-3 text-right text-muted">{a.precoDefinido ? formatarMoeda(a.precoAtual) : "—"}</td>
                             <td className={`py-1.5 pr-3 text-right ${a.precoDefinido ? classeSinal(a.diferenca) : "text-faint"}`}>
                               {a.precoDefinido ? formatarMoeda(a.diferenca) : "—"}
@@ -348,6 +361,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                                 </>
                               )}
                             </td>
+                            <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.dividendosRecebidos)}</td>
                             <td className="py-1.5 pr-3 text-right text-muted">{a.pctDentroDaClasse.toFixed(1)}%</td>
                             <td className="py-1.5 pr-3 text-right text-muted">{a.pctNaCarteira.toFixed(1)}%</td>
                             <td className="py-1.5 pr-4 text-right">
@@ -468,6 +482,9 @@ function SecaoAtivosEncerrados({
                 <th className="py-2 pr-3 text-right">Lucro realizado</th>
                 <th className="py-2 pr-3 text-right">Dividendos</th>
                 <th className="py-2 pr-3 text-right">Contribuição total</th>
+                <th className="py-2 pr-3 text-right" title="Total comprado − dividendos/proventos já recebidos — indicador informal, não usado no IR.">
+                  Custo ajustado
+                </th>
                 <th className="py-2 pr-3 text-left">Período</th>
                 <th className="py-2 pr-4"></th>
               </tr>
@@ -475,7 +492,11 @@ function SecaoAtivosEncerrados({
             <tbody>
               {ativos.map((a) => (
                 <tr key={a.ativoId} className="border-b border-border/50 last:border-0">
-                  <td className="py-1.5 pl-4 pr-3 text-ink font-medium">{a.ticker}</td>
+                  <td className="py-1.5 pl-4 pr-3 text-ink font-medium">
+                    <Link href={`/ativos/${a.ativoId}`} className="hover:underline underline-offset-2">
+                      {a.ticker}
+                    </Link>
+                  </td>
                   <td className="py-1.5 pr-3 text-muted">{LABEL_GRUPO[a.grupo]}</td>
                   <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.totalComprado)}</td>
                   <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.totalVendido)}</td>
@@ -484,6 +505,7 @@ function SecaoAtivosEncerrados({
                   <td className={`py-1.5 pr-3 text-right font-medium ${classeSinal(a.contribuicaoTotal)}`}>
                     {formatarMoeda(a.contribuicaoTotal)}
                   </td>
+                  <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.custoAjustado)}</td>
                   <td className="py-1.5 pr-3 text-muted">
                     {formatarData(a.primeiraCompra)} → {formatarData(a.ultimaVenda)}
                   </td>

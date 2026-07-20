@@ -41,6 +41,14 @@ export type PosicaoAtivo = {
   grupo: GrupoPosicao;
   quantidade: number;
   precoMedio: number;
+  /**
+   * Preço médio ajustado (métrica informal do investidor, NUNCA usada pro
+   * IR/lucro realizado — `precoMedio` continua sendo a única fonte oficial,
+   * ver §8.26): (totalInvestidoBruto − proventos já recebidos) ÷ quantidade
+   * atual. Pode ficar negativo — significa que os proventos já recebidos
+   * superam o capital de verdade colocado (posição "se pagou sozinha").
+   */
+  precoMedioAjustado: number;
   precoAtual: number;
   /** false = `preco_atual` nunca foi definido (nasce 0 no banco) — ver §8.17. UI deve mostrar "—", não R$ 0,00. */
   precoDefinido: boolean;
@@ -54,6 +62,8 @@ export type PosicaoAtivo = {
   variacaoTotalPct: number | null;
   pctDentroDaClasse: number;
   pctNaCarteira: number;
+  /** Total de proventos já recebidos por este ativo (todas as corretoras — proventos não têm corretora_id, ver §8.25/§8.26). */
+  dividendosRecebidos: number;
 };
 
 export type PosicaoGrupo = {
@@ -87,6 +97,15 @@ export type AtivoEncerrado = {
   lucroRealizado: number;
   dividendosRecebidos: number;
   contribuicaoTotal: number;
+  /**
+   * Custo ajustado (ver §8.26) = totalComprado − dividendosRecebidos, em R$
+   * (NÃO dividido por quantidade — quantidade é 0 num ativo encerrado, então
+   * "preço por cota" não faz sentido aqui; é o equivalente em R$ do "preço
+   * médio ajustado" das posições abertas). Pode ficar negativo — mesmo
+   * sentido de `precoMedioAjustado`: proventos já superaram o capital
+   * investido.
+   */
+  custoAjustado: number;
   primeiraCompra: string | null;
   ultimaVenda: string | null;
 };
@@ -220,11 +239,12 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       )
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
-    // Exceção deliberada à regra "Posição não lê proventos" (§8.16): só
-    // usada pra "Dividendos recebidos" da seção Ativos encerrados (§8.25) —
-    // proventos não têm corretora_id (não são atribuíveis a uma corretora
-    // específica), então essa coluna soma TUDO que o ativo já pagou,
-    // independente do filtro de corretora selecionado.
+    // Exceção deliberada à regra "Posição não lê proventos" (§8.16): usada
+    // pra "Dividendos" tanto nas posições abertas (coluna por ativo, ver
+    // §8.26) quanto em Ativos encerrados (§8.25) — proventos não têm
+    // corretora_id (não são atribuíveis a uma corretora específica), então
+    // essa coluna soma TUDO que o ativo já pagou, independente do filtro de
+    // corretora selecionado.
     supabase.from("proventos").select("ativo_id, valor_total").eq("profile_id", user.id),
   ]);
 
@@ -369,6 +389,13 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     const variacaoTotalPct =
       p.totalInvestidoBruto > 0 ? ((patrimonioAtual + p.lucroRealizado) / p.totalInvestidoBruto - 1) * 100 : null;
 
+    // Ver §8.26 — preço médio ajustado (informal, não afeta IR): custo de
+    // aquisição líquido de proventos já recebidos, dividido pela quantidade
+    // atual. Bonificação nunca entra aqui porque não é contada em
+    // totalInvestidoBruto (só compra soma nesse acumulador).
+    const dividendosRecebidos = dividendosPorAtivo.get(p.ativoId) ?? 0;
+    const precoMedioAjustado = p.quantidade > 0 ? (p.totalInvestidoBruto - dividendosRecebidos) / p.quantidade : p.precoMedio;
+
     return {
       ativoId: p.ativoId,
       ticker: p.ticker,
@@ -377,6 +404,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       grupo: grupoDoAtivo(p.tipo, p.subtipoRendaFixa, p.subtipoInternacional),
       quantidade: p.quantidade,
       precoMedio: p.precoMedio,
+      precoMedioAjustado,
       precoAtual: p.precoAtual,
       precoDefinido: p.precoDefinido,
       diferenca,
@@ -387,6 +415,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       variacaoTotalPct,
       pctDentroDaClasse: 0, // preenchido depois de agrupar
       pctNaCarteira: totalCarteira > 0 ? (patrimonioAtual / totalCarteira) * 100 : 0,
+      dividendosRecebidos,
     };
   });
 
@@ -475,6 +504,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
         lucroRealizado: p.lucroRealizado,
         dividendosRecebidos,
         contribuicaoTotal: p.lucroRealizado + dividendosRecebidos,
+        custoAjustado: p.totalInvestidoBruto - dividendosRecebidos,
         primeiraCompra: p.primeiraCompra,
         ultimaVenda: p.ultimaVenda,
       };

@@ -337,7 +337,22 @@ create table if not exists public.proventos (
 
 comment on table public.proventos is 'Proventos (dividendos, JCP, rendimentos) recebidos por ativo — usados no cálculo de retorno total.';
 
-create index if not exists idx_proventos_ativo_id_data on public.proventos (ativo_id, data);
+-- Guard igual ao da seção 18: em banco que já rodou a migração de lá, a
+-- coluna "data" não existe mais (virou "data_pagamento") e este índice já
+-- foi trocado por idx_proventos_ativo_id_data_pagamento — sem esse guard,
+-- rodar o arquivo inteiro de novo falhava aqui com "column data does not
+-- exist" (o índice já tinha sido dropado na seção 18 de uma execução
+-- anterior, então "if not exists" tentava recriá-lo de verdade contra uma
+-- coluna que não existe mais).
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'proventos' and column_name = 'data'
+  ) then
+    create index if not exists idx_proventos_ativo_id_data on public.proventos (ativo_id, data);
+  end if;
+end $$;
 
 -- updated_at automático nas tabelas novas
 drop trigger if exists trg_corretoras_updated_at on public.corretoras;
@@ -1045,7 +1060,20 @@ alter table public.transacoes add constraint transacoes_campos_por_tipo check (
 --       categoria "REITs" separada de "Stocks"/"ETF Exterior").
 -- ============================================================================
 
-alter table public.proventos rename column data to data_pagamento;
+-- Rename não é idempotente por natureza (não existe "rename column if
+-- exists" no Postgres) — guard manual via information_schema pra permitir
+-- rodar o arquivo inteiro de novo em bancos que já tiveram essa migração
+-- aplicada (nesses, a coluna "data" já não existe mais, só "data_pagamento").
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'proventos' and column_name = 'data'
+  ) then
+    alter table public.proventos rename column data to data_pagamento;
+  end if;
+end $$;
+
 alter table public.proventos add column if not exists data_com date;
 alter table public.proventos add column if not exists quantidade numeric(18,8);
 alter table public.proventos add column if not exists valor_por_cota numeric(14,6);
@@ -1068,3 +1096,20 @@ create index if not exists idx_proventos_ativo_id_data_pagamento on public.prove
 alter table public.ativos drop constraint if exists ativos_subtipo_internacional_check;
 alter table public.ativos add constraint ativos_subtipo_internacional_check
   check (subtipo_internacional is null or subtipo_internacional in ('acao','etf','reit'));
+
+-- ============================================================================
+-- 19. Proventos — tipo "Aluguel de ações" + preço médio ajustado (decisões em
+--     docs/MAPA-DE-DADOS.md §8.26, 2026-07-20).
+--     - Antes, aluguel de ações recebido só podia ser lançado como "outro"
+--       (sem distinção). Agora vira tipo próprio — registros antigos que
+--       porventura já eram aluguel e ficaram em "outro" continuam lá (não são
+--       migrados automaticamente, ninguém tem como saber quais eram aluguel
+--       sem o usuário reclassificar manualmente editando cada um).
+--     - Nenhum novo campo pro cálculo de "preço médio ajustado" (Posição): ele
+--       é 100% derivado em runtime (totalInvestidoBruto − soma de proventos
+--       por ativo, já lida em obterPosicaoConsolidada), nunca armazenado.
+-- ============================================================================
+
+alter table public.proventos drop constraint if exists proventos_tipo_check;
+alter table public.proventos add constraint proventos_tipo_check
+  check (tipo in ('dividendo','jcp','rendimento','aluguel','outro'));

@@ -2137,6 +2137,77 @@ em branco nas de posição aberta — um arquivo só, dois blocos de linhas).
 **UI (`LivroRazaoView.tsx`).** Card "Lucro realizado" adicionado ao lado de
 Comprado/Vendido/Aporte líquido (grid virou 4 colunas).
 
+### 8.26 Posição — ticker clicável, coluna Dividendos, tipo "Aluguel de ações" e preço médio ajustado (2026-07-20)
+
+Motivado por 4 pedidos do Guilherme depois de ver a AZZA3 em carteira sem
+cotação: ticker não clicável na Posição, sem coluna de dividendos nas
+posições ABERTAS (só existia em Ativos encerrados, §8.25), aluguel de ações
+não distinguível de outros proventos, e pedido explícito de pesquisar e
+implementar "preço médio ajustado".
+
+**AZZA3 sem cotação — não era bug.** `criarAtivo`/`editarAtivo` já setam
+`cotacao_automatica` corretamente pelo `tipo` (confirmado lendo
+`lib/ativos/actions.ts`). O que faltava era só o primeiro disparo do cron
+diário ou do botão "Atualizar agora" (`atualizarCotacaoAgora`) — `preco_atual`
+nasce 0 no banco (§8.17) e só é preenchido quando um desses dois roda pela
+primeira vez depois do ativo ser criado/importado.
+
+**Ticker clicável.** `PosicaoView.tsx`: célula do ticker (tanto nas tabelas
+normais de grupo quanto em `SecaoAtivosEncerrados`) virou `<Link
+href="/ativos/[id]">` — mesma página que já abria pelo `→` no fim da linha,
+agora a linha inteira do nome leva pra lá também.
+
+**Coluna Dividendos nas posições abertas.** O mapa `dividendosPorAtivo`
+(construído em `obterPosicaoConsolidada`, §8.25) já cobria TODOS os ativos,
+não só os encerrados — só não estava sendo lido pra `PosicaoAtivo`. Campo
+`dividendosRecebidos` adicionado ao tipo `PosicaoAtivo` e populado do mesmo
+mapa; nova coluna "Dividendos" na tabela de cada grupo, entre "Variação
+total" e "% classe".
+
+**Preço médio ajustado — pesquisa.** Confirmado (Bastter, B3 Borainvestir):
+dividendos e JCP NÃO alteram o custo médio oficial usado no IR — só
+bonificação altera (vira "compra" sem custo). O "preço médio ajustado" que o
+Guilherme pediu é um indicador INFORMAL, complementar, que nunca deve
+substituir nem alimentar o `precoMedio`/`lucroRealizado` oficiais (que
+continuam intocados, únicas fontes usadas pelo módulo de IR).
+
+Três decisões tomadas com o Guilherme, cada uma respondida com a opção
+recomendada:
+
+1. **Aluguel de ações vira tipo próprio em Proventos** (`TIPOS_PROVENTO`
+   ganhou `"aluguel"` — antes só existia dentro de `"outro"`, sem distinção).
+   Migração SQL (schema.sql, seção 19): `proventos_tipo_check` agora aceita
+   `('dividendo','jcp','rendimento','aluguel','outro')`. Lançamentos antigos
+   que porventura eram aluguel e ficaram em "outro" **não são migrados
+   automaticamente** — ninguém tem como saber quais eram sem o Guilherme
+   reclassificar manualmente editando cada um.
+2. **Ativos encerrados (quantidade = 0) não recebem "preço por cota"** —
+   ganham em vez disso uma coluna **"Custo ajustado"** em R$ (não dividido):
+   `totalComprado − dividendosRecebidos`. Pode ficar negativo (proventos já
+   superaram o capital investido).
+3. **Posições abertas ganham nova coluna** "Preço médio ajustado" ao lado de
+   "Preço médio" (não substitui, não mistura visualmente com o oficial).
+
+**Fórmula (`lib/carteira/posicao.ts`).** Para posições abertas:
+`precoMedioAjustado = (totalInvestidoBruto − dividendosRecebidos) /
+quantidade`. Bonificação nunca entra nessa conta porque não é somada em
+`totalInvestidoBruto` (só a transação `compra` soma nesse acumulador,
+ver `posicao-calculo.ts`) — não precisa de nenhum termo de subtração
+separado para bonificação. Para Ativos encerrados, o equivalente é
+`custoAjustado = totalComprado − dividendosRecebidos` (sem dividir, ver
+decisão 2 acima). Ambos os campos são 100% derivados em runtime, nada
+persistido no banco.
+
+**Arquivos tocados.** `supabase/schema.sql` (seção 19, novo `aluguel`),
+`lib/proventos/schema.ts` (`TIPOS_PROVENTO` + enum Zod — único lugar que
+precisava mudar; formulário, rótulos e totais "por tipo" em
+`ProventosView.tsx`/`AtivoDetalheView.tsx`/`lib/proventos/actions.ts` já
+leem de `TIPOS_PROVENTO`, herdam o novo tipo automaticamente),
+`lib/carteira/posicao.ts` (`precoMedioAjustado` em `PosicaoAtivo`,
+`custoAjustado` em `AtivoEncerrado`), `PosicaoView.tsx` (link no ticker,
+colunas novas nas duas tabelas, CSV com as colunas `preco_medio_ajustado`,
+`dividendos_recebidos` movido pra coluna compartilhada, `custo_ajustado`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

@@ -9,6 +9,7 @@ export const TIPOS_PROVENTO = [
   { valor: "dividendo", label: "Dividendo" },
   { valor: "jcp", label: "Juros sobre capital próprio (JCP)" },
   { valor: "rendimento", label: "Rendimento" },
+  { valor: "aluguel", label: "Aluguel de ações" },
   { valor: "outro", label: "Outro" },
 ] as const;
 
@@ -25,7 +26,7 @@ export const TIPOS_PROVENTO = [
  */
 export const proventoSchema = z.object({
   ativo_id: z.string().uuid("Selecione um ativo"),
-  tipo: z.enum(["dividendo", "jcp", "rendimento", "outro"]),
+  tipo: z.enum(["dividendo", "jcp", "rendimento", "aluguel", "outro"]),
   // Select/input de formulário manda "" quando "não informado" — union com
   // z.literal("") (em vez de z.preprocess) mantém o tipo de entrada
   // explícito, mesmo padrão já usado em lib/ativos/schema.ts.
