@@ -60,6 +60,15 @@ export type EstadoPosicao = {
    * já parcialmente vendido — `custoTotal` sozinho "esquece" o que já saiu.
    */
   totalInvestidoBruto: number;
+  /**
+   * Soma bruta (líquida de custos) de tudo que já foi recebido em vendas até
+   * aqui — SÓ CRESCE, espelho de `totalInvestidoBruto` mas do lado da venda.
+   * Usado pra "Total vendido" da seção Ativos encerrados (Posição, ver
+   * docs/MAPA-DE-DADOS.md §8.25): sem esse acumulador não dava pra saber
+   * quanto um ativo JÁ ZERADO tinha recebido em vendas ao longo do tempo,
+   * só o residual (que é 0 depois de zerar).
+   */
+  totalVendidoLiquido: number;
 };
 
 export const ESTADO_POSICAO_INICIAL: EstadoPosicao = {
@@ -67,6 +76,7 @@ export const ESTADO_POSICAO_INICIAL: EstadoPosicao = {
   custoTotal: 0,
   lucroRealizado: 0,
   totalInvestidoBruto: 0,
+  totalVendidoLiquido: 0,
 };
 
 /**
@@ -97,17 +107,20 @@ export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCal
       custoTotal: estado.custoTotal + valorComprado,
       lucroRealizado: estado.lucroRealizado,
       totalInvestidoBruto: estado.totalInvestidoBruto + valorComprado,
+      totalVendidoLiquido: estado.totalVendidoLiquido,
     };
   }
 
   if (t.tipo === "venda") {
     const precoMedioAtual = estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
     const qtdVenda = Math.min(t.quantidade ?? 0, estado.quantidade);
+    const valorVendido = (t.quantidade ?? 0) * (t.precoUnitario ?? 0) - (t.custos ?? 0);
     return {
       quantidade: estado.quantidade - qtdVenda,
       custoTotal: estado.custoTotal - precoMedioAtual * qtdVenda,
       lucroRealizado: estado.lucroRealizado + ((t.precoUnitario ?? 0) - precoMedioAtual) * qtdVenda - (t.custos ?? 0),
       totalInvestidoBruto: estado.totalInvestidoBruto,
+      totalVendidoLiquido: estado.totalVendidoLiquido + valorVendido,
     };
   }
 
@@ -118,6 +131,7 @@ export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCal
       custoTotal: estado.custoTotal,
       lucroRealizado: estado.lucroRealizado,
       totalInvestidoBruto: estado.totalInvestidoBruto,
+      totalVendidoLiquido: estado.totalVendidoLiquido,
     };
   }
 
@@ -127,6 +141,7 @@ export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCal
     custoTotal: estado.custoTotal + (t.valorCapitalizado ?? 0),
     lucroRealizado: estado.lucroRealizado,
     totalInvestidoBruto: estado.totalInvestidoBruto,
+    totalVendidoLiquido: estado.totalVendidoLiquido,
   };
 }
 
@@ -164,6 +179,7 @@ export function calcularPosicao(transacoesOrdenadas: TransacaoCalc[]) {
     precoMedio: precoMedioDoEstado(estado),
     lucroRealizado: estado.lucroRealizado,
     totalInvestidoBruto: estado.totalInvestidoBruto,
+    totalVendidoLiquido: estado.totalVendidoLiquido,
   };
 }
 

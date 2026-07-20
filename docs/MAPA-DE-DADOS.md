@@ -2067,6 +2067,76 @@ eventos societários (fator de proporção, valor capitalizado) ou proventos
 (data-com, quantidade, valor por cota) precisam, então essas linhas
 continuam sendo lançadas manualmente nas telas de sempre.
 
+### 8.25 Lucro realizado no Livro-razão + seção "Ativos encerrados" na Posição (2026-07-20)
+
+Motivado pelo primeiro ativo importado pelo Guilherme (ABEV3, comprado e
+totalmente vendido com lucro): o card "Líquido" do Livro-razão apareceu
+negativo, e a Posição não mostrava esse ativo em lugar nenhum (quantidade
+zerada). Nenhum dos dois é bug de cálculo — os dois eram lacunas de
+informação faltando.
+
+**"Líquido" não estava errado — faltava um card do lado.** `Líquido =
+comprado − vendido` é fluxo de caixa (aporte líquido: quanto capital líquido
+você colocou), a mesma fórmula que a Visão mensal já usa pra "aporte" vs
+"retirada" (§8.19). Quando o total vendido supera o comprado (ciclo fechado
+com ganho), esse número FICA negativo por definição — é o formato certo pra
+"aporte", só que lido como se fosse "lucro" confunde. Renomeado pra "Aporte
+líquido (compra − venda)" pra deixar isso explícito, e adicionado um 4º
+card, **Lucro realizado**, calculado de verdade (venda − custo médio
+ponderado, reaproveitando `calcularPosicao`) — esse sim fica positivo
+quando o ciclo dá lucro.
+
+Detalhe importante do "Lucro realizado" filtrado: ele SEMPRE usa o
+HISTÓRICO COMPLETO de cada ativo (não só as linhas que passam no filtro de
+data) pra recalcular a base de custo — só os filtros de ativo/corretora
+(que mudam de fato QUAL posição está sendo olhada) entram na conta. Um
+filtro de período cortando a base de custo no meio daria um lucro errado
+(ex.: filtrar só 2024 esconderia compras de 2021 que formam o custo médio
+usado na venda de 2024).
+
+**Posição não mostrava ativos zerados — decisão: seção "Ativos encerrados".**
+`obterPosicaoConsolidada` sempre filtrou `quantidade > 0` antes de agrupar
+por classe (correto pra "posição atual") — mas isso também fazia o ativo
+sumir de vez, sem nenhum resumo de "o que ele deu" enquanto esteve na
+carteira. Pedido do Guilherme, com uma pergunta de escopo (colunas) e uma
+de ordenação, ambas respondidas com a opção recomendada:
+
+1. **Colunas:** Comprado, Vendido, Lucro realizado, Dividendos recebidos,
+   Contribuição total (lucro + dividendos) e Período (primeira compra →
+   última venda).
+2. **Ordenação:** mais recente primeiro (data da última venda) — funciona
+   como uma linha do tempo de saídas, não um ranking por tamanho.
+3. **Posição na tela:** sempre por último, depois de TODAS as classes
+   normais (Ações, FIIs, Tesouro, Renda Fixa, ETF Brasil, Stocks, REITs, ETF
+   Exterior, Internacional não classificado, Cripto, Fundos, Outros) — uma
+   seção à parte, não mais uma classe entre as outras.
+
+**`lib/ativos/posicao-calculo.ts`.** Novo acumulador `totalVendidoLiquido`
+em `EstadoPosicao` (só cresce, espelho de `totalInvestidoBruto` do lado da
+venda) — sem ele não dava pra saber "quanto esse ativo já vendeu no total"
+depois de zerado (o `custoTotal` residual vira 0 nesse ponto).
+
+**`lib/carteira/posicao.ts`.** `obterPosicaoConsolidada` agora calcula a
+posição de TODOS os ativos (`todasAsPosicoes`) antes de separar em
+`posicoesBase` (quantidade > 0, vira `grupos` como sempre) e
+`posicoesEncerradas` (quantidade ≤ 0 E `totalInvestidoBruto` > 0 — só quem
+de fato já teve aporte, não qualquer ativo cadastrado sem transação). Nova
+query em `proventos` (só `ativo_id, valor_total`, sem filtro de corretora —
+proventos não têm `corretora_id`, então "Dividendos recebidos" soma tudo
+que o ativo já pagou, **exceção deliberada e documentada** à regra "Posição
+não lê proventos" da §8.16). Novo tipo exportado `AtivoEncerrado` e campo
+`ativosEncerrados` em `PosicaoConsolidada`.
+
+**UI (`PosicaoView.tsx`).** Nova seção colapsável `SecaoAtivosEncerrados`
+renderizada depois do `.map()` dos grupos normais (e também no caso "sem
+posição aberta", que antes simplesmente dizia "nenhuma posição" mesmo
+tendo ativos encerrados pra mostrar — também corrigido). CSV export ganhou
+as 7 colunas novas (preenchidas só nas linhas de "Ativos encerrados",
+em branco nas de posição aberta — um arquivo só, dois blocos de linhas).
+
+**UI (`LivroRazaoView.tsx`).** Card "Lucro realizado" adicionado ao lado de
+Comprado/Vendido/Aporte líquido (grid virou 4 colunas).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

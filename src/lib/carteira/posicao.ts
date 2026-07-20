@@ -70,6 +70,27 @@ export type PosicaoGrupo = {
   semPrecoCount: number;
 };
 
+/**
+ * Ativo que já teve aporte mas está com quantidade zerada hoje (sob o filtro
+ * de corretora aplicado, se houver) — "participou da carteira e saiu por
+ * completo". Ver docs/MAPA-DE-DADOS.md §8.25. `dividendosRecebidos` é a
+ * única exceção à regra de "Posição não lê proventos" (§8.16) — decisão
+ * deliberada 2026-07-20, ver comentário em `obterPosicaoConsolidada`.
+ */
+export type AtivoEncerrado = {
+  ativoId: string;
+  ticker: string;
+  nome: string | null;
+  grupo: GrupoPosicao;
+  totalComprado: number;
+  totalVendido: number;
+  lucroRealizado: number;
+  dividendosRecebidos: number;
+  contribuicaoTotal: number;
+  primeiraCompra: string | null;
+  ultimaVenda: string | null;
+};
+
 export type PosicaoConsolidada = {
   grupos: PosicaoGrupo[];
   corretoras: Corretora[];
@@ -80,6 +101,8 @@ export type PosicaoConsolidada = {
   variacaoTotalPct: number | null;
   /** Total de ativos em posição sem preço atual definido — ver §8.17. */
   ativosSemPrecoCount: number;
+  /** Ordenado por última venda mais recente primeiro — ver §8.25. */
+  ativosEncerrados: AtivoEncerrado[];
 };
 
 /**
@@ -181,10 +204,11 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     variacaoTotalValor: 0,
     variacaoTotalPct: null,
     ativosSemPrecoCount: 0,
+    ativosEncerrados: [],
   };
   if (!user) return vazio;
 
-  const [ativosRes, transacoesRes, corretorasRes] = await Promise.all([
+  const [ativosRes, transacoesRes, corretorasRes, proventosRes] = await Promise.all([
     supabase
       .from("ativos")
       .select("id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual, preco_atualizado_em")
@@ -196,6 +220,12 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       )
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
+    // Exceção deliberada à regra "Posição não lê proventos" (§8.16): só
+    // usada pra "Dividendos recebidos" da seção Ativos encerrados (§8.25) —
+    // proventos não têm corretora_id (não são atribuíveis a uma corretora
+    // específica), então essa coluna soma TUDO que o ativo já pagou,
+    // independente do filtro de corretora selecionado.
+    supabase.from("proventos").select("ativo_id, valor_total").eq("profile_id", user.id),
   ]);
 
   // Ver docs/MAPA-DE-DADOS.md §8.17: sem isso, uma coluna faltando no banco
@@ -205,10 +235,17 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
   if (ativosRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler ativos — ${ativosRes.error.message}`);
   if (transacoesRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler transações — ${transacoesRes.error.message}`);
   if (corretorasRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler corretoras — ${corretorasRes.error.message}`);
+  if (proventosRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler proventos — ${proventosRes.error.message}`);
 
   const ativos = ativosRes.data ?? [];
   const todasTransacoes = transacoesRes.data ?? [];
   const corretoras = corretorasRes.data ?? [];
+
+  const dividendosPorAtivo = new Map<string, number>();
+  for (const p of proventosRes.data ?? []) {
+    const atual = dividendosPorAtivo.get(p.ativo_id as string) ?? 0;
+    dividendosPorAtivo.set(p.ativo_id as string, atual + Number(p.valor_total));
+  }
 
   const transacoesFiltradas = corretoraId
     ? todasTransacoes.filter((t) => t.corretora_id === corretoraId)
@@ -231,50 +268,70 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     precoMedio: number;
     lucroRealizado: number;
     totalInvestidoBruto: number;
+    totalVendidoLiquido: number;
+    primeiraCompra: string | null;
+    ultimaVenda: string | null;
   };
 
-  const posicoesBase: PosicaoBase[] = ativos
-    .map((ativo) => {
-      // Ver docs/MAPA-DE-DADOS.md §8.22: sem `fator_proporcao`/`valor_capitalizado`
-      // aqui, um desdobramento/grupamento/bonificação lançado no Livro-razão
-      // seria um no-op silencioso na Posição — o motor de cálculo
-      // (`aplicarTransacaoNaPosicao`) já sabe tratar esses tipos, só precisa
-      // receber os campos.
-      const transacoesDoAtivo: (TransacaoCalc & { createdAt: string })[] = transacoesFiltradas
-        .filter((t) => t.ativo_id === ativo.id)
-        .map((t) => ({
-          tipo: t.tipo as TransacaoCalc["tipo"],
-          data: t.data as string,
-          quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
-          precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
-          custos: t.custos !== null ? Number(t.custos) : null,
-          fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
-          valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
-          createdAt: t.created_at as string,
-        }));
+  const todasAsPosicoes: PosicaoBase[] = ativos.map((ativo) => {
+    // Ver docs/MAPA-DE-DADOS.md §8.22: sem `fator_proporcao`/`valor_capitalizado`
+    // aqui, um desdobramento/grupamento/bonificação lançado no Livro-razão
+    // seria um no-op silencioso na Posição — o motor de cálculo
+    // (`aplicarTransacaoNaPosicao`) já sabe tratar esses tipos, só precisa
+    // receber os campos.
+    const transacoesDoAtivo: (TransacaoCalc & { createdAt: string })[] = transacoesFiltradas
+      .filter((t) => t.ativo_id === ativo.id)
+      .map((t) => ({
+        tipo: t.tipo as TransacaoCalc["tipo"],
+        data: t.data as string,
+        quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+        precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+        custos: t.custos !== null ? Number(t.custos) : null,
+        fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+        valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
+        createdAt: t.created_at as string,
+      }));
 
-      const ordenadas = ordenarTransacoes(transacoesDoAtivo);
-      const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto } = calcularPosicao(ordenadas);
+    const ordenadas = ordenarTransacoes(transacoesDoAtivo);
+    const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto, totalVendidoLiquido } =
+      calcularPosicao(ordenadas);
 
-      return {
-        ativoId: ativo.id,
-        ticker: ativo.ticker,
-        nome: ativo.nome,
-        tipo: ativo.tipo as TipoAtivo,
-        subtipoRendaFixa: ativo.subtipo_renda_fixa,
-        subtipoInternacional: ativo.subtipo_internacional,
-        precoAtual: Number(ativo.preco_atual),
-        precoDefinido: ativo.preco_atualizado_em !== null,
-        quantidade,
-        precoMedio,
-        lucroRealizado,
-        totalInvestidoBruto,
-      };
-    })
-    // Só entra na Posição quem ainda tem quantidade em carteira (sob o
-    // filtro de corretora aplicado, se houver) — ativo zerado não é
-    // "posição", já saiu por completo.
-    .filter((p) => p.quantidade > 0);
+    // Ver docs/MAPA-DE-DADOS.md §8.25 — só usado pela seção "Ativos
+    // encerrados" (coluna "Período"), não afeta nenhum outro cálculo.
+    const datasCompra = ordenadas.filter((t) => t.tipo === "compra").map((t) => t.data);
+    const datasVenda = ordenadas.filter((t) => t.tipo === "venda").map((t) => t.data);
+    const primeiraCompra = datasCompra.length > 0 ? datasCompra.reduce((a, b) => (a < b ? a : b)) : null;
+    const ultimaVenda = datasVenda.length > 0 ? datasVenda.reduce((a, b) => (a > b ? a : b)) : null;
+
+    return {
+      ativoId: ativo.id,
+      ticker: ativo.ticker,
+      nome: ativo.nome,
+      tipo: ativo.tipo as TipoAtivo,
+      subtipoRendaFixa: ativo.subtipo_renda_fixa,
+      subtipoInternacional: ativo.subtipo_internacional,
+      precoAtual: Number(ativo.preco_atual),
+      precoDefinido: ativo.preco_atualizado_em !== null,
+      quantidade,
+      precoMedio,
+      lucroRealizado,
+      totalInvestidoBruto,
+      totalVendidoLiquido,
+      primeiraCompra,
+      ultimaVenda,
+    };
+  });
+
+  // Só entra na Posição "de pé" quem ainda tem quantidade em carteira (sob o
+  // filtro de corretora aplicado, se houver) — ativo zerado não é
+  // "posição", já saiu por completo (esse vai pra "Ativos encerrados").
+  const posicoesBase = todasAsPosicoes.filter((p) => p.quantidade > 0);
+
+  // Ver docs/MAPA-DE-DADOS.md §8.25: ativo que já teve aporte (totalInvestidoBruto
+  // > 0) mas está zerado hoje — "participou da carteira", não é um ativo
+  // cadastrado à toa sem nenhuma transação (esses ficam de fora, quantidade
+  // e totalInvestidoBruto ambos 0).
+  const posicoesEncerradas = todasAsPosicoes.filter((p) => p.quantidade <= 0 && p.totalInvestidoBruto > 0);
 
   // Busca em lote o último preço ANTERIOR a hoje (mercado + manual) pra
   // "variação hoje" — uma query por fonte, não uma por ativo.
@@ -403,6 +460,32 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
   const totalVariacaoTotalPct =
     totalInvestidoBruto > 0 ? ((totalCarteira + totalLucroRealizado) / totalInvestidoBruto - 1) * 100 : null;
 
+  // Ver docs/MAPA-DE-DADOS.md §8.25 — "Ativos encerrados": ordenado por data
+  // da última venda mais recente primeiro (linha do tempo de saídas).
+  const ativosEncerrados: AtivoEncerrado[] = posicoesEncerradas
+    .map((p) => {
+      const dividendosRecebidos = dividendosPorAtivo.get(p.ativoId) ?? 0;
+      return {
+        ativoId: p.ativoId,
+        ticker: p.ticker,
+        nome: p.nome,
+        grupo: grupoDoAtivo(p.tipo, p.subtipoRendaFixa, p.subtipoInternacional),
+        totalComprado: p.totalInvestidoBruto,
+        totalVendido: p.totalVendidoLiquido,
+        lucroRealizado: p.lucroRealizado,
+        dividendosRecebidos,
+        contribuicaoTotal: p.lucroRealizado + dividendosRecebidos,
+        primeiraCompra: p.primeiraCompra,
+        ultimaVenda: p.ultimaVenda,
+      };
+    })
+    .sort((a, b) => {
+      if (a.ultimaVenda === b.ultimaVenda) return 0;
+      if (a.ultimaVenda === null) return 1;
+      if (b.ultimaVenda === null) return -1;
+      return a.ultimaVenda < b.ultimaVenda ? 1 : -1;
+    });
+
   return {
     grupos,
     corretoras,
@@ -412,5 +495,6 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     variacaoTotalValor: totalVariacaoTotalValor,
     variacaoTotalPct: totalVariacaoTotalPct,
     ativosSemPrecoCount: posicoesBase.filter((p) => !p.precoDefinido).length,
+    ativosEncerrados,
   };
 }

@@ -21,7 +21,7 @@ import ConfirmModal from "@/components/ConfirmModal";
 import { useToast } from "@/components/ToastProvider";
 import VisaoMensalView from "./VisaoMensalView";
 import ImportarTransacoesView from "./ImportarTransacoesView";
-import { valorCaixaTransacao } from "@/lib/ativos/posicao-calculo";
+import { valorCaixaTransacao, calcularPosicao } from "@/lib/ativos/posicao-calculo";
 
 /**
  * `TransacaoForm` (z.infer, tipo de SAÍDA do zod) tem `cambio: number | null`
@@ -154,6 +154,34 @@ export default function LivroRazaoView({
     }
     return { compra, venda, liquido: compra - venda };
   }, [lancamentosFiltrados]);
+
+  /**
+   * Lucro realizado (venda − custo médio ponderado) dos ativos que aparecem
+   * no filtro atual — ver docs/MAPA-DE-DADOS.md §8.25. Diferente de
+   * "Líquido" (que é fluxo de caixa: comprado − vendido, usado pra "aporte
+   * líquido" na Visão mensal), isso é LUCRO de verdade: fica positivo quando
+   * o total vendido supera o comprado, mesmo que o "Líquido" acima dê
+   * negativo (é o caso normal de um ciclo de compra/venda fechado com
+   * ganho). Sempre recalculado com o HISTÓRICO COMPLETO de cada ativo (não
+   * só as linhas que passam no filtro de data) — senão um filtro de período
+   * cortaria a base de custo no meio e inflaria/reduziria o lucro errado;
+   * só os filtros de ativo/corretora (que mudam de verdade QUAL posição está
+   * sendo olhada) entram na conta.
+   */
+  const lucroRealizadoFiltrado = useMemo(() => {
+    const ativoIds = new Set(lancamentosFiltrados.map((l) => l.ativoId));
+    let total = 0;
+    for (const ativoId of ativoIds) {
+      const transacoesDoAtivo = livro.lancamentos.filter((l) => {
+        if (l.ativoId !== ativoId) return false;
+        if (filtroCorretoras.size > 0 && !(l.corretoraId && filtroCorretoras.has(l.corretoraId))) return false;
+        return true;
+      });
+      const ordenadas = [...transacoesDoAtivo].sort((a, b) => (a.data < b.data ? -1 : a.data > b.data ? 1 : 0));
+      total += calcularPosicao(ordenadas).lucroRealizado;
+    }
+    return total;
+  }, [lancamentosFiltrados, livro.lancamentos, filtroCorretoras]);
 
   const limparFiltros = () => {
     setFiltroAtivos(new Set());
@@ -306,7 +334,7 @@ export default function LivroRazaoView({
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="card p-3">
           <p className="text-xs text-faint">Comprado{filtroAtivo ? " (filtrado)" : ""}</p>
           <p className="text-lg font-medium text-success">{formatarMoeda(totalFiltrado.compra)}</p>
@@ -316,8 +344,16 @@ export default function LivroRazaoView({
           <p className="text-lg font-medium text-danger">{formatarMoeda(totalFiltrado.venda)}</p>
         </div>
         <div className="card p-3">
-          <p className="text-xs text-faint">Líquido (compra − venda){filtroAtivo ? " (filtrado)" : ""}</p>
+          <p className="text-xs text-faint">Aporte líquido (compra − venda){filtroAtivo ? " (filtrado)" : ""}</p>
           <p className="text-lg font-medium text-ink">{formatarMoeda(totalFiltrado.liquido)}</p>
+        </div>
+        <div className="card p-3">
+          <p className="text-xs text-faint" title="Venda − custo médio ponderado, sempre com o histórico completo do ativo (não só o período filtrado)">
+            Lucro realizado{filtroAtivo ? " (ativos do filtro)" : ""}
+          </p>
+          <p className={`text-lg font-medium ${lucroRealizadoFiltrado >= 0 ? "text-success" : "text-danger"}`}>
+            {formatarMoeda(lucroRealizadoFiltrado)}
+          </p>
         </div>
       </div>
 

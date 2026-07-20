@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { obterPosicaoConsolidada, type PosicaoAtivo, type PosicaoConsolidada } from "@/lib/carteira/posicao";
-import type { GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
+import { obterPosicaoConsolidada, type PosicaoAtivo, type PosicaoConsolidada, type AtivoEncerrado } from "@/lib/carteira/posicao";
+import { LABEL_GRUPO, type GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
 
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -13,6 +13,12 @@ const formatarNumero = (valor: number) => valor.toLocaleString("pt-BR", { maximu
 const formatarPct = (v: number | null) => (v === null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
 
 const classeSinal = (v: number | null) => (v === null ? "text-faint" : v >= 0 ? "text-success" : "text-danger");
+
+const formatarData = (iso: string | null) => {
+  if (!iso) return "—";
+  const [ano, mes, dia] = iso.split("-");
+  return `${dia}/${mes}/${ano}`;
+};
 
 const OPCOES_LINHAS_POR_PAGINA = [10, 25, 50, 100] as const;
 
@@ -70,9 +76,19 @@ function exportarCsv(posicao: PosicaoConsolidada) {
     "variacao_total_pct",
     "pct_dentro_da_classe",
     "pct_na_carteira",
+    // Colunas só preenchidas pra linhas de "Ativos encerrados" (ver §8.25) —
+    // ficam em branco nas linhas de posição aberta, pra manter as duas
+    // seções no mesmo arquivo/schema em vez de exportar 2 CSVs separados.
+    "total_comprado",
+    "total_vendido",
+    "lucro_realizado",
+    "dividendos_recebidos",
+    "contribuicao_total",
+    "primeira_compra",
+    "ultima_venda",
   ].join(",");
 
-  const linhas = posicao.grupos.flatMap((g) =>
+  const linhasAbertas = posicao.grupos.flatMap((g) =>
     g.ativos.map((a) =>
       [
         g.label,
@@ -88,11 +104,43 @@ function exportarCsv(posicao: PosicaoConsolidada) {
         a.variacaoTotalPct?.toFixed(2) ?? "",
         a.pctDentroDaClasse.toFixed(2),
         a.pctNaCarteira.toFixed(2),
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
       ].join(",")
     )
   );
 
-  const conteudo = [cabecalho, ...linhas].join("\n");
+  const linhasEncerradas = posicao.ativosEncerrados.map((a) =>
+    [
+      "Ativos encerrados",
+      a.ticker,
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      a.totalComprado.toFixed(2),
+      a.totalVendido.toFixed(2),
+      a.lucroRealizado.toFixed(2),
+      a.dividendosRecebidos.toFixed(2),
+      a.contribuicaoTotal.toFixed(2),
+      a.primeiraCompra ?? "",
+      a.ultimaVenda ?? "",
+    ].join(",")
+  );
+
+  const conteudo = [cabecalho, ...linhasAbertas, ...linhasEncerradas].join("\n");
   const blob = new Blob([conteudo], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -116,6 +164,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
   const [corretoraFiltro, setCorretoraFiltro] = useState<string>("");
   const [carregando, setCarregando] = useState(false);
   const [colapsados, setColapsados] = useState<Set<GrupoPosicao>>(new Set());
+  const [encerradosColapsado, setEncerradosColapsado] = useState(false);
   const [sortPorGrupo, setSortPorGrupo] = useState<Partial<Record<GrupoPosicao, SortState>>>({});
   const [paginaPorGrupo, setPaginaPorGrupo] = useState<Partial<Record<GrupoPosicao, number>>>({});
   const [linhasPorGrupo, setLinhasPorGrupo] = useState<Partial<Record<GrupoPosicao, number>>>({});
@@ -150,9 +199,22 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
     return (
       <div className="space-y-4">
         <FiltroECsv posicao={posicao} corretoraFiltro={corretoraFiltro} onFiltroChange={aplicarFiltroCorretora} carregando={carregando} />
-        <p className="text-sm text-faint">
-          Nenhuma posição em carteira ainda. Registre compras na sub-aba Livro-razão.
-        </p>
+        {posicao.ativosEncerrados.length === 0 ? (
+          <p className="text-sm text-faint">
+            Nenhuma posição em carteira ainda. Registre compras na sub-aba Livro-razão.
+          </p>
+        ) : (
+          <p className="text-sm text-faint">
+            Nenhuma posição aberta no momento — mas você já tem ativos que passaram pela carteira, veja abaixo.
+          </p>
+        )}
+        {posicao.ativosEncerrados.length > 0 && (
+          <SecaoAtivosEncerrados
+            ativos={posicao.ativosEncerrados}
+            colapsado={encerradosColapsado}
+            onToggle={() => setEncerradosColapsado((v) => !v)}
+          />
+        )}
       </div>
     );
   }
@@ -346,6 +408,96 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
           );
         })}
       </div>
+
+      {posicao.ativosEncerrados.length > 0 && (
+        <SecaoAtivosEncerrados
+          ativos={posicao.ativosEncerrados}
+          colapsado={encerradosColapsado}
+          onToggle={() => setEncerradosColapsado((v) => !v)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.25 — ativos que já participaram da carteira
+ * (tiveram aporte) e estão zerados hoje, sempre no final da lista de
+ * classes (depois de "Outros"), ordenados por data da última venda mais
+ * recente primeiro.
+ */
+function SecaoAtivosEncerrados({
+  ativos,
+  colapsado,
+  onToggle,
+}: {
+  ativos: AtivoEncerrado[];
+  colapsado: boolean;
+  onToggle: () => void;
+}) {
+  const totalContribuicao = ativos.reduce((s, a) => s + a.contribuicaoTotal, 0);
+
+  return (
+    <div className="card overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left"
+      >
+        <div className="flex items-center gap-2">
+          <span className={`text-faint text-xs transition-transform ${colapsado ? "" : "rotate-90"}`}>▶</span>
+          <span className="text-sm font-medium text-ink">Ativos encerrados</span>
+          <span className="text-xs text-faint">
+            {ativos.length} ativo{ativos.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+        <div className="text-right text-xs">
+          <p className="text-faint">Contribuição total ao patrimônio</p>
+          <p className={classeSinal(totalContribuicao)}>{formatarMoeda(totalContribuicao)}</p>
+        </div>
+      </button>
+
+      {!colapsado && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs whitespace-nowrap">
+            <thead>
+              <tr className="text-faint text-left border-b border-t border-border">
+                <th className="py-2 pl-4 pr-3">Ativo</th>
+                <th className="py-2 pr-3 text-left">Categoria</th>
+                <th className="py-2 pr-3 text-right">Comprado</th>
+                <th className="py-2 pr-3 text-right">Vendido</th>
+                <th className="py-2 pr-3 text-right">Lucro realizado</th>
+                <th className="py-2 pr-3 text-right">Dividendos</th>
+                <th className="py-2 pr-3 text-right">Contribuição total</th>
+                <th className="py-2 pr-3 text-left">Período</th>
+                <th className="py-2 pr-4"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {ativos.map((a) => (
+                <tr key={a.ativoId} className="border-b border-border/50 last:border-0">
+                  <td className="py-1.5 pl-4 pr-3 text-ink font-medium">{a.ticker}</td>
+                  <td className="py-1.5 pr-3 text-muted">{LABEL_GRUPO[a.grupo]}</td>
+                  <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.totalComprado)}</td>
+                  <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.totalVendido)}</td>
+                  <td className={`py-1.5 pr-3 text-right ${classeSinal(a.lucroRealizado)}`}>{formatarMoeda(a.lucroRealizado)}</td>
+                  <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.dividendosRecebidos)}</td>
+                  <td className={`py-1.5 pr-3 text-right font-medium ${classeSinal(a.contribuicaoTotal)}`}>
+                    {formatarMoeda(a.contribuicaoTotal)}
+                  </td>
+                  <td className="py-1.5 pr-3 text-muted">
+                    {formatarData(a.primeiraCompra)} → {formatarData(a.ultimaVenda)}
+                  </td>
+                  <td className="py-1.5 pr-4 text-right">
+                    <Link href={`/ativos/${a.ativoId}`} className="text-faint hover:text-ink" title="Ver ativo">
+                      →
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
