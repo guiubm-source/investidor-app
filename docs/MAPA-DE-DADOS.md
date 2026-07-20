@@ -1586,9 +1586,12 @@ mandar o modelo.
    build real do Next/Vercel (mesma classe de bug da decisão 4 da seção
    8.12). Como a nova Visão mensal também precisa dessa classificação,
    extraí os três pra um módulo novo e puro, `lib/carteira/grupo-classificacao.ts`
-   (sem `"use server"`), e `posicao.ts` passou a importar de lá e só
-   reexportar o TYPE `GrupoPosicao` (export de tipo é seguro em arquivo
-   `"use server"` porque é apagado em tempo de compilação).
+   (sem `"use server"`), e `posicao.ts` passou a importar de lá.
+   **Correção (ver §8.21): a ideia original era reexportar o TYPE
+   `GrupoPosicao` também a partir de `posicao.ts` (`export type { ... }`),
+   assumindo que export-de-tipo seria seguro em arquivo `"use server"` por
+   ser apagado em tempo de compilação — essa suposição estava ERRADA, quebrou
+   o build real do Vercel, e foi revertida.**
 2. **`valorCaixaTransacao` (centralização).** A definição de "valor em caixa
    de uma transação" (compra = `quantidade×preço + custos`, venda =
    `quantidade×preço − custos`) já existia inline em `LivroRazaoView.tsx`
@@ -1682,6 +1685,92 @@ sem antes perguntar ao Guilherme (protocolo da seção 1): schema novo tipo
 "eventos societários" (tabela separada, efeito calculado à parte) vs.
 tratar como um tipo especial de `transacao` com efeito automático no
 cálculo de posição. Essa pergunta fica pra próxima rodada de trabalho.
+
+### 8.21 Correção de build: `export type` também quebra em arquivo `"use server"` (2026-07-20)
+
+Achado real no deploy do Vercel logo após a §8.19 (não pego pelo `tsc
+--noEmit` nem por nenhuma checagem disponível neste sandbox — só apareceu no
+log do build do Vercel):
+
+```
+Error: Turbopack build failed with 1 errors:
+Export GrupoPosicao doesn't exist in target module
+The export GrupoPosicao was not found in module .../lib/carteira/posicao.ts
+```
+
+**Causa.** `lib/carteira/posicao.ts` (`"use server"`) tinha
+`export type { GrupoPosicao };` pra não quebrar quem já importava esse tipo
+dali (decisão original da §8.19, item 1) — a suposição era que um export
+*só de tipo* seria seguro num arquivo `"use server"` porque tipos são
+apagados em tempo de compilação. Na prática, o transform de Server Actions
+do Next/Turbopack escaneia **todo** export do arquivo (não distingue
+export de tipo de export de valor) pra montar o módulo interno de
+referências de ações (`.next-internal/.../actions.js`) — como o `type`
+não existe em tempo de execução, o módulo gerado referencia um export que
+não existe, e o build (não o `tsc`) falha. Essa é uma checagem exclusiva do
+bundler do Next, igual à decisão 4 da §8.12 (funções síncronas em arquivo
+`"use server"`) — outra categoria de bug que `tsc --noEmit`/eslint não
+enxergam neste ambiente por falta de acesso de rede pra rodar o `next
+build` de verdade.
+
+**Correção.** Removido `export type { GrupoPosicao }` de
+`lib/carteira/posicao.ts` — nenhum export além de `async function` e
+`type`/`const` NÃO-tipo... na real, a regra segura agora é: **um arquivo
+`"use server"` só deve exportar `async function`s (Server Actions de
+verdade)**; até `export type` deve ser evitado ali. Quem precisa do tipo
+`GrupoPosicao` (só `PosicaoView.tsx`) passou a importar direto de
+`lib/carteira/grupo-classificacao.ts` (o módulo puro, sem `"use server"`,
+onde o tipo é definido) em vez de reexportado por `posicao.ts`.
+
+**Lição pro futuro (atualiza a decisão 4 da §8.12):** ao extrair algo de um
+arquivo `"use server"`, não deixar NENHUM `export` de conveniência lá
+atrás — nem tipo — se o único motivo for compatibilidade de import. Sempre
+apontar os importadores pro módulo puro novo diretamente. E como isso só
+aparece no build real (Vercel), depois de qualquer mudança estrutural em
+arquivo `"use server"` vale a pena revisar rapidamente se sobrou algum
+export que não seja `async function`.
+
+Arquivos tocados: `src/lib/carteira/posicao.ts` (removido
+`export type { GrupoPosicao }`), `src/app/(app)/carteira/PosicaoView.tsx`
+(import de `GrupoPosicao` trocado de `@/lib/carteira/posicao` para
+`@/lib/carteira/grupo-classificacao`).
+
+**Segunda ocorrência do mesmo bug, achada na auditoria pós-fix.** Ao revisar
+`lib/carteira/visao-mensal.ts` (também `"use server"`), achamos um caso
+ainda mais óbvio do mesmo problema: o arquivo exportava
+`export const MESES_LABEL = [...]` (uma constante de verdade, nem tipo) e
+seis `export type` (`MesDado`, `LinhaTabelaMensal`, `TabelaMensal`,
+`GrupoVisaoMensal`, `PontoCapitalMensal`, `VisaoMensal`) — `MESES_LABEL`
+sendo uma const exportada de um arquivo `"use server"` é exatamente a
+decisão 4 da §8.12 (só `async function` pode ser exportado dali), e por
+segurança os tipos foram junto. Correção: criado
+`lib/carteira/visao-mensal-tipos.ts` (módulo puro, sem `"use server"`) com
+`MESES_LABEL` + todos os tipos; `visao-mensal.ts` agora só importa deles
+internamente e exporta unicamente `obterVisaoMensal` (async function).
+`VisaoMensalView.tsx` importa `obterVisaoMensal` de `visao-mensal.ts` e
+`MESES_LABEL`/tipos de `visao-mensal-tipos.ts` diretamente.
+
+**Nota sobre o alcance desta correção:** uma auditoria em todos os 16
+arquivos `"use server"` do projeto mostrou que a maioria (`lib/ativos/actions.ts`,
+`lib/carteira/actions.ts`, `lib/ir/actions.ts`, `lib/proventos/actions.ts`
+etc.) também tem `export type X = {...}` LOCAL (tipo definido no próprio
+arquivo, não reexportado de outro módulo) ao lado das Server Actions — e
+esses arquivos já buildam/deployam sem problema há muitas rodadas
+(histórico de tasks #1–#163 já em produção). Ou seja, a causa real
+comprovada do erro de build é mais específica que "todo `export type` quebra":
+é (a) exportar uma constante/valor de verdade que não é `async function`
+(caso do `MESES_LABEL`), e/ou (b) reexportar um tipo IMPORTADO de outro
+módulo via `export type { X }` sem `type X = ...` local (caso do
+`GrupoPosicao`). Tipos definidos localmente com `export type X = {...}`
+dentro do próprio arquivo `"use server"`, ao lado de Server Actions,
+parecem seguros na prática (padrão já usado em todo o resto do app) — por
+isso NÃO mexemos nos outros 15 arquivos além destes dois; seria
+refatoração especulativa fora do escopo pedido, e o padrão já em produção
+nesses arquivos nunca causou o erro visto aqui.
+
+Arquivos tocados (2ª ocorrência): `src/lib/carteira/visao-mensal-tipos.ts`
+(novo), `src/lib/carteira/visao-mensal.ts` (só `obterVisaoMensal` exportado),
+`src/app/(app)/carteira/VisaoMensalView.tsx` (imports ajustados).
 
 ## 9. Convenções a preservar
 

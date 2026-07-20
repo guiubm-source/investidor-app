@@ -11,7 +11,8 @@
 
 import { useEffect, useState } from "react";
 import SerieLinhaChart from "@/components/SerieLinhaChart";
-import { obterVisaoMensal, MESES_LABEL, type VisaoMensal, type TabelaMensal } from "@/lib/carteira/visao-mensal";
+import { obterVisaoMensal } from "@/lib/carteira/visao-mensal";
+import { MESES_LABEL, type VisaoMensal, type TabelaMensal } from "@/lib/carteira/visao-mensal-tipos";
 import type { GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
 
 const formatarMoeda = (valor: number) =>

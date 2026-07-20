@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { obterPosicaoConsolidada, type GrupoPosicao, type PosicaoAtivo, type PosicaoConsolidada } from "@/lib/carteira/posicao";
+import { obterPosicaoConsolidada, type PosicaoAtivo, type PosicaoConsolidada } from "@/lib/carteira/posicao";
+import type { GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
 
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });

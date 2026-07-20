@@ -23,12 +23,15 @@ import type { TipoAtivo } from "@/lib/ativos/actions";
 import type { Corretora } from "./actions";
 import { ORDEM_GRUPOS, LABEL_GRUPO, grupoDoAtivo, type GrupoPosicao } from "./grupo-classificacao";
 
-// Reexporta o tipo pra não quebrar quem já importava `GrupoPosicao` daqui
-// (ex. PosicaoView.tsx) — a classificação em si (const/função) mora em
-// grupo-classificacao.ts desde 2026-07-20 (§8.19), porque um arquivo
-// `"use server"` só pode exportar async functions (ver §8.12 decisão 4);
-// export de tipo é seguro aqui porque é erasado em tempo de compilação.
-export type { GrupoPosicao };
+// NÃO reexportar `GrupoPosicao` daqui, nem como `export type` — build real do
+// Next/Turbopack (2026-07-20, ver §8.19/§8.21) quebrou com "Export
+// GrupoPosicao doesn't exist in target module" porque o transform de Server
+// Actions escaneia TODO export de um arquivo `"use server"` (inclusive
+// `export type`) pra montar o módulo de referências de ações, e um export só-
+// de-tipo não existe em tempo de execução. `tsc --noEmit` não pega isso (é
+// checagem específica do bundler do Next, não do compilador TS) — por isso
+// quem precisa do tipo `GrupoPosicao` importa direto de
+// `./grupo-classificacao` (ex. PosicaoView.tsx), nunca daqui.
 
 export type PosicaoAtivo = {
   ativoId: string;
