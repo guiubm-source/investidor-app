@@ -34,14 +34,16 @@ export const EXCHANGES_CRIPTO = [
 
 /**
  * Só usado pela sub-aba Posição (ver docs/MAPA-DE-DADOS.md §8.16) — distingue,
- * dentro de `internacional`, ação individual exterior de ETF exterior, pra
- * agrupar em "Stocks" vs "ETF Exterior" (decisão 2026-07-16). Sem efeito em
+ * dentro de `internacional`, ação individual exterior de ETF exterior de
+ * REIT, pra agrupar em "Stocks" vs "ETF Exterior" vs "REITs" (decisão
+ * 2026-07-16, REIT adicionado em 2026-07-20 — ver §8.23). Sem efeito em
  * nenhuma regra de IR/cotação — igual em espírito a subtipo_renda_fixa, mas
  * sem relação com tributação.
  */
 export const SUBTIPOS_INTERNACIONAL = [
   { valor: "acao", label: "Ação (Stock)" },
   { valor: "etf", label: "ETF" },
+  { valor: "reit", label: "REIT" },
 ] as const;
 
 export const ativoSchema = z.object({
@@ -63,7 +65,7 @@ export const ativoSchema = z.object({
     .union([z.enum(["nacional", "estrangeira"]), z.literal("")])
     .transform((v) => (v ? v : null)),
   subtipo_internacional: z
-    .union([z.enum(["acao", "etf"]), z.literal("")])
+    .union([z.enum(["acao", "etf", "reit"]), z.literal("")])
     .transform((v) => (v ? v : null)),
 });
 export type AtivoForm = z.infer<typeof ativoSchema>;

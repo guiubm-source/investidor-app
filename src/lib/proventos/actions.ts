@@ -1,70 +1,196 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
-import type { ProventoForm } from "./schema";
-import { TIPOS_PROVENTO } from "./schema";
-
-export type AcaoResultado = { error?: string };
-
-export type LancamentoProvento = {
-  id: string;
-  ativoId: string;
-  ativoTicker: string;
-  tipo: string;
-  data: string;
-  valorTotal: number;
-};
-
-export type TotalPorTipo = { tipo: string; label: string; total: number };
-export type TotalPorAtivo = { ativoId: string; ativoTicker: string; total: number };
-export type TotalPorAno = { ano: string; total: number };
-
-export type LivroProventos = {
-  lancamentos: LancamentoProvento[];
-  totalGeral: number;
-  porTipo: TotalPorTipo[];
-  porAtivo: TotalPorAtivo[];
-  porAno: TotalPorAno[];
-};
-
 /**
  * Fonte única de escrita para proventos (dividendo/JCP/rendimento/outro).
  * Carteira e a página do Ativo apenas EXIBEM proventos (leitura direta na
  * tabela `proventos`, ver lib/carteira/actions.ts#obterLivroRazao e
  * lib/ativos/actions.ts#obterAtivoDetalhe) — cadastrar, editar ou excluir só
  * acontece por aqui.
+ *
+ * Ver docs/MAPA-DE-DADOS.md §8.23 (2026-07-20) — aba Proventos avançada:
+ * - Status "provisionado"/"recebido" NUNCA é armazenado — é sempre calculado
+ *   comparando `data_pagamento` com a data de hoje (futuro = provisionado,
+ *   passado/hoje = recebido). Uma coluna de status ficaria desatualizada
+ *   sozinha (o "hoje" muda todo dia); calcular em runtime é a única forma de
+ *   nunca dessincronizar.
+ * - `valor_total` passa a ser CALCULADO (quantidade × valor_por_cota) em vez
+ *   de digitado — fonte única passa a ser os dois campos novos. Registros
+ *   antigos (só com valor_total) continuam funcionando normalmente.
+ * - DY (sobre preço atual) e Yield on Cost (sobre preço médio) reaproveitam a
+ *   posição já calculada por `obterAtivosComPosicao` (lib/ativos/actions.ts)
+ *   — nenhuma fórmula de posição é duplicada aqui, só usada.
  */
+
+import { createClient } from "@/lib/supabase/server";
+import type { ProventoForm } from "./schema";
+import { TIPOS_PROVENTO } from "./schema";
+import { obterAtivosComPosicao } from "@/lib/ativos/actions";
+import { ORDEM_GRUPOS, LABEL_GRUPO, grupoDoAtivo, type GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
+
+export type AcaoResultado = { error?: string };
+
+export type StatusProvento = "provisionado" | "recebido";
+
+export type LancamentoProvento = {
+  id: string;
+  ativoId: string;
+  ativoTicker: string;
+  grupo: GrupoPosicao;
+  tipo: string;
+  dataCom: string | null;
+  dataPagamento: string;
+  quantidade: number | null;
+  valorPorCota: number | null;
+  valorTotal: number;
+  status: StatusProvento;
+};
+
+export type TotalPorTipo = { tipo: string; label: string; total: number };
+export type TotalPorAtivo = { ativoId: string; ativoTicker: string; grupo: GrupoPosicao; total: number };
+export type TotalPorAno = { ano: string; total: number };
+
+export type TotalPorCategoria = {
+  grupo: GrupoPosicao;
+  label: string;
+  totalRecebido: number;
+  totalProvisionado: number;
+  /** DY "de mercado": proventos recebidos nos últimos 12 meses ÷ valor de mercado (preço atual) da categoria. */
+  dyPrecoAtual: number | null;
+  /** Yield on Cost: proventos recebidos nos últimos 12 meses ÷ valor investido (preço médio × quantidade). */
+  yieldOnCost: number | null;
+  /** Patrimônio atual (preço atual × quantidade) da categoria — usado no donut "Ativos por categoria". */
+  patrimonioAtual: number;
+};
+
+export type AtivoComProventos = {
+  ativoId: string;
+  ativoTicker: string;
+  ativoNome: string | null;
+  grupo: GrupoPosicao;
+  quantidadeAtual: number;
+  precoMedio: number;
+  precoAtual: number;
+  totalRecebido12Meses: number;
+  totalRecebidoGeral: number;
+  dyPrecoAtual: number | null;
+  yieldOnCost: number | null;
+};
+
+export type ResumoProventos = {
+  totalRecebido: number;
+  totalProvisionado: number;
+  ultimos6Meses: number;
+  ultimos12Meses: number;
+  ultimos24Meses: number;
+  /** DY "de mercado" da carteira toda (mesma fórmula, agregada). */
+  dyCarteiraPrecoAtual: number | null;
+  /** Yield on Cost da carteira toda. */
+  yieldOnCostCarteira: number | null;
+};
+
+export type LivroProventos = {
+  lancamentos: LancamentoProvento[];
+  resumo: ResumoProventos;
+  porTipo: TotalPorTipo[];
+  porAtivo: TotalPorAtivo[];
+  porAno: TotalPorAno[];
+  porCategoria: TotalPorCategoria[];
+  ativos: AtivoComProventos[];
+};
+
+function livroVazio(): LivroProventos {
+  return {
+    lancamentos: [],
+    resumo: {
+      totalRecebido: 0,
+      totalProvisionado: 0,
+      ultimos6Meses: 0,
+      ultimos12Meses: 0,
+      ultimos24Meses: 0,
+      dyCarteiraPrecoAtual: null,
+      yieldOnCostCarteira: null,
+    },
+    porTipo: [],
+    porAtivo: [],
+    porAno: [],
+    porCategoria: [],
+    ativos: [],
+  };
+}
+
+function diasAtras(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
 export async function obterLivroProventos(): Promise<LivroProventos> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  if (!user) return livroVazio();
 
-  if (!user) {
-    return { lancamentos: [], totalGeral: 0, porTipo: [], porAtivo: [], porAno: [] };
-  }
+  const [proventosRes, posicoes] = await Promise.all([
+    supabase
+      .from("proventos")
+      .select("id, ativo_id, tipo, data_com, data_pagamento, quantidade, valor_por_cota, valor_total, ativos(ticker)")
+      .eq("profile_id", user.id),
+    obterAtivosComPosicao(),
+  ]);
 
-  const { data: proventosRaw } = await supabase
-    .from("proventos")
-    .select("id, ativo_id, tipo, data, valor_total, ativos(ticker)")
-    .eq("profile_id", user.id);
+  if (proventosRes.error) throw new Error(`obterLivroProventos: falha ao ler proventos — ${proventosRes.error.message}`);
 
-  const lancamentos: LancamentoProvento[] = (proventosRaw ?? [])
+  const grupoPorAtivo = new Map<string, GrupoPosicao>(
+    posicoes.map((a) => [a.id, grupoDoAtivo(a.tipo, a.subtipoRendaFixa, a.subtipoInternacional)])
+  );
+
+  const hojeStr = new Date().toISOString().slice(0, 10);
+
+  const lancamentos: LancamentoProvento[] = (proventosRes.data ?? [])
     .map((p) => {
       const ativo = Array.isArray(p.ativos) ? p.ativos[0] : p.ativos;
-      return {
-        id: p.id,
-        ativoId: p.ativo_id,
+      const dataPagamento = p.data_pagamento as string;
+      const item: LancamentoProvento = {
+        id: p.id as string,
+        ativoId: p.ativo_id as string,
         ativoTicker: ativo?.ticker ?? "—",
+        grupo: grupoPorAtivo.get(p.ativo_id as string) ?? "outros",
         tipo: p.tipo as string,
-        data: p.data as string,
+        dataCom: (p.data_com as string | null) ?? null,
+        dataPagamento,
+        quantidade: p.quantidade !== null ? Number(p.quantidade) : null,
+        valorPorCota: p.valor_por_cota !== null ? Number(p.valor_por_cota) : null,
         valorTotal: Number(p.valor_total),
+        status: dataPagamento > hojeStr ? "provisionado" : "recebido",
       };
+      return item;
     })
-    .sort((a, b) => (a.data < b.data ? 1 : a.data > b.data ? -1 : 0));
+    .sort((a, b) => (a.dataPagamento < b.dataPagamento ? 1 : a.dataPagamento > b.dataPagamento ? -1 : 0));
 
-  const totalGeral = lancamentos.reduce((s, l) => s + l.valorTotal, 0);
+  // ---- Resumo (cards do dashboard) ---------------------------------------
+  const recebidos = lancamentos.filter((l) => l.status === "recebido");
+  const provisionados = lancamentos.filter((l) => l.status === "provisionado");
 
+  const totalRecebido = recebidos.reduce((s, l) => s + l.valorTotal, 0);
+  const totalProvisionado = provisionados.reduce((s, l) => s + l.valorTotal, 0);
+
+  const cutoff6 = diasAtras(180);
+  const cutoff12 = diasAtras(365);
+  const cutoff24 = diasAtras(730);
+  const somaRecebidosDesde = (cutoff: string) =>
+    recebidos.filter((l) => l.dataPagamento >= cutoff).reduce((s, l) => s + l.valorTotal, 0);
+
+  const ultimos6Meses = somaRecebidosDesde(cutoff6);
+  const ultimos12Meses = somaRecebidosDesde(cutoff12);
+  const ultimos24Meses = somaRecebidosDesde(cutoff24);
+
+  const patrimonioTotal = posicoes.reduce((s, a) => s + a.valorAtual, 0);
+  const investidoTotal = posicoes.reduce((s, a) => s + a.precoMedio * a.quantidade, 0);
+  const dyCarteiraPrecoAtual = patrimonioTotal > 0 ? (ultimos12Meses / patrimonioTotal) * 100 : null;
+  const yieldOnCostCarteira = investidoTotal > 0 ? (ultimos12Meses / investidoTotal) * 100 : null;
+
+  // ---- Por tipo / por ativo / por ano -------------------------------------
   const porTipo: TotalPorTipo[] = TIPOS_PROVENTO.map((t) => ({
     tipo: t.valor,
     label: t.label,
@@ -75,20 +201,99 @@ export async function obterLivroProventos(): Promise<LivroProventos> {
   for (const l of lancamentos) {
     const atual = porAtivoMap.get(l.ativoId);
     if (atual) atual.total += l.valorTotal;
-    else porAtivoMap.set(l.ativoId, { ativoId: l.ativoId, ativoTicker: l.ativoTicker, total: l.valorTotal });
+    else porAtivoMap.set(l.ativoId, { ativoId: l.ativoId, ativoTicker: l.ativoTicker, grupo: l.grupo, total: l.valorTotal });
   }
   const porAtivo = [...porAtivoMap.values()].sort((a, b) => b.total - a.total);
 
   const porAnoMap = new Map<string, number>();
   for (const l of lancamentos) {
-    const ano = l.data.slice(0, 4);
+    const ano = l.dataPagamento.slice(0, 4);
     porAnoMap.set(ano, (porAnoMap.get(ano) ?? 0) + l.valorTotal);
   }
   const porAno = [...porAnoMap.entries()]
     .map(([ano, total]) => ({ ano, total }))
     .sort((a, b) => (a.ano < b.ano ? 1 : -1));
 
-  return { lancamentos, totalGeral, porTipo, porAtivo, porAno };
+  // ---- Por categoria (DY + Yield on Cost agregados) -----------------------
+  const porCategoria: TotalPorCategoria[] = ORDEM_GRUPOS.map((grupo): TotalPorCategoria | null => {
+    const lancsDoGrupo = lancamentos.filter((l) => l.grupo === grupo);
+    if (lancsDoGrupo.length === 0) return null;
+
+    const totalRecebidoGrupo = lancsDoGrupo
+      .filter((l) => l.status === "recebido")
+      .reduce((s, l) => s + l.valorTotal, 0);
+    const totalProvisionadoGrupo = lancsDoGrupo
+      .filter((l) => l.status === "provisionado")
+      .reduce((s, l) => s + l.valorTotal, 0);
+    const recebidos12mGrupo = lancsDoGrupo
+      .filter((l) => l.status === "recebido" && l.dataPagamento >= cutoff12)
+      .reduce((s, l) => s + l.valorTotal, 0);
+
+    const ativosDoGrupo = posicoes.filter((a) => grupoPorAtivo.get(a.id) === grupo);
+    const patrimonioGrupo = ativosDoGrupo.reduce((s, a) => s + a.valorAtual, 0);
+    const investidoGrupo = ativosDoGrupo.reduce((s, a) => s + a.precoMedio * a.quantidade, 0);
+
+    return {
+      grupo,
+      label: LABEL_GRUPO[grupo],
+      totalRecebido: totalRecebidoGrupo,
+      totalProvisionado: totalProvisionadoGrupo,
+      dyPrecoAtual: patrimonioGrupo > 0 ? (recebidos12mGrupo / patrimonioGrupo) * 100 : null,
+      yieldOnCost: investidoGrupo > 0 ? (recebidos12mGrupo / investidoGrupo) * 100 : null,
+      patrimonioAtual: patrimonioGrupo,
+    };
+  }).filter((c): c is TotalPorCategoria => c !== null);
+
+  // ---- Por ativo (tabelas expansíveis por categoria) ----------------------
+  const ativosComProventos: AtivoComProventos[] = posicoes
+    .map((a): AtivoComProventos | null => {
+      const lancsDoAtivo = lancamentos.filter((l) => l.ativoId === a.id);
+      if (lancsDoAtivo.length === 0) return null;
+
+      const totalRecebidoGeral = lancsDoAtivo
+        .filter((l) => l.status === "recebido")
+        .reduce((s, l) => s + l.valorTotal, 0);
+      const totalRecebido12Meses = lancsDoAtivo
+        .filter((l) => l.status === "recebido" && l.dataPagamento >= cutoff12)
+        .reduce((s, l) => s + l.valorTotal, 0);
+
+      const valorMercado = a.quantidade * a.precoAtual;
+      const valorInvestido = a.quantidade * a.precoMedio;
+
+      return {
+        ativoId: a.id,
+        ativoTicker: a.ticker,
+        ativoNome: a.nome,
+        grupo: grupoPorAtivo.get(a.id) ?? "outros",
+        quantidadeAtual: a.quantidade,
+        precoMedio: a.precoMedio,
+        precoAtual: a.precoAtual,
+        totalRecebido12Meses,
+        totalRecebidoGeral,
+        dyPrecoAtual: valorMercado > 0 ? (totalRecebido12Meses / valorMercado) * 100 : null,
+        yieldOnCost: valorInvestido > 0 ? (totalRecebido12Meses / valorInvestido) * 100 : null,
+      };
+    })
+    .filter((a): a is AtivoComProventos => a !== null)
+    .sort((a, b) => b.totalRecebidoGeral - a.totalRecebidoGeral);
+
+  return {
+    lancamentos,
+    resumo: {
+      totalRecebido,
+      totalProvisionado,
+      ultimos6Meses,
+      ultimos12Meses,
+      ultimos24Meses,
+      dyCarteiraPrecoAtual,
+      yieldOnCostCarteira,
+    },
+    porTipo,
+    porAtivo,
+    porAno,
+    porCategoria,
+    ativos: ativosComProventos,
+  };
 }
 
 export async function criarProvento(input: ProventoForm): Promise<AcaoResultado> {
@@ -98,12 +303,17 @@ export async function criarProvento(input: ProventoForm): Promise<AcaoResultado>
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
+  const valorTotal = input.quantidade * input.valor_por_cota;
+
   const { error } = await supabase.from("proventos").insert({
     profile_id: user.id,
     ativo_id: input.ativo_id,
     tipo: input.tipo,
-    data: input.data,
-    valor_total: input.valor_total,
+    data_com: input.data_com,
+    data_pagamento: input.data_pagamento,
+    quantidade: input.quantidade,
+    valor_por_cota: input.valor_por_cota,
+    valor_total: valorTotal,
   });
 
   if (error) return { error: "Não foi possível registrar o provento." };
@@ -117,13 +327,18 @@ export async function editarProvento(id: string, input: ProventoForm): Promise<A
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
+  const valorTotal = input.quantidade * input.valor_por_cota;
+
   const { error } = await supabase
     .from("proventos")
     .update({
       ativo_id: input.ativo_id,
       tipo: input.tipo,
-      data: input.data,
-      valor_total: input.valor_total,
+      data_com: input.data_com,
+      data_pagamento: input.data_pagamento,
+      quantidade: input.quantidade,
+      valor_por_cota: input.valor_por_cota,
+      valor_total: valorTotal,
     })
     .eq("id", id)
     .eq("profile_id", user.id);

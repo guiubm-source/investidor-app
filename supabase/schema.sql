@@ -1022,3 +1022,49 @@ alter table public.transacoes add constraint transacoes_campos_por_tipo check (
     and quantidade > 0 and valor_capitalizado is not null and valor_capitalizado >= 0
     and preco_unitario is null and fator_proporcao is null)
 );
+
+-- ============================================================================
+-- 18. Proventos avançado + categoria REIT — decisões em
+--     docs/MAPA-DE-DADOS.md §8.23 (2026-07-20).
+--     - `data` (única data que existia) vira `data_pagamento` — status
+--       provisionado/recebido NUNCA é armazenado, é sempre calculado em
+--       runtime comparando com a data de hoje (data_pagamento no futuro =
+--       provisionado; passado/hoje = recebido). Migração: registros antigos
+--       simplesmente passam a ter só `data_pagamento` preenchida (é a mesma
+--       coluna renomeada, nenhum dado é perdido ou duplicado).
+--     - `data_com` é NOVA e opcional (registros antigos não têm essa
+--       informação; o usuário pode completar depois editando).
+--     - `quantidade` + `valor_por_cota` são NOVOS e opcionais — quando os
+--       dois estão preenchidos, `valor_total` é recalculado pela aplicação
+--       como quantidade × valor_por_cota (fonte única = os dois campos, o
+--       valor_total vira derivado); registros antigos continuam só com
+--       valor_total informado direto, sem quebrar nada.
+--     - REIT: novo subtipo dentro de `internacional` (junto de "acao" e
+--       "etf", ver seção 16) — mesmo espírito, sem efeito em cotação/IR, só
+--       agrupamento/exibição (Posição e Proventos passam a ter uma
+--       categoria "REITs" separada de "Stocks"/"ETF Exterior").
+-- ============================================================================
+
+alter table public.proventos rename column data to data_pagamento;
+alter table public.proventos add column if not exists data_com date;
+alter table public.proventos add column if not exists quantidade numeric(18,8);
+alter table public.proventos add column if not exists valor_por_cota numeric(14,6);
+
+alter table public.proventos drop constraint if exists proventos_quantidade_check;
+alter table public.proventos add constraint proventos_quantidade_check
+  check (quantidade is null or quantidade >= 0);
+alter table public.proventos drop constraint if exists proventos_valor_por_cota_check;
+alter table public.proventos add constraint proventos_valor_por_cota_check
+  check (valor_por_cota is null or valor_por_cota >= 0);
+
+comment on column public.proventos.data_pagamento is 'Data em que o provento foi (ou será) creditado na conta — coluna renomeada de "data" (2026-07-20). Status provisionado/recebido é sempre calculado em runtime (futuro = provisionado, passado/hoje = recebido), nunca armazenado.';
+comment on column public.proventos.data_com is 'Data-com/data-base: último dia em que era preciso ter o ativo em carteira para ter direito ao provento. Opcional — pode ficar em branco (registros antigos, ou lançamento rápido).';
+comment on column public.proventos.quantidade is 'Quantidade de cotas/ações que geraram o provento. Opcional — junto com valor_por_cota, permite a aplicação recalcular valor_total e o Dividend Yield por cota; registros antigos (sem isso) só têm valor_total informado direto.';
+comment on column public.proventos.valor_por_cota is 'Valor pago por cota/ação. Opcional — quando preenchido junto com quantidade, valor_total = quantidade × valor_por_cota (calculado pela aplicação, não por trigger).';
+
+drop index if exists idx_proventos_ativo_id_data;
+create index if not exists idx_proventos_ativo_id_data_pagamento on public.proventos (ativo_id, data_pagamento);
+
+alter table public.ativos drop constraint if exists ativos_subtipo_internacional_check;
+alter table public.ativos add constraint ativos_subtipo_internacional_check
+  check (subtipo_internacional is null or subtipo_internacional in ('acao','etf','reit'));

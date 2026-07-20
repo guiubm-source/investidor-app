@@ -137,6 +137,12 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
   } = await supabase.auth.getUser();
   if (!user) return [];
 
+  // Ver docs/MAPA-DE-DADOS.md §8.23: `proventosRecebidos` (usada no
+  // retornoTotal, "já embolsado") só deve contar o que JÁ foi pago —
+  // provento provisionado (data_pagamento no futuro) ainda não é dinheiro
+  // na conta, então fica de fora da soma aqui (aparece só na aba Proventos).
+  const hojeStr = new Date().toISOString().slice(0, 10);
+
   const [ativosRes, transacoesRes, proventosRes] = await Promise.all([
     supabase
       .from("ativos")
@@ -151,7 +157,11 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
         "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, corretoras(nome)"
       )
       .eq("profile_id", user.id),
-    supabase.from("proventos").select("id, ativo_id, tipo, data, valor_total").eq("profile_id", user.id),
+    supabase
+      .from("proventos")
+      .select("id, ativo_id, tipo, data:data_pagamento, valor_total")
+      .eq("profile_id", user.id)
+      .lte("data_pagamento", hojeStr),
   ]);
 
   // Ver docs/MAPA-DE-DADOS.md §8.17: sem isso, uma coluna faltando no banco
@@ -333,10 +343,10 @@ export async function obterAtivoDetalhe(ativoId: string): Promise<AtivoDetalhe |
       .eq("ativo_id", ativoId),
     supabase
       .from("proventos")
-      .select("id, tipo, data, valor_total")
+      .select("id, tipo, data:data_pagamento, valor_total")
       .eq("profile_id", user.id)
       .eq("ativo_id", ativoId)
-      .order("data", { ascending: false }),
+      .order("data_pagamento", { ascending: false }),
   ]);
 
   const resumo = todos.find((a) => a.id === ativoId);
@@ -753,7 +763,7 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
     supabase.from("ativo_checklist").select("saldo_acionistas").eq("profile_id", user.id).eq("ativo_id", ativoId).maybeSingle(),
     supabase
       .from("proventos")
-      .select("valor_total, data")
+      .select("valor_total, data:data_pagamento")
       .eq("profile_id", user.id)
       .eq("ativo_id", ativoId),
   ]);
@@ -797,11 +807,16 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
       valorM2Aluguel: r.valorM2Aluguel,
     }));
     const hoje = new Date();
+    const hojeStr = hoje.toISOString().slice(0, 10);
     const umAnoAtras = new Date(hoje);
     umAnoAtras.setDate(umAnoAtras.getDate() - 365);
     const cutoff = umAnoAtras.toISOString().slice(0, 10);
+    // Ver docs/MAPA-DE-DADOS.md §8.23: sem o limite superior (`<= hojeStr`),
+    // um provento provisionado (data_pagamento no futuro) contaria como
+    // "recebido nos últimos 12 meses" — DY do FII inflado por dinheiro que
+    // ainda não caiu na conta.
     const proventosUltimos12Meses = (proventosRaw ?? [])
-      .filter((p) => p.data >= cutoff)
+      .filter((p) => p.data >= cutoff && p.data <= hojeStr)
       .reduce((s, p) => s + Number(p.valor_total), 0);
     checklistFii = calcularChecklistFii(pontos, precoAtual, proventosUltimos12Meses);
   }

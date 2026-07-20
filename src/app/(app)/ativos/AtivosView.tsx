@@ -179,7 +179,7 @@ function FormNovoAtivo({
       )}
       {tipoSelecionado === "internacional" && (
         <div className="col-span-2">
-          <label className="label">Ação ou ETF? (para agrupar na Posição)</label>
+          <label className="label">Ação, ETF ou REIT? (para agrupar na Posição)</label>
           <select {...register("subtipo_internacional")} className="input" defaultValue="">
             <option value="">Não informar agora</option>
             {SUBTIPOS_INTERNACIONAL.map((s) => (

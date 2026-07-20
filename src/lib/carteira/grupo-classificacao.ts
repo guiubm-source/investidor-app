@@ -18,6 +18,7 @@ export type GrupoPosicao =
   | "renda_fixa"
   | "fundos"
   | "stocks"
+  | "reits"
   | "etf_exterior"
   | "internacional_outros"
   | "etf_brasil"
@@ -32,6 +33,7 @@ export const ORDEM_GRUPOS: GrupoPosicao[] = [
   "renda_fixa",
   "etf_brasil",
   "stocks",
+  "reits",
   "etf_exterior",
   "internacional_outros",
   "cripto",
@@ -46,6 +48,7 @@ export const LABEL_GRUPO: Record<GrupoPosicao, string> = {
   renda_fixa: "Renda Fixa",
   fundos: "Fundos de Investimento",
   stocks: "Stocks",
+  reits: "REITs",
   etf_exterior: "ETF Exterior",
   internacional_outros: "Internacional (não classificado)",
   etf_brasil: "ETF Brasil",
@@ -80,6 +83,7 @@ export function grupoDoAtivo(
     case "internacional":
       if (subtipoInternacional === "etf") return "etf_exterior";
       if (subtipoInternacional === "acao") return "stocks";
+      if (subtipoInternacional === "reit") return "reits";
       return "internacional_outros";
     default:
       return "outros";

@@ -1865,6 +1865,126 @@ Dashboard > SQL Editor antes do deploy funcionar em produção (mesmo
 workflow de sempre: o Guilherme roda o SQL, eu não tenho acesso a
 credenciais do banco de produção).
 
+### 8.23 Aba Proventos avançada — DY/YoC, provisionado x recebido, categoria REIT, dashboard + grade mensal (2026-07-20)
+
+Pedido do Guilherme: revisar a aba Proventos com base em 4 prints de
+referência (planilha mensal/anual por categoria, dashboard com cards +
+gráfico + breakdown, filtros, dashboard mais denso com donut e tabelas por
+ativo). Cinco decisões levantadas uma de cada vez (protocolo da seção 1),
+mais uma sexta sobre migração de dados:
+
+1. **Datas:** guardar **Data-com + Data de pagamento** (as duas). Status
+   "provisionado"/"recebido" **nunca é armazenado** — é sempre calculado
+   comparando `data_pagamento` com a data de hoje (futuro = provisionado,
+   passado/hoje = recebido). Guardar um status fixo ficaria desatualizado
+   sozinho (o "hoje" muda todo dia).
+2. **Quantidade + valor por cota:** viram campos novos; `valor_total` deixa
+   de ser digitado e passa a ser **calculado** (quantidade × valor por
+   cota) em `criarProvento`/`editarProvento`.
+3. **Fórmula do Dividend Yield:** o Guilherme quis **os dois**: DY "de
+   mercado" (proventos recebidos nos últimos 12 meses ÷ preço atual/valor de
+   mercado) e Yield on Cost — YoC (mesmo numerador ÷ preço médio pago/valor
+   investido). Os dois são calculados por ativo, por categoria e pra
+   carteira inteira.
+4. **REIT:** novo subtipo dentro de `internacional` (junto de "acao" e
+   "etf" — ver §8.16), virando categoria própria ("REITs") na
+   Posição e nos Proventos, não só uma cor diferente dentro de "Stocks".
+5. **Escopo visual:** as duas telas — dashboard moderno (cards, gráfico
+   mensal recebido×provisionado, breakdown por categoria, donut de
+   patrimônio, tabelas por ativo, lançamentos) **e** a grade estilo
+   planilha (mês × categoria, com GERAL + por ano, subtotal trimestral e
+   média mensal) — não só uma.
+6. **Migração de dados antigos:** lançamentos já cadastrados (só com uma
+   data e `valor_total`) têm a data antiga tratada como **data de
+   pagamento** (ficam automaticamente "recebidos"); `data_com`/quantidade/
+   valor por cota ficam em branco até o Guilherme completar editando.
+
+**Schema (`supabase/schema.sql` §18 — migração ainda NÃO rodada no banco
+real, mesma pendência de sempre).** `proventos.data` foi **renomeada** para
+`data_pagamento` (é a mesma informação, não uma coluna nova — segue a regra
+de fonte única, sem duplicar). `data_com`, `quantidade` e `valor_por_cota`
+são colunas novas, `NULL`-áveis (registros antigos continuam funcionando só
+com `valor_total`). Índice `idx_proventos_ativo_id_data` recriado como
+`idx_proventos_ativo_id_data_pagamento`. `ativos.subtipo_internacional`
+ganhou o valor `'reit'` no CHECK constraint (era só `'acao'`/`'etf'`).
+
+**`lib/carteira/grupo-classificacao.ts`.** Novo valor `"reits"` em
+`GrupoPosicao`/`ORDEM_GRUPOS`/`LABEL_GRUPO`; `grupoDoAtivo()` ganhou o ramo
+`subtipoInternacional === "reit" → "reits"`. Como esse módulo já era a fonte
+única de classificação (usado por Posição, Visão mensal E Proventos), o
+REIT passou a existir em TODO lugar que agrupa por categoria sem nenhum
+código duplicado.
+
+**`lib/proventos/schema.ts`.** `proventoSchema` trocou o campo único `data`
+por `data_com` (opcional) + `data_pagamento` (obrigatório), e `valor_total`
+por `quantidade` (`positive()`) + `valor_por_cota` (`min(0)`) — o valor
+total deixou de fazer parte do formulário, é sempre recalculado.
+
+**`lib/proventos/actions.ts` (reescrito).** `obterLivroProventos()` passou
+de um resumo simples (total/por tipo/por ativo/por ano) pra um objeto bem
+mais rico:
+- `lancamentos`: cada um com `status` calculado em runtime (comparação de
+  `dataPagamento` com "hoje") e `grupo` (via `grupoDoAtivo`, reaproveitando
+  a posição já calculada por `obterAtivosComPosicao` — nenhuma consulta de
+  posição duplicada).
+- `resumo`: total recebido, total provisionado, últimos 6/12/24 meses
+  (sempre só sobre RECEBIDOS), DY e YoC da carteira inteira.
+- `porCategoria`: por grupo (incluindo REITs), com recebido/provisionado,
+  DY, YoC e patrimônio atual (usado no donut).
+- `ativos`: por ativo, com quantidade/preço médio/preço atual (da posição)
+  + recebido 12m/total + DY/YoC individuais.
+Regra importante: DY e YoC usam sempre **recebidos** dos últimos 12 meses
+(nunca provisionados) sobre o denominador de mercado/custo — um provento
+provisionado não é "rendimento realizado" ainda.
+
+**`lib/proventos/grade-mensal-tipos.ts` + `grade-mensal.ts` (novos).** Mesma
+ideia da "Visão mensal" da Carteira (§8.19), mas linhas por CATEGORIA em vez
+de compra/venda — reaproveita `MESES_LABEL` de
+`lib/carteira/visao-mensal-tipos.ts` (é só um rótulo de mês genérico, sem
+regra de proventos) e os `lancamentos` já calculados por
+`obterLivroProventos` (nenhuma nova consulta ao banco, só reagrupa por
+mês/ano). Segue o mesmo motivo de `"use server"` só poder exportar
+`async function` (§8.21): tipos/const em arquivo puro separado.
+
+**Correções de bug encontradas ao propagar o rename de `data` (evitar bugs,
+seção 1.4).** Toda leitura antiga de `proventos.data` foi corrigida pra usar
+o alias do PostgREST (`data:data_pagamento`, sem precisar tocar o resto do
+código que já usava a chave `data`):
+- `lib/ativos/actions.ts#obterAtivosComPosicao` — além do rename, o filtro
+  passou a excluir provisionados (`'.lte("data_pagamento", hojeStr)'`):
+  `proventosRecebidos` (usado no `retornoTotal`, "já embolsado") não deve
+  contar dinheiro que ainda não caiu na conta.
+- `lib/ativos/actions.ts#obterAtivoDetalhe` — lista de proventos do Ativo
+  (mostra todos, incluindo provisionados, é só informativo).
+- `lib/ativos/actions.ts#obterChecklistAtivo` (DY do FII) — **bug real
+  corrigido**: o filtro de "últimos 12 meses" só tinha `>= cutoff`, sem
+  limite superior; um provento provisionado (pagamento no futuro) contaria
+  como "recebido nos últimos 12 meses" e inflaria o DY do checklist. Ganhou
+  o limite `<= hojeStr`.
+
+**UI (`ProventosView.tsx`, reescrito, + `GradeProventosView.tsx`, novo).**
+Toggle Dashboard / Grade mensal-anual no topo:
+- Dashboard: 6 cards (recebido, provisionado, total do período, últimos
+  6/12/24 meses) + 2 cards de DY/YoC da carteira; gráfico de barras
+  (Recharts) recebido×provisionado dos últimos 12 meses; breakdown por
+  categoria (barra proporcional + DY/YoC ao lado); donut de patrimônio por
+  categoria; tabelas por ativo colapsáveis por categoria (mesmo padrão
+  visual de `VisaoMensalView.tsx`); filtros de período/status sobre a
+  tabela detalhada de lançamentos (client-side, sem nova consulta);
+  formulário atualizado (data-com opcional, data de pagamento, quantidade,
+  valor por cota, valor total mostrado como calculado/somente leitura).
+- Grade: `GradeProventosView.tsx` busca sob demanda (`useEffect`, mesmo
+  padrão de `VisaoMensalView.tsx` — nunca no carregamento inicial),
+  mostrando GERAL + seletor de ano, com subtotal trimestral e média mensal
+  calculados na própria UI (aritmética simples sobre os totais já
+  agregados, não precisa de fórmula nova no servidor).
+
+**⚠️ Pendência: migração SQL ainda não rodada no Supabase de produção.**
+`supabase/schema.sql` §18 precisa ser rodado manualmente no Supabase
+Dashboard > SQL Editor antes do deploy funcionar em produção — inclui o
+`rename column data to data_pagamento`, então rodar antes do deploy é
+importante (o código novo já espera `data_pagamento`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
