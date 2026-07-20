@@ -1985,6 +1985,88 @@ Dashboard > SQL Editor antes do deploy funcionar em produção — inclui o
 `rename column data to data_pagamento`, então rodar antes do deploy é
 importante (o código novo já espera `data_pagamento`).
 
+### 8.24 Livro-razão — Importar transações por copiar/colar (2026-07-20)
+
+Pedido do Guilherme: colar direto da planilha pessoal dele (formato fixo:
+Data de negociação, Instituição, Moeda, Total de Taxas, Ativo, Grupo,
+Quantidade, Operação, Tipo, Preço sem taxas, Preço com taxas, Total sem
+taxas, Total com taxas) em vez de cadastrar transação por transação — com
+linhas em BRL (RICO/XP) e em USD (Avenue, ações/ETF/REIT americanos).
+
+**Achado de estudo, antes de qualquer decisão:** o app já tinha uma coluna
+`transacoes.cambio` e uma tabela `indicador_dolar_diario` (PTAX diária,
+usada hoje só pela sub-aba Indicadores → Dólar) reservadas exatamente pra
+esse cenário, mas **nada no motor de cálculo usava nenhuma das duas** — um
+ativo `internacional` tinha seu preço em USD puro (vindo do Yahoo Finance)
+somado direto nos totais de Posição/Alocação/Proventos como se fosse BRL.
+Lacuna pré-existente, só ficou visível agora que a planilha colada tem USD
+de verdade.
+
+Três decisões levantadas uma de cada vez (protocolo da seção 1):
+
+1. **Moeda:** converter pra BRL **na importação**, usando a PTAX de
+   `indicador_dolar_diario` na data (ou no dia útil disponível mais recente
+   antes dela) — `preco_unitario`/`custos` da transação já nascem em BRL,
+   `cambio` guarda a taxa usada (o valor original em USD continua
+   recuperável: `preco_unitario ÷ cambio`). Fecha a lacuna acima em vez de
+   carregá-la pra um volume maior de dados.
+2. **Ativo/corretora não cadastrados:** criar automaticamente — ativo novo
+   infere tipo/subtipo pelo texto da coluna Grupo (mapa fixo, ver
+   `MAPA_GRUPO` abaixo); corretora nova só precisa do nome. Ativo/corretora
+   já existentes usam o cadastro atual (o texto do Grupo colado é ignorado
+   nesse caso — fonte única continua sendo o cadastro em `ativos`).
+3. **Duplicata:** detectar e pular automaticamente — mesmo critério que já
+   existia em `existeTransacaoDuplicada` (lib/carteira/actions.ts): mesmo
+   ativo + data + tipo + quantidade + preço. Permite colar a planilha
+   inteira de novo (ex.: depois de atualizá-la) sem duplicar o que já foi
+   importado antes.
+
+**`lib/carteira/importar-transacoes.ts` (novo, `"use server"`).** Fluxo em 2
+passos, o primeiro só de LEITURA:
+- `analisarImportacaoTransacoes(texto)`: faz o parsing do TSV colado
+  (detecta cabeçalho pelo nome normalizado das 13 colunas — se não achar
+  todas, assume a ordem fixa de sempre, sem cabeçalho), resolve cada linha
+  (ativo/corretora existentes via 1 query em lote cada, câmbio via
+  `indicador_dolar_diario` num intervalo de datas calculado sob demanda,
+  duplicata via 1 query em lote nas transações do usuário) e devolve uma
+  pré-visualização por linha com status `ok`/`duplicado`/`erro` — nada é
+  gravado.
+- `confirmarImportacaoTransacoes(linhas)`: recebe só as linhas que
+  sobraram marcadas na pré-visualização. Ordena por DATA ascendente antes de
+  gravar (uma venda precisa achar a compra correspondente já na base na hora
+  em que `criarTransacao` valida "quantidade disponível na data" — ver regra
+  de ponto-no-tempo da §8.11; importar fora de ordem cronológica rejeitaria
+  vendas antigas por "saldo insuficiente" mesmo a carteira fechando
+  positiva). Reaproveita `criarAtivo`/`criarCorretora`/`criarTransacao` já
+  existentes (com `confirmarDuplicata: true`, já vetado na pré-visualização)
+  — nenhuma lógica de gravação/validação duplicada, só orquestração.
+
+`MAPA_GRUPO` (Grupo da planilha → tipo/subtipo do app, só usado quando o
+ativo ainda não existe): "Ações"→ação, "Ações EUA"/"Stocks"→internacional
+(stock), "ETF USA"/"ETF Exterior"→internacional (ETF), "ETF
+Brasil"/"ETF"→etf, "Fundo Imobiliário"/"FII"→fii, "REIT"→internacional
+(REIT), "Tesouro Direto"/"Tesouro"→renda fixa (tesouro), "Renda
+Fixa"→renda fixa, "Cripto"→cripto, "Fundo(s)"→fundo, "Outro(s)"→outro.
+Categoria não reconhecida vira linha de status `erro` (pede cadastro manual
+antes de importar, não trava as demais linhas).
+
+**UI (`ImportarTransacoesView.tsx`, novo, dentro de `LivroRazaoView.tsx` —
+botão "Importar (colar)" ao lado de "Visão mensal"/"Filtros").** Textarea
+pra colar → "Analisar" (chama `analisarImportacaoTransacoes`) → tabela de
+pré-visualização com checkbox por linha (marcado por padrão só quando
+`status === "ok"`; "duplicado" some desmarcado mas pode ser marcado na mão
+se for uma coincidência legítima; "erro" fica desmarcável) mostrando
+data/ativo (badge "novo")/corretora (badge "nova")/tipo/quantidade/preço em
+BRL (com o valor original em USD + câmbio usado, quando aplicável)/custos/
+status → "Confirmar importação" grava só o que ficou marcado e mostra o
+resumo (quantas transações/ativos/corretoras novas, e erros linha a linha).
+
+**Fora de escopo desta primeira versão (documentado pra não ser esquecido):**
+só compra/venda são importadas — a planilha colada não tem os campos que
+eventos societários (fator de proporção, valor capitalizado) ou proventos
+(data-com, quantidade, valor por cota) precisam, então essas linhas
+continuam sendo lançadas manualmente nas telas de sempre.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

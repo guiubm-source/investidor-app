@@ -20,6 +20,7 @@ import CorretorasManager from "./CorretorasManager";
 import ConfirmModal from "@/components/ConfirmModal";
 import { useToast } from "@/components/ToastProvider";
 import VisaoMensalView from "./VisaoMensalView";
+import ImportarTransacoesView from "./ImportarTransacoesView";
 import { valorCaixaTransacao } from "@/lib/ativos/posicao-calculo";
 
 /**
@@ -112,6 +113,7 @@ export default function LivroRazaoView({
   const [confirmandoDuplicataLoading, setConfirmandoDuplicataLoading] = useState(false);
 
   const [mostrarVisaoMensal, setMostrarVisaoMensal] = useState(false);
+  const [mostrarImportar, setMostrarImportar] = useState(false);
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [filtroAtivos, setFiltroAtivos] = useState<Set<string>>(new Set());
   const [filtroCorretoras, setFiltroCorretoras] = useState<Set<string>>(new Set());
@@ -215,9 +217,14 @@ export default function LivroRazaoView({
             <button onClick={() => setMostrarVisaoMensal((v) => !v)} className="btn btn-secondary">
               {mostrarVisaoMensal ? "Ocultar visão mensal" : "Visão mensal"}
             </button>
+            <button onClick={() => setMostrarImportar((v) => !v)} className="btn btn-secondary">
+              {mostrarImportar ? "Ocultar importação" : "Importar (colar)"}
+            </button>
           </div>
         )
       )}
+
+      {mostrarImportar && <ImportarTransacoesView onImportado={atualizar} />}
 
       {mostrarVisaoMensal && <VisaoMensalView />}
 
