@@ -1271,6 +1271,61 @@ Arquivos tocados: `src/app/(app)/indicadores/AbaSelic.tsx`, `AbaIpca.tsx`,
 (paginação de `detectarBuracos()` + robustez de janela/cursor + modos de
 diagnóstico), `package.json` (nova dependência `recharts@2`).
 
+### 8.15 Rentabilidade histórica — janela primeira negociação→venda, fórmula unificada Ativo/Carteira, gráfico da Carteira em % (2026-07-15)
+
+Guilherme apontou, olhando a página de um FII (HGBS11) em produção, que o
+bloco "Rentabilidade histórica" do Ativo mostrava "poucos pontos" e pediu
+pra estudar e melhorar a regra: tanto no Ativo quanto na Carteira, a
+rentabilidade histórica deveria ir da primeira negociação até a venda.
+Investigação + decisões via protocolo da seção 1 (uma pergunta por vez):
+
+1. **O que já estava certo, o que não existia.** No nível do Ativo, o início
+   já era filtrado corretamente pela primeira transação
+   (`transacoes[0].data`, em `obterRentabilidadeHistoricaAtivo`) — o sintoma
+   do HGBS11 era falta de dado histórico de preço, não um bug de data de
+   início. O que **não existia de fato** era uma curva de rentabilidade em
+   **%** pra Carteira inteira — só havia "Evolução do patrimônio" em R$
+   absoluto no Dashboard (`obterEvolucaoPatrimonio`, agora `obterEvolucaoCarteira`).
+2. **Metodologia escolhida: "retorno simples acumulado".** Descartada a
+   alternativa de retorno indexado por cota (TWR, estilo fundo de
+   investimento — mais correto matematicamente na presença de aportes ao
+   longo do tempo, mas exige uma estrutura de "cota" que não existe no app e
+   é bem mais difícil de auditar manualmente). Fórmula adotada, igual para
+   Ativo e Carteira: `(valorPosicao + lucroRealizadoAcumulado) / totalInvestidoBruto − 1`.
+   `totalInvestidoBruto` é um acumulador NOVO em `EstadoPosicao`
+   (`posicao-calculo.ts`) que só cresce em compras (nunca reduz na venda,
+   diferente de `custoTotal`) — sem ele não dava pra medir corretamente o
+   retorno de um ativo parcialmente vendido, já que `custoTotal` sozinho
+   "esquece" o que já saiu da posição.
+3. **Unificação deliberada Ativo↔Carteira.** Antes, o Ativo comparava só
+   preço atual vs. custo médio (ignorava vendas parciais já feitas). Decisão
+   explícita do Guilherme: unificar — agora o Ativo também soma o lucro já
+   realizado ao numerador, então os dois níveis (Ativo e Carteira agregada)
+   medem exatamente a mesma coisa, e a Carteira é uma soma direta dos
+   acumuladores de cada Ativo (sem duplicar fórmula).
+4. **Corte da série na venda final.** Se a posição de um Ativo zera e nunca é
+   recomprada, a série de `obterRentabilidadeHistoricaAtivo` agora é
+   truncada no dia dessa venda (mantendo esse último ponto, com o retorno
+   final "congelado") — não continua um rastro de dias mortos com o mesmo
+   número até hoje. Efeito colateral correto e automático em
+   `obterEvolucaoCarteira`: o forward-fill por ativo trava nesse último
+   ponto, então a contribuição desse ativo fica "congelada" dali em diante —
+   sem lógica extra pra isso, é consequência direta do corte de cada série.
+5. **Onde aparece e como.** Novo gráfico de % no Dashboard, no MESMO bloco
+   de "Evolução do patrimônio" (não em tela separada), com um toggle R$/%
+   (`EvolucaoCarteiraBlock.tsx`, client component — o resto do Dashboard
+   continua server component, só esse bloco precisa de estado local pro
+   toggle). Preferido a mostrar os dois gráficos lado a lado, pra manter o
+   bloco compacto.
+
+Arquivos tocados: `src/lib/ativos/posicao-calculo.ts` (`totalInvestidoBruto`
+em `EstadoPosicao`/`aplicarTransacaoNaPosicao`), `src/lib/ativos/preco-historico.ts`
+(nova fórmula + corte em `obterRentabilidadeHistoricaAtivo`; `obterEvolucaoPatrimonio`
+virou `obterEvolucaoCarteira`, retornando R$ e % juntos), `src/app/(app)/dashboard/page.tsx`
+e novo `src/app/(app)/dashboard/EvolucaoCarteiraBlock.tsx` (toggle R$/%),
+`src/app/(app)/ativos/[id]/AtivoDetalheView.tsx` (texto explicativo
+atualizado pra refletir a nova fórmula).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

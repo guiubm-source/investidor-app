@@ -467,8 +467,10 @@ export default function AtivoDetalheView({
             <div className="card p-5">
               <h2 className="text-sm font-medium text-ink mb-1">Rentabilidade histórica</h2>
               <p className="text-xs text-faint mb-3">
-                Preço de fechamento de cada dia comparado ao custo médio naquele dia — diferente do
-                &ldquo;lucro não realizado&rdquo; acima, que só compara o preço de hoje.
+                Retorno acumulado dia a dia (posição ainda em carteira + lucro já realizado em vendas
+                parciais, sobre tudo que já foi investido em compras) — vai da primeira negociação até a
+                venda final (ou até hoje, se ainda em carteira). Diferente do &ldquo;lucro não
+                realizado&rdquo; acima, que só compara o preço de hoje contra o custo médio atual.
               </p>
               <SerieLinhaChart
                 pontos={rentabilidade

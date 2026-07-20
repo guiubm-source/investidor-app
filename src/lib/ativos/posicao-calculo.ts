@@ -25,9 +25,28 @@ export type TransacaoCalc = {
   custos: number;
 };
 
-export type EstadoPosicao = { quantidade: number; custoTotal: number; lucroRealizado: number };
+export type EstadoPosicao = {
+  quantidade: number;
+  custoTotal: number;
+  lucroRealizado: number;
+  /**
+   * Soma bruta de tudo que já foi pago em compras até aqui — SÓ CRESCE (venda
+   * nunca reduz este campo, diferente de `custoTotal`, que é o custo médio ×
+   * quantidade ainda em carteira). Usado como denominador da rentabilidade
+   * histórica "retorno simples acumulado" (ver docs/MAPA-DE-DADOS.md §8.15):
+   * (valorPosicao + lucroRealizado) / totalInvestidoBruto − 1. Sem esse
+   * acumulador separado não dá pra medir corretamente o retorno de um ativo
+   * já parcialmente vendido — `custoTotal` sozinho "esquece" o que já saiu.
+   */
+  totalInvestidoBruto: number;
+};
 
-export const ESTADO_POSICAO_INICIAL: EstadoPosicao = { quantidade: 0, custoTotal: 0, lucroRealizado: 0 };
+export const ESTADO_POSICAO_INICIAL: EstadoPosicao = {
+  quantidade: 0,
+  custoTotal: 0,
+  lucroRealizado: 0,
+  totalInvestidoBruto: 0,
+};
 
 /**
  * Um passo do cálculo de posição por custo médio ponderado — usado tanto
@@ -42,10 +61,12 @@ export const ESTADO_POSICAO_INICIAL: EstadoPosicao = { quantidade: 0, custoTotal
  */
 export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCalc): EstadoPosicao {
   if (t.tipo === "compra") {
+    const valorComprado = t.quantidade * t.precoUnitario + t.custos;
     return {
       quantidade: estado.quantidade + t.quantidade,
-      custoTotal: estado.custoTotal + t.quantidade * t.precoUnitario + t.custos,
+      custoTotal: estado.custoTotal + valorComprado,
       lucroRealizado: estado.lucroRealizado,
+      totalInvestidoBruto: estado.totalInvestidoBruto + valorComprado,
     };
   }
   const precoMedioAtual = estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
@@ -54,6 +75,7 @@ export function aplicarTransacaoNaPosicao(estado: EstadoPosicao, t: TransacaoCal
     quantidade: estado.quantidade - qtdVenda,
     custoTotal: estado.custoTotal - precoMedioAtual * qtdVenda,
     lucroRealizado: estado.lucroRealizado + (t.precoUnitario - precoMedioAtual) * qtdVenda - t.custos,
+    totalInvestidoBruto: estado.totalInvestidoBruto,
   };
 }
 

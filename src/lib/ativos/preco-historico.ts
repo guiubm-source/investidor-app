@@ -32,7 +32,24 @@ export type PontoRentabilidade = {
   custoMedio: number;
   valorPosicao: number;
   valorAplicado: number;
-  rentabilidadePct: number | null; // null enquanto quantidade == 0 (sem posição naquela data)
+  /**
+   * Lucro já realizado (vendas parciais/totais) acumulado ATÉ esta data —
+   * exposto separado de `rentabilidadePct` pra permitir auditar a conta na
+   * UI/tooltip sem recalcular nada (ver docs/MAPA-DE-DADOS.md §8.15).
+   */
+  lucroRealizadoAcumulado: number;
+  /** Soma bruta de compras até esta data — denominador da rentabilidade. */
+  totalInvestidoBruto: number;
+  /**
+   * "Retorno simples acumulado": (valorPosicao + lucroRealizadoAcumulado) /
+   * totalInvestidoBruto − 1, em %. `null` só quando ainda não houve nenhuma
+   * compra até essa data (totalInvestidoBruto === 0) — diferente da versão
+   * anterior, que zerava (`null`) assim que a posição era totalmente
+   * vendida; agora, depois de zerada, o valor fica congelado no retorno
+   * final realizado (a série é truncada na data da venda que zerou a
+   * posição — ver corte em `obterRentabilidadeHistoricaAtivo`).
+   */
+  rentabilidadePct: number | null;
 };
 
 async function obterTransacoesOrdenadas(profileId: string, ativoId: string) {
@@ -103,7 +120,11 @@ export async function obterSeriePrecoAtivo(
 /**
  * Rentabilidade histórica dia a dia de um ativo — cruza `obterSeriePrecoAtivo`
  * com a linha do tempo de transações. Pontos antes da primeira transação
- * não entram (não existia posição ainda).
+ * não entram (não existia posição ainda) e, se o ativo já foi totalmente
+ * vendido (zerado) e nunca recomprado depois, a série é cortada no dia dessa
+ * venda final — não continua "morta" até hoje. Decisão 2026-07-15 (ver
+ * docs/MAPA-DE-DADOS.md §8.15): a janela vai da primeira negociação até a
+ * venda (ou até hoje, se ainda em carteira).
  */
 export async function obterRentabilidadeHistoricaAtivo(ativoId: string): Promise<PontoRentabilidade[]> {
   const supabase = await createClient();
@@ -137,6 +158,14 @@ export async function obterRentabilidadeHistoricaAtivo(ativoId: string): Promise
     const valorPosicao = estado.quantidade * p.preco;
     const valorAplicado = estado.quantidade * custoMedio;
 
+    // "Retorno simples acumulado" (mesma fórmula da Carteira, ver §8.15):
+    // soma o que já foi embolsado em vendas parciais/totais ao que ainda
+    // está de pé, sobre tudo que já foi pago em compras até aqui.
+    const rentabilidadePct =
+      estado.totalInvestidoBruto > 0
+        ? ((valorPosicao + estado.lucroRealizado) / estado.totalInvestidoBruto - 1) * 100
+        : null;
+
     pontos.push({
       data: p.data,
       precoFechamento: p.preco,
@@ -144,26 +173,47 @@ export async function obterRentabilidadeHistoricaAtivo(ativoId: string): Promise
       custoMedio,
       valorPosicao,
       valorAplicado,
-      rentabilidadePct: estado.quantidade > 0 && custoMedio > 0 ? ((p.preco - custoMedio) / custoMedio) * 100 : null,
+      lucroRealizadoAcumulado: estado.lucroRealizado,
+      totalInvestidoBruto: estado.totalInvestidoBruto,
+      rentabilidadePct,
     });
+  }
+
+  // Corta a série no dia da venda final: se o último ponto está zerado, anda
+  // pra trás até o início dessa sequência final de "quantidade 0" e descarta
+  // tudo depois dela — o último ponto mantido É o dia em que a posição foi
+  // zerada (retorno final realizado), não um rastro de dias mortos até hoje.
+  if (pontos.length > 0 && pontos[pontos.length - 1].quantidade === 0) {
+    let i = pontos.length - 1;
+    while (i > 0 && pontos[i - 1].quantidade === 0) i -= 1;
+    return pontos.slice(0, i + 1);
   }
 
   return pontos;
 }
 
-export type PontoPatrimonio = {
+export type PontoEvolucaoCarteira = {
   data: string;
   valorTotal: number;
+  /** Mesma fórmula "retorno simples acumulado" da Carteira (ver §8.15) — soma
+   *  os ativos ainda em carteira + o que já foi realizado em vendas, sobre
+   *  tudo que já foi investido em compras até aquele dia. `null` só antes da
+   *  primeira compra de qualquer ativo. */
+  rentabilidadePct: number | null;
 };
 
 /**
- * Evolução do patrimônio total investido, dia a dia — soma, em cada data,
- * `valorPosicao` (preço histórico × quantidade naquele dia) de TODOS os
- * ativos do usuário que têm pelo menos uma transação até aquela data.
- * Usado no Painel (dashboard). Reaproveita `obterRentabilidadeHistoricaAtivo`
- * por ativo, sem duplicar a lógica de cruzamento preço×posição.
+ * Evolução da Carteira inteira, dia a dia, em duas leituras (R$ e %) — soma,
+ * em cada data, o `valorPosicao` de TODOS os ativos do usuário pra `valorTotal`
+ * (mesmo cálculo de antes, "Evolução do patrimônio"), e agrega
+ * `lucroRealizadoAcumulado`/`totalInvestidoBruto` de todos os ativos pra
+ * `rentabilidadePct` — o equivalente, em nível de carteira, do "retorno
+ * simples acumulado" de cada Ativo (ver §8.15). Usado no Painel (dashboard).
+ * Reaproveita `obterRentabilidadeHistoricaAtivo` por ativo (já com a janela
+ * certa: primeira negociação até a venda ou hoje), sem duplicar a lógica de
+ * cruzamento preço×posição.
  */
-export async function obterEvolucaoPatrimonio(): Promise<PontoPatrimonio[]> {
+export async function obterEvolucaoCarteira(): Promise<PontoEvolucaoCarteira[]> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -187,13 +237,17 @@ export async function obterEvolucaoPatrimonio(): Promise<PontoPatrimonio[]> {
 
   // Pra cada ativo, em cada data do calendário unificado, usa o último valor
   // conhecido até aquela data (a série do ativo pode não ter ponto exatamente
-  // nessa data — ex. feriado só nessa bolsa, ou ativo com histórico mais
-  // curto) — carrega o último valor "pra frente" (forward-fill).
-  const resultado: PontoPatrimonio[] = [];
+  // nessa data — ex. feriado só nessa bolsa, ativo com histórico mais curto,
+  // ou já vendido — nesse caso o forward-fill trava no último ponto, que é
+  // exatamente o dia da venda final, "congelando" a contribuição dali em
+  // diante) — carrega o último valor "pra frente" (forward-fill).
+  const resultado: PontoEvolucaoCarteira[] = [];
   const indices = seriesPorAtivo.map(() => 0);
 
   for (const data of datasOrdenadas) {
     let valorTotal = 0;
+    let lucroRealizadoTotal = 0;
+    let totalInvestidoBrutoTotal = 0;
     for (let i = 0; i < seriesPorAtivo.length; i++) {
       const serie = seriesPorAtivo[i];
       if (serie.length === 0) continue;
@@ -201,10 +255,15 @@ export async function obterEvolucaoPatrimonio(): Promise<PontoPatrimonio[]> {
         indices[i] += 1;
       }
       if (serie[indices[i]].data <= data) {
-        valorTotal += serie[indices[i]].valorPosicao;
+        const p = serie[indices[i]];
+        valorTotal += p.valorPosicao;
+        lucroRealizadoTotal += p.lucroRealizadoAcumulado;
+        totalInvestidoBrutoTotal += p.totalInvestidoBruto;
       }
     }
-    resultado.push({ data, valorTotal });
+    const rentabilidadePct =
+      totalInvestidoBrutoTotal > 0 ? ((valorTotal + lucroRealizadoTotal) / totalInvestidoBrutoTotal - 1) * 100 : null;
+    resultado.push({ data, valorTotal, rentabilidadePct });
   }
 
   return resultado;

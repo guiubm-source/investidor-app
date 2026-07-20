@@ -1,10 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { obterEvolucaoPatrimonio } from "@/lib/ativos/preco-historico";
-import SerieLinhaChart from "@/components/SerieLinhaChart";
-
-const formatarMoedaCompacta = (valor: number) =>
-  valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+import { obterEvolucaoCarteira } from "@/lib/ativos/preco-historico";
+import EvolucaoCarteiraBlock from "./EvolucaoCarteiraBlock";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -22,13 +19,13 @@ export default async function DashboardPage() {
 
   if (!profile?.cadastro_completo) redirect("/cadastro");
 
-  const [{ data: suitability }, evolucaoPatrimonio] = await Promise.all([
+  const [{ data: suitability }, evolucaoCarteira] = await Promise.all([
     supabase
       .from("current_investor_suitability")
       .select("perfil_resultado, created_at")
       .eq("profile_id", user.id)
       .single(),
-    obterEvolucaoPatrimonio(),
+    obterEvolucaoCarteira(),
   ]);
 
   return (
@@ -48,25 +45,7 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        <div className="card p-5">
-          <h2 className="text-sm font-medium text-ink mb-1">Evolução do patrimônio</h2>
-          <p className="text-xs text-faint mb-3">
-            Soma, dia a dia, do preço histórico × quantidade em carteira de cada ativo — não só o
-            valor de hoje.
-          </p>
-          {evolucaoPatrimonio.length >= 2 ? (
-            <SerieLinhaChart
-              pontos={evolucaoPatrimonio.map((p) => ({ data: p.data, valor: p.valorTotal }))}
-              formatarValor={formatarMoedaCompacta}
-              ariaLabel="Evolução do patrimônio total investido"
-            />
-          ) : (
-            <p className="text-sm text-faint">
-              Ainda não há histórico suficiente para desenhar o gráfico — volte depois de lançar
-              transações e o preço dos ativos acumular alguns dias de histórico.
-            </p>
-          )}
-        </div>
+        <EvolucaoCarteiraBlock pontos={evolucaoCarteira} />
       </div>
     </div>
   );
