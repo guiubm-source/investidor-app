@@ -135,7 +135,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
   } = await supabase.auth.getUser();
   if (!user) return [];
 
-  const [{ data: ativosRaw }, { data: transacoesRaw }, { data: proventosRaw }] = await Promise.all([
+  const [ativosRes, transacoesRes, proventosRes] = await Promise.all([
     supabase
       .from("ativos")
       .select(
@@ -150,9 +150,18 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     supabase.from("proventos").select("id, ativo_id, tipo, data, valor_total").eq("profile_id", user.id),
   ]);
 
-  const ativos = ativosRaw ?? [];
-  const transacoes = transacoesRaw ?? [];
-  const proventos = proventosRaw ?? [];
+  // Ver docs/MAPA-DE-DADOS.md §8.17: sem isso, uma coluna faltando no banco
+  // (ex.: migração não rodada) fazia essa função devolver `[]` em silêncio —
+  // Posição/Alocação/lista de Ativos ficavam vazias sem nenhuma pista da
+  // causa. Agora o erro do Postgrest é jogado pra cima (Next mostra a tela
+  // de erro em vez de uma tela vazia) e fica no log do servidor.
+  if (ativosRes.error) throw new Error(`obterAtivosComPosicao: falha ao ler ativos — ${ativosRes.error.message}`);
+  if (transacoesRes.error) throw new Error(`obterAtivosComPosicao: falha ao ler transações — ${transacoesRes.error.message}`);
+  if (proventosRes.error) throw new Error(`obterAtivosComPosicao: falha ao ler proventos — ${proventosRes.error.message}`);
+
+  const ativos = ativosRes.data ?? [];
+  const transacoes = transacoesRes.data ?? [];
+  const proventos = proventosRes.data ?? [];
 
   return ativos.map((ativo) => {
     const setor = Array.isArray(ativo.setor) ? ativo.setor[0] : ativo.setor;

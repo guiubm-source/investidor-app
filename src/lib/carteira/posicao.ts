@@ -2,11 +2,12 @@
 
 /**
  * Sub-aba Posição (Carteira) — visão consolidada por classe, ver
- * docs/MAPA-DE-DADOS.md §8.16. Diferente do livro-razão (lib/carteira/actions.ts,
- * feed cru de lançamentos) e do registro mestre por ativo (lib/ativos/actions.ts,
- * um ativo por linha), aqui agregamos por CLASSE (Ações/FIIs/Tesouro/Stocks/ETF
- * Exterior/...), com variação do dia e variação total, réplica do layout
- * MyProfit/Status Invest que o Guilherme mandou por print.
+ * docs/MAPA-DE-DADOS.md §8.16/§8.17. Diferente do livro-razão
+ * (lib/carteira/actions.ts, feed cru de lançamentos) e do registro mestre
+ * por ativo (lib/ativos/actions.ts, um ativo por linha), aqui agregamos por
+ * CLASSE (Ações/FIIs/Tesouro/Stocks/ETF Exterior/...), com variação do dia
+ * e variação total, réplica do layout MyProfit/Status Invest que o
+ * Guilherme mandou por print.
  *
  * Fonte única continua sendo `transacoes` — este arquivo só recalcula posição
  * (via calcularPosicao/ordenarTransacoes, mesmas funções puras usadas em
@@ -101,9 +102,11 @@ export type PosicaoAtivo = {
   quantidade: number;
   precoMedio: number;
   precoAtual: number;
+  /** false = `preco_atual` nunca foi definido (nasce 0 no banco) — ver §8.17. UI deve mostrar "—", não R$ 0,00. */
+  precoDefinido: boolean;
   diferenca: number;
   patrimonioAtual: number;
-  /** null = sem 2 pontos de preço salvos ainda pra comparar (ver §8.16). */
+  /** null = preço não definido, ou sem nenhum preço anterior salvo pra comparar (ver §8.17). */
   variacaoHojeValor: number | null;
   variacaoHojePct: number | null;
   /** "Retorno simples acumulado" (mesma fórmula unificada de lib/ativos/actions.ts). */
@@ -123,6 +126,8 @@ export type PosicaoGrupo = {
   variacaoHojePct: number | null;
   variacaoTotalValor: number;
   variacaoTotalPct: number | null;
+  /** Quantos ativos do grupo têm `precoDefinido === false` — ver §8.17. */
+  semPrecoCount: number;
 };
 
 export type PosicaoConsolidada = {
@@ -133,53 +138,61 @@ export type PosicaoConsolidada = {
   variacaoHojePct: number | null;
   variacaoTotalValor: number;
   variacaoTotalPct: number | null;
+  /** Total de ativos em posição sem preço atual definido — ver §8.17. */
+  ativosSemPrecoCount: number;
 };
 
-/** Últimos 2 pontos de preço conhecidos de cada ativo cotado automaticamente, agrupados por (tipo, ticker) — tabela compartilhada entre usuários. */
-async function obterUltimosDoisPrecosMercado(
-  pares: { tipo: TipoAtivo; ticker: string }[]
-): Promise<Map<string, [number, number]>> {
-  const mapa = new Map<string, [number, number]>();
+/**
+ * Preço mais recente ANTERIOR a hoje de cada ativo cotado automaticamente,
+ * agrupado por (tipo, ticker) — tabela compartilhada entre usuários.
+ * "Hoje" em si vem de `ativos.preco_atual` (mesma fonte do Patrimônio
+ * atual) — comparar sempre contra esse valor, e não contra o penúltimo
+ * ponto salvo, evita o descompasso descrito em §8.17: o cron grava aqui uma
+ * vez por dia, mas o botão "Atualizar agora" só atualiza `preco_atual`
+ * (não esta tabela), então os "2 últimos pontos daqui" podiam ficar
+ * defasados em relação ao preço já exibido no Patrimônio.
+ */
+async function obterPrecoAnteriorMercado(pares: { tipo: TipoAtivo; ticker: string }[]): Promise<Map<string, number>> {
+  const mapa = new Map<string, number>();
   if (pares.length === 0) return mapa;
 
   const supabase = await createClient();
   const tickers = [...new Set(pares.map((p) => p.ticker))];
+  const hojeStr = new Date().toISOString().slice(0, 10);
 
   // Janela de 15 dias corridos é folga suficiente pra cron diário pular
-  // fim de semana/feriado e ainda achar os 2 últimos pontos.
+  // fim de semana/feriado e ainda achar um ponto anterior a hoje.
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 15);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("ativo_preco_diario_mercado")
     .select("tipo, ticker, data, preco")
     .in("ticker", tickers)
     .gte("data", cutoffStr)
+    .lt("data", hojeStr)
     .order("data", { ascending: false });
 
-  const porChave = new Map<string, { data: string; preco: number }[]>();
+  if (error) throw new Error(`obterPrecoAnteriorMercado: falha ao ler ativo_preco_diario_mercado — ${error.message}`);
+
   for (const row of data ?? []) {
     const chave = `${row.tipo}:${row.ticker}`;
-    const lista = porChave.get(chave) ?? [];
-    if (lista.length < 2) lista.push({ data: row.data as string, preco: Number(row.preco) });
-    porChave.set(chave, lista);
-  }
-
-  for (const [chave, lista] of porChave) {
-    if (lista.length === 2) mapa.set(chave, [lista[0].preco, lista[1].preco]);
+    // Já vem ordenado por data desc — a primeira ocorrência de cada chave é a mais recente.
+    if (!mapa.has(chave)) mapa.set(chave, Number(row.preco));
   }
 
   return mapa;
 }
 
 /**
- * Últimos 2 snapshots manuais de cada ativo, por ativo_id — sem corte de
- * data (decisão 2026-07-16: "comparar com o último preço salvo, seja de
+ * Mesma ideia de `obterPrecoAnteriorMercado`, mas pra ativos de preço
+ * manual: preço mais recente salvo ANTES de hoje, por ativo_id — sem corte
+ * de data (decisão 2026-07-16: "comparar com o último preço salvo, seja de
  * quando for", já que atualização manual pode ficar dias/semanas parada).
  */
-async function obterUltimosDoisPrecosManuais(ativoIds: string[]): Promise<Map<string, [number, number]>> {
-  const mapa = new Map<string, [number, number]>();
+async function obterPrecoAnteriorManual(ativoIds: string[]): Promise<Map<string, number>> {
+  const mapa = new Map<string, number>();
   if (ativoIds.length === 0) return mapa;
 
   const supabase = await createClient();
@@ -188,22 +201,20 @@ async function obterUltimosDoisPrecosManuais(ativoIds: string[]): Promise<Map<st
   } = await supabase.auth.getUser();
   if (!user) return mapa;
 
-  const { data } = await supabase
+  const hojeStr = new Date().toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
     .from("ativo_preco_diario_manual")
     .select("ativo_id, data, preco")
     .eq("profile_id", user.id)
     .in("ativo_id", ativoIds)
+    .lt("data", hojeStr)
     .order("data", { ascending: false });
 
-  const porAtivo = new Map<string, { data: string; preco: number }[]>();
-  for (const row of data ?? []) {
-    const lista = porAtivo.get(row.ativo_id) ?? [];
-    if (lista.length < 2) lista.push({ data: row.data as string, preco: Number(row.preco) });
-    porAtivo.set(row.ativo_id, lista);
-  }
+  if (error) throw new Error(`obterPrecoAnteriorManual: falha ao ler ativo_preco_diario_manual — ${error.message}`);
 
-  for (const [ativoId, lista] of porAtivo) {
-    if (lista.length === 2) mapa.set(ativoId, [lista[0].preco, lista[1].preco]);
+  for (const row of data ?? []) {
+    if (!mapa.has(row.ativo_id)) mapa.set(row.ativo_id, Number(row.preco));
   }
 
   return mapa;
@@ -229,13 +240,14 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     variacaoHojePct: null,
     variacaoTotalValor: 0,
     variacaoTotalPct: null,
+    ativosSemPrecoCount: 0,
   };
   if (!user) return vazio;
 
-  const [{ data: ativosRaw }, { data: transacoesRaw }, { data: corretorasRaw }] = await Promise.all([
+  const [ativosRes, transacoesRes, corretorasRes] = await Promise.all([
     supabase
       .from("ativos")
-      .select("id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual")
+      .select("id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual, preco_atualizado_em")
       .eq("profile_id", user.id),
     supabase
       .from("transacoes")
@@ -244,9 +256,17 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
   ]);
 
-  const ativos = ativosRaw ?? [];
-  const todasTransacoes = transacoesRaw ?? [];
-  const corretoras = corretorasRaw ?? [];
+  // Ver docs/MAPA-DE-DADOS.md §8.17: sem isso, uma coluna faltando no banco
+  // (ex.: migração não rodada) fazia a Posição virar "carteira vazia" sem
+  // nenhuma pista da causa real — agora o erro do Postgrest sobe pra tela
+  // de erro do Next em vez de sumir em silêncio.
+  if (ativosRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler ativos — ${ativosRes.error.message}`);
+  if (transacoesRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler transações — ${transacoesRes.error.message}`);
+  if (corretorasRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler corretoras — ${corretorasRes.error.message}`);
+
+  const ativos = ativosRes.data ?? [];
+  const todasTransacoes = transacoesRes.data ?? [];
+  const corretoras = corretorasRes.data ?? [];
 
   const transacoesFiltradas = corretoraId
     ? todasTransacoes.filter((t) => t.corretora_id === corretoraId)
@@ -264,6 +284,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     subtipoRendaFixa: string | null;
     subtipoInternacional: string | null;
     precoAtual: number;
+    precoDefinido: boolean;
     quantidade: number;
     precoMedio: number;
     lucroRealizado: number;
@@ -294,6 +315,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
         subtipoRendaFixa: ativo.subtipo_renda_fixa,
         subtipoInternacional: ativo.subtipo_internacional,
         precoAtual: Number(ativo.preco_atual),
+        precoDefinido: ativo.preco_atualizado_em !== null,
         quantidade,
         precoMedio,
         lucroRealizado,
@@ -305,16 +327,16 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     // "posição", já saiu por completo.
     .filter((p) => p.quantidade > 0);
 
-  // Busca em lote os 2 últimos preços conhecidos (mercado + manual) pra
+  // Busca em lote o último preço ANTERIOR a hoje (mercado + manual) pra
   // "variação hoje" — uma query por fonte, não uma por ativo.
   const paresAutomaticos = posicoesBase
     .filter((p) => TIPOS_COTACAO_AUTOMATICA.includes(p.tipo))
     .map((p) => ({ tipo: p.tipo, ticker: p.ticker }));
   const idsManuais = posicoesBase.filter((p) => !TIPOS_COTACAO_AUTOMATICA.includes(p.tipo)).map((p) => p.ativoId);
 
-  const [precosMercado, precosManuais] = await Promise.all([
-    obterUltimosDoisPrecosMercado(paresAutomaticos),
-    obterUltimosDoisPrecosManuais(idsManuais),
+  const [precosAnterioresMercado, precosAnterioresManuais] = await Promise.all([
+    obterPrecoAnteriorMercado(paresAutomaticos),
+    obterPrecoAnteriorManual(idsManuais),
   ]);
 
   const totalCarteira = posicoesBase.reduce((s, p) => s + p.quantidade * p.precoAtual, 0);
@@ -323,18 +345,17 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     const patrimonioAtual = p.quantidade * p.precoAtual;
     const diferenca = p.precoAtual - p.precoMedio;
 
-    const par = TIPOS_COTACAO_AUTOMATICA.includes(p.tipo)
-      ? precosMercado.get(`${p.tipo}:${p.ticker}`)
-      : precosManuais.get(p.ativoId);
+    const precoAnterior = TIPOS_COTACAO_AUTOMATICA.includes(p.tipo)
+      ? precosAnterioresMercado.get(`${p.tipo}:${p.ticker}`)
+      : precosAnterioresManuais.get(p.ativoId);
 
+    // "Hoje" é sempre `preco_atual` (mesma fonte do Patrimônio atual, ver
+    // comentário em obterPrecoAnteriorMercado) — só falta o "ontem".
     let variacaoHojeValor: number | null = null;
     let variacaoHojePct: number | null = null;
-    if (par) {
-      const [precoHoje, precoAnterior] = par;
-      if (precoAnterior > 0) {
-        variacaoHojeValor = p.quantidade * (precoHoje - precoAnterior);
-        variacaoHojePct = ((precoHoje - precoAnterior) / precoAnterior) * 100;
-      }
+    if (p.precoDefinido && precoAnterior !== undefined && precoAnterior > 0) {
+      variacaoHojeValor = p.quantidade * (p.precoAtual - precoAnterior);
+      variacaoHojePct = ((p.precoAtual - precoAnterior) / precoAnterior) * 100;
     }
 
     const variacaoTotalValor =
@@ -351,6 +372,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       quantidade: p.quantidade,
       precoMedio: p.precoMedio,
       precoAtual: p.precoAtual,
+      precoDefinido: p.precoDefinido,
       diferenca,
       patrimonioAtual,
       variacaoHojeValor,
@@ -381,8 +403,8 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
 
     // Variação hoje do grupo: soma valor de quem tem variação conhecida,
     // dividido pelo patrimônio de ontem desse mesmo subconjunto (ativos sem
-    // 2 preços salvos ainda ficam de fora da conta em R$ e %, não distorcem
-    // o denominador).
+    // preço definido ou sem preço anterior salvo ficam de fora da conta em
+    // R$ e %, não distorcem o denominador).
     let somaHoje = 0;
     let somaOntem = 0;
     for (const a of ativosDoGrupo) {
@@ -414,6 +436,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       variacaoHojePct,
       variacaoTotalValor,
       variacaoTotalPct,
+      semPrecoCount: ativosDoGrupo.filter((a) => !a.precoDefinido).length,
     };
   });
 
@@ -439,5 +462,6 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     variacaoHojePct: totalVariacaoHojePct,
     variacaoTotalValor: totalVariacaoTotalValor,
     variacaoTotalPct: totalVariacaoTotalPct,
+    ativosSemPrecoCount: posicoesBase.filter((p) => !p.precoDefinido).length,
   };
 }

@@ -192,6 +192,14 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                   <span className={`text-faint text-xs transition-transform ${colapsado ? "" : "rotate-90"}`}>▶</span>
                   <span className="text-sm font-medium text-ink">{grupo.label}</span>
                   <span className="text-xs text-faint">{grupo.ativos.length} ativo{grupo.ativos.length !== 1 ? "s" : ""}</span>
+                  {grupo.semPrecoCount > 0 && (
+                    <span
+                      className="text-[10px] text-faint border border-border rounded-full px-1.5 py-0.5"
+                      title="Preço atual nunca foi definido pra este(s) ativo(s) — valores ficam como “—” até você definir."
+                    >
+                      ⚠ {grupo.semPrecoCount} sem preço
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-4 text-xs">
@@ -239,12 +247,24 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                       <tbody>
                         {ativosPagina.map((a) => (
                           <tr key={a.ativoId} className="border-b border-border/50 last:border-0">
-                            <td className="py-1.5 pl-4 pr-3 text-ink font-medium">{a.ticker}</td>
+                            <td className="py-1.5 pl-4 pr-3 text-ink font-medium">
+                              {a.ticker}
+                              {!a.precoDefinido && (
+                                <Link
+                                  href={`/ativos/${a.ativoId}`}
+                                  className="block text-[10px] text-faint hover:text-ink font-normal underline underline-offset-2"
+                                >
+                                  sem preço · definir
+                                </Link>
+                              )}
+                            </td>
                             <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.precoMedio)}</td>
-                            <td className="py-1.5 pr-3 text-right text-muted">{formatarMoeda(a.precoAtual)}</td>
-                            <td className={`py-1.5 pr-3 text-right ${classeSinal(a.diferenca)}`}>{formatarMoeda(a.diferenca)}</td>
+                            <td className="py-1.5 pr-3 text-right text-muted">{a.precoDefinido ? formatarMoeda(a.precoAtual) : "—"}</td>
+                            <td className={`py-1.5 pr-3 text-right ${a.precoDefinido ? classeSinal(a.diferenca) : "text-faint"}`}>
+                              {a.precoDefinido ? formatarMoeda(a.diferenca) : "—"}
+                            </td>
                             <td className="py-1.5 pr-3 text-right text-muted">{formatarNumero(a.quantidade)}</td>
-                            <td className="py-1.5 pr-3 text-right text-ink">{formatarMoeda(a.patrimonioAtual)}</td>
+                            <td className="py-1.5 pr-3 text-right text-ink">{a.precoDefinido ? formatarMoeda(a.patrimonioAtual) : "—"}</td>
                             <td className={`py-1.5 pr-3 text-right ${classeSinal(a.variacaoHojeValor)}`}>
                               {a.variacaoHojeValor === null ? (
                                 "—"
@@ -355,27 +375,37 @@ function ColunaOrdenavel({
 
 function ResumoTotal({ posicao }: { posicao: PosicaoConsolidada }) {
   return (
-    <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-      <div>
-        <p className="text-faint">Patrimônio total</p>
-        <p className="text-ink text-sm font-medium">{formatarMoeda(posicao.totalCarteira)}</p>
+    <div className="card p-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div>
+          <p className="text-faint">Patrimônio total</p>
+          <p className="text-ink text-sm font-medium">{formatarMoeda(posicao.totalCarteira)}</p>
+        </div>
+        <div>
+          <p className="text-faint">Variação hoje</p>
+          <p className={`text-sm font-medium ${classeSinal(posicao.variacaoHojePct)}`}>
+            {formatarMoeda(posicao.variacaoHojeValor)} ({formatarPct(posicao.variacaoHojePct)})
+          </p>
+        </div>
+        <div>
+          <p className="text-faint">Variação total</p>
+          <p className={`text-sm font-medium ${classeSinal(posicao.variacaoTotalPct)}`}>
+            {formatarMoeda(posicao.variacaoTotalValor)} ({formatarPct(posicao.variacaoTotalPct)})
+          </p>
+        </div>
+        <div>
+          <p className="text-faint">Classes na carteira</p>
+          <p className="text-ink text-sm font-medium">{posicao.grupos.length}</p>
+        </div>
       </div>
-      <div>
-        <p className="text-faint">Variação hoje</p>
-        <p className={`text-sm font-medium ${classeSinal(posicao.variacaoHojePct)}`}>
-          {formatarMoeda(posicao.variacaoHojeValor)} ({formatarPct(posicao.variacaoHojePct)})
+
+      {posicao.ativosSemPrecoCount > 0 && (
+        <p className="text-[10px] text-faint mt-3 pt-3 border-t border-border">
+          ⚠ {posicao.ativosSemPrecoCount} ativo{posicao.ativosSemPrecoCount !== 1 ? "s" : ""} em carteira sem preço
+          atual definido — contam como R$ 0,00 de patrimônio nos totais acima (subestimando o valor real da
+          carteira) até você definir o preço na página de cada ativo.
         </p>
-      </div>
-      <div>
-        <p className="text-faint">Variação total</p>
-        <p className={`text-sm font-medium ${classeSinal(posicao.variacaoTotalPct)}`}>
-          {formatarMoeda(posicao.variacaoTotalValor)} ({formatarPct(posicao.variacaoTotalPct)})
-        </p>
-      </div>
-      <div>
-        <p className="text-faint">Classes na carteira</p>
-        <p className="text-ink text-sm font-medium">{posicao.grupos.length}</p>
-      </div>
+      )}
     </div>
   );
 }

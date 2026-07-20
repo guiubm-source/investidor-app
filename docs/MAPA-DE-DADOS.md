@@ -1416,6 +1416,68 @@ removidos de `obterLivroRazao`/`LivroRazao`), novo
 wrapper de sub-abas) e `src/app/(app)/carteira/page.tsx` (busca
 `obterPosicaoConsolidada()` além do livro-razão).
 
+### 8.17 Posição em produção — coluna faltando + 3 correções de robustez (2026-07-20)
+
+Depois do deploy da §8.16, a Posição foi ao ar mostrando "Nenhuma posição em
+carteira ainda" mesmo com ativos lançados. Investigação + correções:
+
+1. **Causa raiz do incidente**: a migração `subtipo_internacional` (§8.16,
+   item 2) tinha ficado só no `supabase/schema.sql` do repositório — nunca
+   tinha sido rodada no banco de produção. Como `obterPosicaoConsolidada` e
+   `obterAtivosComPosicao` selecionam essa coluna, a query falhava no
+   Postgrest; corrigido rodando o `schema.sql` inteiro (idempotente) no SQL
+   Editor do Supabase.
+2. **Erro visível em vez de silêncio.** Nenhuma das duas funções acima
+   checava o `error` do Supabase — uma coluna faltando (ou qualquer outra
+   falha de query) fazia a função devolver `[]`/lista vazia sem pista
+   nenhuma da causa, e foi exatamente isso que aconteceu aqui: a tela ficou
+   vazia sem erro, sem log, sem nada pra investigar. Agora
+   `obterAtivosComPosicao` (lib/ativos/actions.ts) e
+   `obterPosicaoConsolidada` (lib/carteira/posicao.ts) checam `error` de
+   cada query e lançam `Error` descritivo — Next mostra a tela de erro em
+   vez de uma tela vazia, e a mensagem fica no log do servidor (Vercel).
+3. **Variação hoje reconciliada com Patrimônio atual.** Achado na revisão
+   pós-incidente: "Patrimônio atual" usa `ativos.preco_atual` (atualizado
+   tanto pelo cron das 22h UTC quanto pelo botão "Atualizar agora", que só
+   mexe nesse campo), enquanto "Variação hoje" comparava os 2 últimos pontos
+   de `ativo_preco_diario_mercado`/`ativo_preco_diario_manual` (só o cron
+   escreve ali). Resultado: clicar "Atualizar agora" no meio do dia
+   atualizava o Patrimônio mas não a Variação hoje, que continuava
+   comparando contra o snapshot velho do cron — os dois números paravam de
+   bater. Correção: "hoje" na Variação hoje agora É `preco_atual` (mesma
+   fonte do Patrimônio); só o "ontem" continua vindo do histórico diário —
+   busca-se o preço mais recente salvo **estritamente antes de hoje**
+   (`obterPrecoAnteriorMercado`/`obterPrecoAnteriorManual`, substituindo as
+   antigas "2 últimos pontos"). Mantém a decisão original de 2026-07-16
+   ("comparar com o último preço salvo, seja de quando for") pro lado
+   manual, e resolve o drift do lado automático.
+4. **Indicador de preço não definido na Posição.** `ativos.preco_atual`
+   nasce `0` no banco — um ativo com posição mas cujo preço nunca foi
+   definido aparecia na Posição como R$ 0,00 de patrimônio sem nenhum
+   aviso (a página do Ativo já tinha esse aviso, a Posição não). Adicionado
+   `precoDefinido: boolean` em `PosicaoAtivo` (`preco_atualizado_em !==
+   null`): a UI agora mostra "—" em vez de R$ 0,00 nas colunas Preço
+   atual/Diferença/Patrimônio atual desses ativos, com link "sem preço ·
+   definir" pra página do ativo, um badge por classe ("N sem preço") e uma
+   nota no resumo total explicando que esses ativos contam como R$ 0,00 nos
+   totais (subestimando o valor real da carteira) até o preço ser definido.
+   `PosicaoConsolidada`/`PosicaoGrupo` ganharam `ativosSemPrecoCount`/
+   `semPrecoCount` pra isso.
+
+**Não corrigido nesta rodada, registrado pra referência**: o cron de
+cotações (`src/app/api/cron/cotacoes/route.ts`) usa a API não-oficial do
+Yahoo Finance e falha por ticker sem alertar ninguém — se um ativo ficar
+dias sem atualizar, não há nada na UI que avise. Fica como pendência futura
+(ex.: um indicador de "cotação desatualizada há X dias" na página do ativo
+ou na Posição).
+
+Arquivos tocados: `src/lib/ativos/actions.ts` (`obterAtivosComPosicao` com
+checagem de erro), `src/lib/carteira/posicao.ts` (checagem de erro +
+`obterPrecoAnteriorMercado`/`obterPrecoAnteriorManual` substituindo
+`obterUltimosDoisPrecosMercado`/`Manuais` + `precoDefinido`/
+`semPrecoCount`/`ativosSemPrecoCount`), `src/app/(app)/carteira/PosicaoView.tsx`
+(mascarar valores sem preço + badges de aviso).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
