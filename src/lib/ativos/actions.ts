@@ -248,20 +248,33 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
  * tempo, mesmo que a posição final (somando tudo) feche positiva.
  * Reaproveita a mesma calcularPosicao/ordenarTransacoes da fonte única
  * (ver docs/MAPA-DE-DADOS.md §3) em vez de duplicar o cálculo.
+ *
+ * `excluirTransacaoId` (opcional): usado por `editarTransacao` — ao editar
+ * uma venda, a própria transação (com os valores ANTIGOS, ainda não
+ * sobrescritos no banco) não pode contar contra ela mesma na validação,
+ * senão editar uma venda existente (sem mudar a quantidade) sempre falharia
+ * achando que "faltou" a quantidade que ela mesma representa.
  */
-export async function obterQuantidadeDisponivelEmData(ativoId: string, dataLimite: string): Promise<number> {
+export async function obterQuantidadeDisponivelEmData(
+  ativoId: string,
+  dataLimite: string,
+  excluirTransacaoId?: string
+): Promise<number> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return 0;
 
-  const { data } = await supabase
+  let query = supabase
     .from("transacoes")
     .select("tipo, data, quantidade, preco_unitario, custos, created_at")
     .eq("profile_id", user.id)
     .eq("ativo_id", ativoId)
     .lte("data", dataLimite);
+  if (excluirTransacaoId) query = query.neq("id", excluirTransacaoId);
+
+  const { data } = await query;
 
   const transacoes = (data ?? []).map((t) => ({
     tipo: t.tipo as "compra" | "venda",

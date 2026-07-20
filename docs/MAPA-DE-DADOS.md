@@ -1478,6 +1478,96 @@ checagem de erro), `src/lib/carteira/posicao.ts` (checagem de erro +
 `semPrecoCount`/`ativosSemPrecoCount`), `src/app/(app)/carteira/PosicaoView.tsx`
 (mascarar valores sem preço + badges de aviso).
 
+### 8.18 Livro-razão — robustez de cadastro + filtros/edição em lote (2026-07-20)
+
+Pedido do Guilherme (mensagem com print da sub-aba Livro-razão + tabela de
+compra/venda mensal como referência): tornar o Livro-razão mais robusto
+("base de alimentação de vários dados do app") e trazer filtros, edição e
+seleção múltipla, já que hoje é só lançar e excluir uma linha por vez. Escopo
+combinado via protocolo da seção 1 (uma pergunta por vez): esta rodada
+("Fundação") cobre só robustez de cadastro + filtros/edição em lote — visão
+mensal de compra/venda, gráfico de acúmulo de capital, eventos societários
+(bonificação/agrupamento/desdobramento) e importação por copiar-colar ficam
+como próximas etapas, uma de cada vez.
+
+1. **Aviso de duplicidade (não bloqueio).** Decisão do Guilherme: ao lançar
+   ou editar uma transação que bate com uma já existente (mesmo `ativo_id`,
+   `data`, `tipo`, `quantidade` e `preco_unitario` — `custos`/`corretora_id`
+   não entram na comparação de propósito), a UI mostra um modal perguntando
+   "tem certeza?" em vez de recusar ou salvar direto. Se confirmar, reenvia a
+   mesma chamada com `{ confirmarDuplicata: true }`, que pula a checagem.
+   Implementado em `existeTransacaoDuplicada` (privada, `lib/carteira/actions.ts`),
+   chamada por `criarTransacao` e pela nova `editarTransacao` antes do
+   insert/update; falha na própria checagem (`error` do Supabase) não
+   bloqueia o salvamento — é só um aviso auxiliar, não uma trava de
+   integridade.
+2. **`editarTransacao` (nova).** Livro-razão só tinha criar/excluir — faltava
+   editar (Proventos já tinha esse padrão desde a seção 8.11). Mesma
+   validação de venda-contra-posição-no-ponto-do-tempo de `criarTransacao`
+   (seção 8.11), mas chamando `obterQuantidadeDisponivelEmData(ativoId, data,
+   excluirTransacaoId)` com o novo terceiro parâmetro — sem excluir a própria
+   transação sendo editada do cálculo, editar uma venda existente (mesmo sem
+   mudar a quantidade) sempre acusaria "faltou quantidade" contra si mesma.
+3. **Filtros no histórico: ativo e corretora com múltipla seleção, data em
+   intervalo.** Decisão do Guilherme: precisa selecionar vários ativos/
+   corretoras ao mesmo tempo (não um de cada vez) — implementado com
+   `<select multiple>` nativo (sem lib nova, mesmo espírito "sem dependência"
+   já usado em outras telas) sobre `ativos`/`livro.corretoras` já carregados.
+   Como `obterLivroRazao()` já traz TODOS os lançamentos do usuário de uma
+   vez (sem paginação — ver pendência #124 do backlog), os filtros são
+   aplicados 100% client-side (`useMemo`), sem round-trip novo ao servidor;
+   diferente do filtro de corretora da Posição (seção 8.16 item 7), que
+   recalcula a posição no servidor porque ali o resultado é agregado, não uma
+   lista simples.
+4. **Total do filtrado: compra, venda e líquido.** Decisão do Guilherme.
+   `valorCaixa(lancamento)` (novo, no componente) define o valor em caixa de
+   cada transação — compra = `quantidade×preço + custos` (quanto saiu),
+   venda = `quantidade×preço − custos` (quanto entrou líquido) — somado por
+   tipo sobre `lancamentosFiltrados`; líquido = compra − venda. Mesma
+   definição que a futura visão mensal (próxima etapa) vai reaproveitar.
+5. **Seleção múltipla + exclusão em lote.** Mesmo padrão já usado em
+   Proventos (seção 8.13/8.11): checkbox por linha + "selecionar todos" (dos
+   lançamentos FILTRADOS, não de todos — selecionar-todos com um filtro
+   ativo não deveria pegar linhas escondidas), barra de ação com confirmação
+   via `ConfirmModal`. Nova `excluirTransacoesEmLote(ids[])` em
+   `lib/carteira/actions.ts`, espelhando `excluirProventosEmLote`.
+6. **Edição inline.** Mesmo padrão de Proventos: clicar "Editar" troca a
+   linha pelo `FormTransacao` preenchido (`valoresIniciais`), no lugar de
+   abrir modal/nova tela.
+7. **Nuance de tipos zod: `defaultValues` precisa do tipo de ENTRADA, não de
+   SAÍDA.** `transacaoSchema` tem `.transform()` em `corretora_id` (string →
+   `string | null`) e `cambio` (`number | NaN` → `number | null`) — `TransacaoForm`
+   (`z.infer`) é o tipo de SAÍDA (pós-transform), usado pelo que
+   `criarTransacao`/`editarTransacao` recebem e pelo que `onSalvo` do form
+   devolve. Mas `defaultValues`/`valoresIniciais` do `useForm` precisam do
+   tipo de ENTRADA (`cambio` cru podendo ser `NaN`, não `null`) — usar
+   `TransacaoForm` ali quebra a inferência do resolver do
+   `@hookform/resolvers/zod`. Correção: novo `TransacaoFormInput = z.input<typeof
+   transacaoSchema>`, usado só em `valoresIniciais`/`defaultValues`.
+8. **`LancamentoTransacao` ganhou `corretoraId`/`cambio`.** Antes só tinha
+   `corretoraNome` (pra exibir) — filtro por corretora e edição inline
+   precisam do id e do câmbio original, então `obterLivroRazao()` passou a
+   selecionar/expor os dois.
+
+**Não incluído nesta rodada, registrado como próximas etapas** (ordem
+combinada com o Guilherme): visão mensal de compra/venda (com corte por
+classe/setor), gráfico de linha de acúmulo de capital (aporte líquido,
+distinguindo venda-por-rebalanceamento de venda-com-retirada — isso exige um
+jeito de capturar a INTENÇÃO da venda, que hoje não existe no schema, então
+vai precisar de uma decisão de modelagem nova), eventos societários
+(bonificação entra no histórico do ativo como parte do retorno; agrupamento/
+desdobramento — schema novo, nenhum dos três existe hoje), importação de
+transações por copiar-colar (aguardando o Guilherme mandar o modelo de
+como o texto vem colado).
+
+Arquivos tocados: `src/lib/carteira/actions.ts` (`existeTransacaoDuplicada`,
+`editarTransacao`, `excluirTransacoesEmLote`, `LancamentoTransacao` com
+`corretoraId`/`cambio`, `AcaoResultado` com `avisoDuplicata`),
+`src/lib/ativos/actions.ts` (`obterQuantidadeDisponivelEmData` com
+`excluirTransacaoId`), `src/app/(app)/carteira/LivroRazaoView.tsx`
+(reescrita: filtros, total filtrado, seleção múltipla, edição inline, modal
+de confirmação de duplicidade).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

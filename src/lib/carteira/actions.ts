@@ -4,7 +4,18 @@ import { createClient } from "@/lib/supabase/server";
 import type { CorretoraForm, TransacaoForm } from "./schema";
 import { obterQuantidadeDisponivelEmData } from "@/lib/ativos/actions";
 
-export type AcaoResultado = { error?: string };
+export type AcaoResultado = {
+  error?: string;
+  /**
+   * Preenchido (em vez de `error`) quando a transação enviada bate com uma
+   * já existente (mesmo ativo, data, tipo, quantidade e preço unitário) —
+   * ver docs/MAPA-DE-DADOS.md §8.18. Não é um erro: a UI mostra esse texto
+   * num modal de confirmação e, se o usuário confirmar, reenvia a mesma
+   * chamada com `{ confirmarDuplicata: true }` pra gravar mesmo assim (ex.:
+   * duas compras reais do mesmo ativo no mesmo dia, coincidência legítima).
+   */
+  avisoDuplicata?: string;
+};
 
 export type Corretora = { id: string; nome: string };
 
@@ -18,6 +29,8 @@ export type LancamentoTransacao = {
   quantidade: number;
   precoUnitario: number;
   custos: number;
+  cambio: number | null;
+  corretoraId: string | null;
   corretoraNome: string | null;
 };
 
@@ -49,7 +62,9 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
   const [{ data: transacoesRaw }, { data: corretorasRaw }] = await Promise.all([
     supabase
       .from("transacoes")
-      .select("id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, ativos(ticker), corretoras(nome)")
+      .select(
+        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, cambio, ativos(ticker), corretoras(nome)"
+      )
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
   ]);
@@ -67,6 +82,8 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
       quantidade: Number(t.quantidade),
       precoUnitario: Number(t.preco_unitario),
       custos: Number(t.custos),
+      cambio: t.cambio === null || t.cambio === undefined ? null : Number(t.cambio),
+      corretoraId: t.corretora_id,
       corretoraNome: corretora?.nome ?? null,
     };
   });
@@ -124,7 +141,48 @@ export async function excluirCorretora(id: string): Promise<AcaoResultado> {
 // ---------------------------------------------------------------------------
 // Transações
 // ---------------------------------------------------------------------------
-export async function criarTransacao(input: TransacaoForm): Promise<AcaoResultado> {
+
+/**
+ * Checagem de duplicidade (ver docs/MAPA-DE-DADOS.md §8.18): mesma
+ * combinação ativo+data+tipo+quantidade+preço unitário já lançada antes.
+ * Não olha `custos`/`corretora_id` de propósito — dois lançamentos com
+ * custo de corretagem levemente diferente ainda são "a mesma transação"
+ * pro propósito desse aviso. `excluirId` evita que uma edição que não muda
+ * nenhum desses 5 campos acuse "duplicata" contra si mesma.
+ */
+async function existeTransacaoDuplicada(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  profileId: string,
+  input: TransacaoForm,
+  excluirId?: string
+): Promise<boolean> {
+  let query = supabase
+    .from("transacoes")
+    .select("id")
+    .eq("profile_id", profileId)
+    .eq("ativo_id", input.ativo_id)
+    .eq("data", input.data)
+    .eq("tipo", input.tipo)
+    .eq("quantidade", input.quantidade)
+    .eq("preco_unitario", input.preco_unitario)
+    .limit(1);
+  if (excluirId) query = query.neq("id", excluirId);
+
+  const { data, error } = await query;
+  if (error) return false; // checagem é só um aviso auxiliar — falha aqui não deve bloquear o salvamento
+  return (data?.length ?? 0) > 0;
+}
+
+const MENSAGEM_DUPLICATA = (data: string) =>
+  `Já existe uma transação igual (mesmo ativo, tipo, quantidade e preço) lançada em ${data
+    .split("-")
+    .reverse()
+    .join("/")}. Confirma que quer lançar mesmo assim?`;
+
+export async function criarTransacao(
+  input: TransacaoForm,
+  opts?: { confirmarDuplicata?: boolean }
+): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -145,6 +203,10 @@ export async function criarTransacao(input: TransacaoForm): Promise<AcaoResultad
     }
   }
 
+  if (!opts?.confirmarDuplicata && (await existeTransacaoDuplicada(supabase, user.id, input))) {
+    return { avisoDuplicata: MENSAGEM_DUPLICATA(input.data) };
+  }
+
   const { error } = await supabase.from("transacoes").insert({
     profile_id: user.id,
     ativo_id: input.ativo_id,
@@ -161,6 +223,52 @@ export async function criarTransacao(input: TransacaoForm): Promise<AcaoResultad
   return {};
 }
 
+export async function editarTransacao(
+  id: string,
+  input: TransacaoForm,
+  opts?: { confirmarDuplicata?: boolean }
+): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  if (input.tipo === "venda") {
+    // Mesma validação de ponto-no-tempo de criarTransacao, excluindo a
+    // própria transação sendo editada (ver comentário de
+    // obterQuantidadeDisponivelEmData em lib/ativos/actions.ts).
+    const disponivel = await obterQuantidadeDisponivelEmData(input.ativo_id, input.data, id);
+    if (input.quantidade > disponivel) {
+      return {
+        error: `Quantidade maior do que a disponível em carteira na data informada (${disponivel.toLocaleString("pt-BR")}).`,
+      };
+    }
+  }
+
+  if (!opts?.confirmarDuplicata && (await existeTransacaoDuplicada(supabase, user.id, input, id))) {
+    return { avisoDuplicata: MENSAGEM_DUPLICATA(input.data) };
+  }
+
+  const { error } = await supabase
+    .from("transacoes")
+    .update({
+      ativo_id: input.ativo_id,
+      corretora_id: input.corretora_id || null,
+      tipo: input.tipo,
+      data: input.data,
+      quantidade: input.quantidade,
+      preco_unitario: input.preco_unitario,
+      custos: input.custos,
+      cambio: input.cambio || null,
+    })
+    .eq("id", id)
+    .eq("profile_id", user.id);
+
+  if (error) return { error: "Não foi possível salvar a transação." };
+  return {};
+}
+
 export async function excluirTransacao(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
   const {
@@ -170,6 +278,21 @@ export async function excluirTransacao(id: string): Promise<AcaoResultado> {
 
   const { error } = await supabase.from("transacoes").delete().eq("id", id).eq("profile_id", user.id);
   if (error) return { error: "Não foi possível excluir a transação." };
+  return {};
+}
+
+/** Exclusão em lote (seleção múltipla no Livro-razão — ver §8.18). */
+export async function excluirTransacoesEmLote(ids: string[]): Promise<AcaoResultado> {
+  if (ids.length === 0) return {};
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase.from("transacoes").delete().eq("profile_id", user.id).in("id", ids);
+  if (error) return { error: "Não foi possível excluir as transações selecionadas." };
   return {};
 }
 
