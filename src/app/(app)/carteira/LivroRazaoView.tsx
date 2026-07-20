@@ -13,12 +13,13 @@ import {
   excluirTransacoesEmLote,
   obterLivroRazao,
   type LivroRazao,
-  type LancamentoTransacao,
   type Corretora,
 } from "@/lib/carteira/actions";
 import CorretorasManager from "./CorretorasManager";
 import ConfirmModal from "@/components/ConfirmModal";
 import { useToast } from "@/components/ToastProvider";
+import VisaoMensalView from "./VisaoMensalView";
+import { valorCaixaTransacao } from "@/lib/ativos/posicao-calculo";
 
 /**
  * `TransacaoForm` (z.infer, tipo de SAÍDA do zod) tem `cambio: number | null`
@@ -37,12 +38,6 @@ const formatarMoeda = (valor: number) =>
 const formatarData = (iso: string) => {
   const [ano, mes, dia] = iso.split("-");
   return `${dia}/${mes}/${ano}`;
-};
-
-/** Valor total em caixa da transação: compra = quanto saiu (preço×qtd + custos); venda = quanto entrou líquido (preço×qtd − custos). */
-const valorCaixa = (l: LancamentoTransacao) => {
-  const bruto = l.quantidade * l.precoUnitario;
-  return l.tipo === "compra" ? bruto + l.custos : bruto - l.custos;
 };
 
 export type AtivoOpcao = { id: string; ticker: string; tipo: string };
@@ -84,6 +79,7 @@ export default function LivroRazaoView({
   const [duplicataPendente, setDuplicataPendente] = useState<DuplicataPendente | null>(null);
   const [confirmandoDuplicataLoading, setConfirmandoDuplicataLoading] = useState(false);
 
+  const [mostrarVisaoMensal, setMostrarVisaoMensal] = useState(false);
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [filtroAtivos, setFiltroAtivos] = useState<Set<string>>(new Set());
   const [filtroCorretoras, setFiltroCorretoras] = useState<Set<string>>(new Set());
@@ -117,8 +113,8 @@ export default function LivroRazaoView({
     let compra = 0;
     let venda = 0;
     for (const l of lancamentosFiltrados) {
-      if (l.tipo === "compra") compra += valorCaixa(l);
-      else venda += valorCaixa(l);
+      if (l.tipo === "compra") compra += valorCaixaTransacao(l);
+      else venda += valorCaixaTransacao(l);
     }
     return { compra, venda, liquido: compra - venda };
   }, [lancamentosFiltrados]);
@@ -182,9 +178,14 @@ export default function LivroRazaoView({
               {mostrarFiltros ? "Ocultar filtros" : "Filtros"}
               {filtroAtivo && !mostrarFiltros ? " •" : ""}
             </button>
+            <button onClick={() => setMostrarVisaoMensal((v) => !v)} className="btn btn-secondary">
+              {mostrarVisaoMensal ? "Ocultar visão mensal" : "Visão mensal"}
+            </button>
           </div>
         )
       )}
+
+      {mostrarVisaoMensal && <VisaoMensalView />}
 
       {addTransacao && (
         <div className="card p-4">

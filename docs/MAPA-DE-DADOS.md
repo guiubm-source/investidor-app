@@ -1568,6 +1568,121 @@ Arquivos tocados: `src/lib/carteira/actions.ts` (`existeTransacaoDuplicada`,
 (reescrita: filtros, total filtrado, seleção múltipla, edição inline, modal
 de confirmação de duplicidade).
 
+### 8.19 Livro-razão — visão mensal por classe + gráfico de acúmulo de capital (2026-07-20)
+
+Segunda etapa do pedido combinado na seção 8.18 ("próximas etapas"). Escopo
+desta rodada (definido pelo Guilherme na mensagem "OTIMO, AGORA VAMOS
+PROSSEGUIR"): visão mensal de compra/venda por classe + gráfico de acúmulo de
+capital. Eventos societários (bonificação/agrupamento/desdobramento) ficaram
+só na etapa de pesquisa (seção 8.20) — a modelagem em si ainda não foi
+decidida; importação por copiar-colar segue bloqueada aguardando o Guilherme
+mandar o modelo.
+
+1. **`grupo-classificacao.ts` (extração).** `ORDEM_GRUPOS`/`LABEL_GRUPO`/
+   `grupoDoAtivo` viviam dentro de `lib/carteira/posicao.ts`, que tem
+   `"use server"` no topo — um arquivo `"use server"` só pode exportar
+   `async function` (Server Actions), então exportar dali um `const`
+   array/objeto ou uma função síncrona compila limpo no `tsc` mas quebra o
+   build real do Next/Vercel (mesma classe de bug da decisão 4 da seção
+   8.12). Como a nova Visão mensal também precisa dessa classificação,
+   extraí os três pra um módulo novo e puro, `lib/carteira/grupo-classificacao.ts`
+   (sem `"use server"`), e `posicao.ts` passou a importar de lá e só
+   reexportar o TYPE `GrupoPosicao` (export de tipo é seguro em arquivo
+   `"use server"` porque é apagado em tempo de compilação).
+2. **`valorCaixaTransacao` (centralização).** A definição de "valor em caixa
+   de uma transação" (compra = `quantidade×preço + custos`, venda =
+   `quantidade×preço − custos`) já existia inline em `LivroRazaoView.tsx`
+   (seção 8.18 item 4) e precisava ser reaproveitada pela Visão mensal —
+   movida para `lib/ativos/posicao-calculo.ts` (módulo puro, sem
+   `"use server"`, mesmo lugar de `calcularPosicao`/`aplicarTransacaoNaPosicao`)
+   como `valorCaixaTransacao(t: TransacaoCalc)`. `LivroRazaoView.tsx` e
+   `lib/carteira/visao-mensal.ts` importam a mesma função — fonte única,
+   nenhuma fórmula duplicada entre as duas telas.
+3. **Visão mensal — formato (réplica do print do Guilherme).** Nova
+   `lib/carteira/visao-mensal.ts` (`"use server"`, função `obterVisaoMensal()`)
+   agrega todas as transações do usuário em duas formas simultâneas: uma
+   seção "GERAL" (cada mês-calendário — Jan...Dez — somado através de TODOS
+   os anos) seguida de uma seção por ano (mesmo detalhamento, só daquele
+   ano, mais recente primeiro), cada uma com linhas Compra/Venda/Líquido e
+   coluna de Total. O mesmo par (GERAL + por-ano) é calculado três vezes:
+   uma para o total geral da carteira, e uma para cada classe/grupo (mesma
+   classificação `GrupoPosicao` da sub-aba Posição — Ações, FIIs, Tesouro
+   etc.), permitindo o corte por classe pedido pelo Guilherme.
+4. **UI da Visão mensal — carregamento sob demanda.** `VisaoMensalView.tsx`
+   (novo, `"use client"`) só busca `obterVisaoMensal()` no `useEffect` de
+   montagem — o componente inteiro só é renderizado (e portanto só busca
+   dados) quando o Guilherme clica no botão "Visão mensal" dentro do
+   Livro-razão, evitando pagar o custo dessa agregação pesada (todo o
+   histórico de transações) em toda visita à aba. Cada classe aparece como
+   seção retrátil (accordion, mesmo padrão visual de `PosicaoView.tsx`),
+   mas começando FECHADA por padrão — diferente da Posição, aqui cada
+   classe pode conter vários anos de sub-tabelas, então abrir tudo de cara
+   poluiria a tela.
+5. **Gráfico de acúmulo de capital — regra de retirada (decisão do
+   Guilherme).** Pedido: distinguir uma venda de rebalanceamento (dinheiro
+   continua na carteira, só mudou de ativo) de uma venda com retirada
+   (dinheiro saiu da carteira) — informação que não existe explicitamente
+   no schema. Regra definida pelo Guilherme, verbatim: "QUANDO O MES TIVER
+   A VENDA MAIOR QUE O APORTE... QUE DIZER QUE EU RETIREI [a diferença]".
+   Implementada em `construirEvolucaoCapital()`: por mês-calendário,
+   `liquido = compra − venda` (pode ser negativo) e
+   `retirada = Math.max(0, venda − compra)`; `acumulado` é a soma corrida
+   de `liquido` mês a mês (isso é o que o gráfico de linha desenha —
+   `retirada` é só um insight complementar mostrado ao lado, não afeta o
+   acumulado por si só, já que `liquido` já contempla a mesma subtração).
+   Não precisou de nenhuma coluna nova no banco — é 100% derivado de
+   `transacoes` (mesma fonte única de sempre).
+6. **Gráfico — componente reaproveitado.** `SerieLinhaChart` (SVG próprio,
+   já usado em Indicadores/histórico de preço) reutilizado para o gráfico
+   de "Acúmulo de capital" em vez de introduzir Recharts (já instalado,
+   seção 8.14) ou escrever SVG novo — mesmo padrão de reaproveitamento do
+   resto do app.
+
+Arquivos criados: `src/lib/carteira/grupo-classificacao.ts`,
+`src/lib/carteira/visao-mensal.ts`,
+`src/app/(app)/carteira/VisaoMensalView.tsx`. Arquivos editados:
+`src/lib/carteira/posicao.ts` (import de `grupo-classificacao.ts` em vez de
+definição inline), `src/lib/ativos/posicao-calculo.ts`
+(`valorCaixaTransacao` nova), `src/app/(app)/carteira/LivroRazaoView.tsx`
+(botão "Visão mensal", total filtrado agora usa `valorCaixaTransacao`
+importado em vez do antigo helper local `valorCaixa`).
+
+### 8.20 Eventos societários (bonificação/desdobramento/grupamento) — pesquisa B3/CVM (2026-07-20)
+
+Pedido do Guilherme: "PRECISO QUE ESTUDE, LEIA TUDO SOBRE ISSO COMO A B3 AS
+CLASSIFICA, COMO A CVM FALA SOBRE" antes de desenhar qualquer schema.
+Resumo do levantado (fontes: InfoMoney, portal oficial do investidor
+gov.br/CVM):
+
+- **Desdobramento (split).** Quantidade de ações aumenta, preço cai na
+  mesma proporção, valor total da posição não muda. Não é fato gerador de
+  IR (não é considerado alienação nem rendimento) — é só um reajuste de
+  proporção. Exige aprovação em assembleia + comunicação à CVM via Fato
+  Relevante.
+- **Grupamento (inplit/reverse split).** Oposto do desdobramento —
+  quantidade cai, preço sobe na mesma proporção, valor total não muda. A
+  B3 pode exigir grupamento compulsório de uma ação que fica com cotação
+  abaixo de R$1,00 por mais de um mês corrido. Mesmo tratamento de IR do
+  desdobramento (não é fato gerador).
+- **Bonificação.** A empresa capitaliza lucro/reservas e distribui ações
+  novas sem desembolso do acionista. Para IR, é classificada como
+  "rendimento isento" (declarado sob o código 18, "Rendimentos Isentos e
+  Não Tributáveis" — não é dividendo, mas também não gera imposto na
+  distribuição em si). PORÉM sempre carrega um custo de aquisição: ou o
+  valor que a empresa atribuiu à reserva capitalizada, ou zero (quando não
+  há valor capitalizado atribuído, caso que se comporta como um split).
+  Na prática, corretoras costumam redistribuir o custo médio já existente
+  entre as ações antigas + as novas bonificadas (efeito líquido: mesmo
+  custo total, mais ações) — nunca é correto tratar as ações bonificadas
+  como "custo zero" isoladamente pra fins de apuração de ganho de capital
+  na venda; o que entra no cálculo é o custo médio ponderado ajustado.
+
+**Decisão de modelagem ainda em aberto** — não avançar pra esquema de banco
+sem antes perguntar ao Guilherme (protocolo da seção 1): schema novo tipo
+"eventos societários" (tabela separada, efeito calculado à parte) vs.
+tratar como um tipo especial de `transacao` com efeito automático no
+cálculo de posição. Essa pergunta fica pra próxima rodada de trabalho.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

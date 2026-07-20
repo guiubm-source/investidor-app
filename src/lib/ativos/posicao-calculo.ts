@@ -83,6 +83,19 @@ export function precoMedioDoEstado(estado: EstadoPosicao): number {
   return estado.quantidade > 0 ? estado.custoTotal / estado.quantidade : 0;
 }
 
+/**
+ * Valor em caixa de UMA transação — compra = quanto saiu do bolso
+ * (`quantidade×preço + custos`), venda = quanto entrou líquido
+ * (`quantidade×preço − custos`). Usado tanto no total filtrado do
+ * Livro-razão (`LivroRazaoView.tsx`) quanto na Visão mensal
+ * (`lib/carteira/visao-mensal.ts`) — fonte única pra não deixar as duas
+ * telas divergirem na definição de "valor da transação" (ver §3/§8.18).
+ */
+export function valorCaixaTransacao(t: TransacaoCalc): number {
+  const bruto = t.quantidade * t.precoUnitario;
+  return t.tipo === "compra" ? bruto + t.custos : bruto - t.custos;
+}
+
 /** Fold de `aplicarTransacaoNaPosicao` sobre a lista inteira — "posição final". */
 export function calcularPosicao(transacoesOrdenadas: TransacaoCalc[]) {
   let estado = ESTADO_POSICAO_INICIAL;

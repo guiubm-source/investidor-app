@@ -21,77 +21,14 @@ import { calcularPosicao, ordenarTransacoes, type TransacaoCalc } from "@/lib/at
 import { TIPOS_COTACAO_AUTOMATICA } from "@/lib/ativos/yahoo-finance";
 import type { TipoAtivo } from "@/lib/ativos/actions";
 import type { Corretora } from "./actions";
+import { ORDEM_GRUPOS, LABEL_GRUPO, grupoDoAtivo, type GrupoPosicao } from "./grupo-classificacao";
 
-export type GrupoPosicao =
-  | "acoes"
-  | "fiis"
-  | "tesouro"
-  | "renda_fixa"
-  | "fundos"
-  | "stocks"
-  | "etf_exterior"
-  | "internacional_outros"
-  | "etf_brasil"
-  | "cripto"
-  | "outros";
-
-/** Ordem de exibição dos grupos — mesma sequência do print de referência. */
-const ORDEM_GRUPOS: GrupoPosicao[] = [
-  "acoes",
-  "fiis",
-  "tesouro",
-  "renda_fixa",
-  "etf_brasil",
-  "stocks",
-  "etf_exterior",
-  "internacional_outros",
-  "cripto",
-  "fundos",
-  "outros",
-];
-
-const LABEL_GRUPO: Record<GrupoPosicao, string> = {
-  acoes: "Ações",
-  fiis: "FIIs",
-  tesouro: "Tesouro Direto",
-  renda_fixa: "Renda Fixa",
-  fundos: "Fundos de Investimento",
-  stocks: "Stocks",
-  etf_exterior: "ETF Exterior",
-  internacional_outros: "Internacional (não classificado)",
-  etf_brasil: "ETF Brasil",
-  cripto: "Criptomoedas",
-  outros: "Outros",
-};
-
-/**
- * Deriva o grupo de exibição a partir de tipo + subtipo — ver
- * docs/MAPA-DE-DADOS.md §8.16. `internacional` sem subtipo informado cai num
- * grupo separado "não classificado" em vez de adivinhar Stock vs ETF (o
- * usuário pode preencher a qualquer momento na página do ativo).
- */
-function grupoDoAtivo(tipo: TipoAtivo, subtipoRendaFixa: string | null, subtipoInternacional: string | null): GrupoPosicao {
-  switch (tipo) {
-    case "acao":
-      return "acoes";
-    case "fii":
-      return "fiis";
-    case "etf":
-      return "etf_brasil";
-    case "renda_fixa":
-      return subtipoRendaFixa === "tesouro" ? "tesouro" : "renda_fixa";
-    case "fundo":
-      return "fundos";
-    case "cripto":
-      return "cripto";
-    case "internacional":
-      if (subtipoInternacional === "etf") return "etf_exterior";
-      if (subtipoInternacional === "acao") return "stocks";
-      return "internacional_outros";
-    default:
-      return "outros";
-  }
-}
+// Reexporta o tipo pra não quebrar quem já importava `GrupoPosicao` daqui
+// (ex. PosicaoView.tsx) — a classificação em si (const/função) mora em
+// grupo-classificacao.ts desde 2026-07-20 (§8.19), porque um arquivo
+// `"use server"` só pode exportar async functions (ver §8.12 decisão 4);
+// export de tipo é seguro aqui porque é erasado em tempo de compilação.
+export type { GrupoPosicao };
 
 export type PosicaoAtivo = {
   ativoId: string;
