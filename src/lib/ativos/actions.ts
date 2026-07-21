@@ -1,7 +1,9 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { buscarCotacaoYahoo, deriveYahooSymbol, TIPOS_COTACAO_AUTOMATICA } from "./yahoo-finance";
+import { atualizarTodasCotacoes, type ResultadoAtualizacaoCotacoes } from "./atualizar-cotacoes";
 import {
   calcularChecklistAcao,
   calcularChecklistFii,
@@ -586,6 +588,41 @@ export async function atualizarCotacaoAgora(id: string): Promise<AcaoResultado> 
 
   if (error) return { error: "Cotação buscada, mas não foi possível salvar." };
   return {};
+}
+
+/**
+ * Botão "Atualizar cotações" da aba Posição (ver docs/MAPA-DE-DADOS.md
+ * §8.49). Diferente de `atualizarCotacaoAgora` (acima), que só atualiza
+ * `ativos.preco_atual` do ativo do próprio usuário via client comum
+ * (respeitando RLS), esta action chama o motor compartilhado
+ * `atualizarTodasCotacoes` — o mesmo que o cron usa —, que roda com o
+ * client admin (service role) e por isso também atualiza o histórico
+ * compartilhado `ativo_preco_diario_mercado`. Isso é necessário porque a
+ * coluna "Variação hoje" da Posição depende desse histórico (ver
+ * `obterPrecoAnteriorMercado` em `lib/carteira/posicao.ts`) — sem ele, ela
+ * fica em branco mesmo com `preco_atual` em dia.
+ *
+ * A checagem de sessão abaixo só garante que quem clicou está logado; o
+ * próprio motor atualiza os ativos de TODOS os usuários de uma vez (preço
+ * de mercado é dado compartilhado, não pessoal — mesmo comportamento do
+ * cron, só disparado manualmente).
+ */
+export async function atualizarTodasCotacoesAgora(): Promise<
+  AcaoResultado & { resumo?: ResultadoAtualizacaoCotacoes }
+> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  try {
+    const resumo = await atualizarTodasCotacoes();
+    revalidatePath("/carteira");
+    return { resumo };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Erro ao atualizar cotações." };
+  }
 }
 
 /** Símbolo do gráfico TradingView. Valor vazio reseta para o derivado automaticamente. */

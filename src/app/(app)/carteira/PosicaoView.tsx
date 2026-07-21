@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { obterPosicaoConsolidada, type PosicaoAtivo, type PosicaoConsolidada, type AtivoEncerrado } from "@/lib/carteira/posicao";
 import { LABEL_GRUPO, type GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
+import { atualizarTodasCotacoesAgora } from "@/lib/ativos/actions";
+import { useToast } from "@/components/ToastProvider";
 
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -169,11 +171,13 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
   const [posicao, setPosicao] = useState(posicaoInicial);
   const [corretoraFiltro, setCorretoraFiltro] = useState<string>("");
   const [carregando, setCarregando] = useState(false);
+  const [atualizandoCotacoes, setAtualizandoCotacoes] = useState(false);
   const [colapsados, setColapsados] = useState<Set<GrupoPosicao>>(new Set());
   const [encerradosColapsado, setEncerradosColapsado] = useState(false);
   const [sortPorGrupo, setSortPorGrupo] = useState<Partial<Record<GrupoPosicao, SortState>>>({});
   const [paginaPorGrupo, setPaginaPorGrupo] = useState<Partial<Record<GrupoPosicao, number>>>({});
   const [linhasPorGrupo, setLinhasPorGrupo] = useState<Partial<Record<GrupoPosicao, number>>>({});
+  const toast = useToast();
 
   const aplicarFiltroCorretora = async (corretoraId: string) => {
     setCorretoraFiltro(corretoraId);
@@ -181,6 +185,39 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
     const nova = await obterPosicaoConsolidada(corretoraId || null);
     setPosicao(nova);
     setCarregando(false);
+  };
+
+  /**
+   * Botão "Atualizar cotações" (ver docs/MAPA-DE-DADOS.md §8.49) — chama o
+   * mesmo motor do cron (`atualizarTodasCotacoes`), que também backfilla o
+   * histórico compartilhado usado pela "Variação hoje". Depois de rodar,
+   * recarrega a posição consolidada pra refletir os novos preços/variações
+   * sem precisar dar F5.
+   */
+  const atualizarCotacoes = async () => {
+    setAtualizandoCotacoes(true);
+    try {
+      const resultado = await atualizarTodasCotacoesAgora();
+      if (resultado.error) {
+        toast.error(resultado.error);
+        return;
+      }
+      const r = resultado.resumo!;
+      const falhasTotais = r.falhas.length + r.historico.falhas.length;
+      if (falhasTotais === 0) {
+        toast.success(`${r.atualizados} cotação${r.atualizados !== 1 ? "ões" : ""} atualizada${r.atualizados !== 1 ? "s" : ""}.`);
+      } else {
+        toast.error(
+          `${r.atualizados} atualizada(s), ${falhasTotais} falha(s) (ex.: ${[...r.falhas, ...r.historico.falhas].slice(0, 3).join("; ")}).`
+        );
+      }
+      const nova = await obterPosicaoConsolidada(corretoraFiltro || null);
+      setPosicao(nova);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao atualizar cotações.");
+    } finally {
+      setAtualizandoCotacoes(false);
+    }
   };
 
   const toggleGrupo = (grupo: GrupoPosicao) => {
@@ -204,7 +241,14 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
   if (posicao.grupos.length === 0) {
     return (
       <div className="space-y-4">
-        <FiltroECsv posicao={posicao} corretoraFiltro={corretoraFiltro} onFiltroChange={aplicarFiltroCorretora} carregando={carregando} />
+        <FiltroECsv
+          posicao={posicao}
+          corretoraFiltro={corretoraFiltro}
+          onFiltroChange={aplicarFiltroCorretora}
+          carregando={carregando}
+          onAtualizarCotacoes={atualizarCotacoes}
+          atualizandoCotacoes={atualizandoCotacoes}
+        />
         {posicao.ativosEncerrados.length === 0 ? (
           <p className="text-sm text-faint">
             Nenhuma posição em carteira ainda. Registre compras na sub-aba Livro-razão.
@@ -228,7 +272,14 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
   return (
     <div className="space-y-4">
       <ResumoTotal posicao={posicao} />
-      <FiltroECsv posicao={posicao} corretoraFiltro={corretoraFiltro} onFiltroChange={aplicarFiltroCorretora} carregando={carregando} />
+      <FiltroECsv
+        posicao={posicao}
+        corretoraFiltro={corretoraFiltro}
+        onFiltroChange={aplicarFiltroCorretora}
+        carregando={carregando}
+        onAtualizarCotacoes={atualizarCotacoes}
+        atualizandoCotacoes={atualizandoCotacoes}
+      />
 
       <div className="space-y-3">
         {posicao.grupos.map((grupo) => {
@@ -603,11 +654,15 @@ function FiltroECsv({
   corretoraFiltro,
   onFiltroChange,
   carregando,
+  onAtualizarCotacoes,
+  atualizandoCotacoes,
 }: {
   posicao: PosicaoConsolidada;
   corretoraFiltro: string;
   onFiltroChange: (corretoraId: string) => void;
   carregando: boolean;
+  onAtualizarCotacoes: () => void;
+  atualizandoCotacoes: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -625,9 +680,19 @@ function FiltroECsv({
         ))}
       </select>
 
-      <button onClick={() => exportarCsv(posicao)} className="text-xs text-accent hover:underline whitespace-nowrap">
-        Exportar CSV
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onAtualizarCotacoes}
+          disabled={atualizandoCotacoes}
+          className="btn btn-secondary text-xs py-1 px-3 disabled:opacity-60"
+          title="Busca a cotação mais recente (Yahoo Finance) de todos os ativos com cotação automática e atualiza o histórico usado pela Variação hoje."
+        >
+          {atualizandoCotacoes ? "Atualizando..." : "Atualizar cotações"}
+        </button>
+        <button onClick={() => exportarCsv(posicao)} className="text-xs text-accent hover:underline whitespace-nowrap">
+          Exportar CSV
+        </button>
+      </div>
     </div>
   );
 }

@@ -3,10 +3,6 @@
     {
       "path": "/api/cron/dolar",
       "schedule": "0 21 * * *"
-    },
-    {
-      "path": "/api/cron/cotacoes",
-      "schedule": "0 22 * * *"
     }
   ]
 }

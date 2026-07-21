@@ -6145,6 +6145,77 @@ formulário). Arquivo conferido via `wc -l -c` + contagem de bytes nulos (0).
 **Arquivos tocados.** `lib/ir/schema.ts` (`perfilFiscalSchema`,
 `bemManualSchema`).
 
+### 8.49 Posição: botão "Atualizar cotações" + correção da causa raiz da Variação hoje + automação externa 3x/dia (2026-07-21)
+
+Pedido do Guilherme (print da aba Posição): botão pra atualizar todas as
+cotações de uma vez, investigar por que "Variação hoje" não funcionava
+direito (a maioria dos FIIs do print aparecia com o valor em branco), e
+automatizar a atualização 3x/dia (11h, 15h e 18h — fechamento do mercado)
+pra carteira ficar sempre em dia. Escopado via `AskUserQuestion` (1
+pergunta): confirmado que o projeto está no **plano Vercel Hobby
+(gratuito)**, que só permite cron nativo 1x/dia — decisão de arquitetura
+(botão usar client admin, ver abaixo) tomada por julgamento técnico direto
+(mesmo padrão já usado pelo cron existente, sem exposição nova de dado).
+
+**Causa raiz da "Variação hoje" em branco:** a fórmula em
+`lib/carteira/posicao.ts` (corrigida na sessão anterior, §8.17) está
+correta — ela só produz um valor quando existe uma linha de "ontem" em
+`ativo_preco_diario_mercado` (mercado) ou `ativo_preco_diario_manual`
+(manual). O problema real é que essa tabela de histórico só é escrita pelo
+**client admin/service role** (RLS de `ativo_preco_diario_mercado` só libera
+`SELECT` pra usuários autenticados — confirmado lendo `supabase/schema.sql`)
+— e o único código que fazia essa escrita era o cron (`/api/cron/cotacoes`),
+rodando 1x/dia. Cada falha silenciosa do Yahoo Finance (endpoint
+não-oficial, sem SLA, sem alertar ninguém — pendência já registrada em
+§8.17) deixava aquele ticker sem "ontem" até a próxima execução bem
+sucedida. O botão manual antigo por ativo (`atualizarCotacaoAgora`) não
+resolvia isso: ele usa o client comum (`createClient()`, respeitando RLS) e
+só grava `ativos.preco_atual` — nunca escreve no histórico compartilhado.
+
+**Correção:** extraída a lógica completa do cron (fase 1: `preco_atual` de
+todos os ativos com `cotacao_automatica=true`; fase 2: backfill/atualização
+do histórico único por `tipo+ticker`) para
+`lib/ativos/atualizar-cotacoes.ts` (`atualizarTodasCotacoes()`), sempre via
+client admin. `/api/cron/cotacoes/route.ts` virou um wrapper fino (só
+autenticação + chamada + JSON). Nova Server Action
+`atualizarTodasCotacoesAgora()` (`lib/ativos/actions.ts`) chama o mesmo
+motor: checa que existe uma sessão de usuário válida (só pra impedir chamada
+anônima), mas atualiza os ativos de **todos os usuários** de uma vez —
+decisão deliberada, já que preço de mercado é dado objetivo compartilhado
+(§8.12), não pessoal, e é exatamente o mesmo dado que o cron já escreve pra
+todo mundo. Botão "Atualizar cotações" adicionado em `PosicaoView.tsx` (ao
+lado do filtro de corretora/Exportar CSV), com toast de resumo
+(atualizados/falhas) e recarregamento automático da posição consolidada.
+
+**Automação 3x/dia:** como o plano Hobby não permite mais de 1 execução
+nativa por dia, a entrada `/api/cron/cotacoes` foi **removida** de
+`vercel.json` (ficou só o cron do Dólar) — o disparo passa a ser 100%
+externo, pra não ter duas fontes de agendamento fazendo a mesma coisa.
+Recomendado (não fica no código, é config externa que o próprio Guilherme
+mantém): um scheduler gratuito como o cron-job.org apontando pra
+`https://app-do-investidor.vercel.app/api/cron/cotacoes?secret=SEU_CRON_SECRET`
+(o valor de `CRON_SECRET` já está nas env vars do Vercel — o Guilherme pega
+lá, a assistente nunca lida com esse segredo), com timezone
+"America/Sao_Paulo" e 3 horários: 11:00, 15:00 e 18:00 (o de 18h é o que
+captura o fechamento do dia, virando a base "ontem" do dia seguinte).
+
+**Verificação:** `tsc --noEmit` sem erros; suíte de regressão (58 testes,
+fase 12) 100% verde — nenhum motor fiscal foi tocado, só a camada de
+cotações/carteira. Arquivos conferidos via `wc -l -c` + contagem de bytes
+nulos (0 em todos).
+
+**Arquivos tocados.** Novo: `lib/ativos/atualizar-cotacoes.ts`. Editados:
+`app/api/cron/cotacoes/route.ts` (virou wrapper), `lib/ativos/actions.ts`
+(nova action `atualizarTodasCotacoesAgora`), `app/(app)/carteira/PosicaoView.tsx`
+(botão + estado + toast), `vercel.json` (removida a entrada de cotações).
+
+**Pendência que continua em aberto (não resolvida nesta rodada):** ainda
+não existe indicador visual de "cotação desatualizada há X dias" por ativo
+(§8.17 já apontava isso) — o botão/automação reduzem bastante a chance de
+ficar desatualizado, mas se o Yahoo falhar repetidamente pra um ticker
+específico (não só uma falha pontual), o usuário só descobre pelo toast de
+falhas do clique manual, não olhando a tabela.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
