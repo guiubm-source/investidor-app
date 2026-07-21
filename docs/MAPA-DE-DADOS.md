@@ -5406,6 +5406,116 @@ manualmente antes do `git add` (comando na seção de comandos abaixo).
 `lib/ir/motores/renda-fixa-brasil.ts`, `lib/ir/consultas/renda-fixa.ts`
 (novos); `lib/ir/consultas/ledger.ts` (estendido, só adição de função nova).
 
+### 8.42 Imposto de Renda — fase 7 (ganho de capital exterior, Lei 14.754: motor novo, sem UI) implementada (2026-07-21)
+
+Continuação de §8.41 — "proxima fase". Fase 7 do §8.32.37 é grande (ganho de
+capital, rendimentos/dividendos, crédito de imposto pago no exterior,
+posição patrimonial, depósitos/moeda, camada EUA informativa, card
+sucessório) — perguntado ao Guilherme por onde começar; escolhido só o
+ganho de capital em aplicações financeiras no exterior (ações/ETF/REIT,
+`ativos.tipo = 'internacional'`), mesmo padrão "motor sem tela" das fases
+3/4/6.
+
+**Gap identificado e corrigido nesta fase:** o motor antigo
+(`lib/ir/actions.ts`) já tratava `internacional` como categoria de apuração
+ANUAL com alíquota fixa de 15% e compensação de prejuízo ano a ano — mas a
+consulta (`obterRelatorioIR`) nunca lê `transacoes.moeda`/`transacoes.cambio`
+(campos que já existiam desde a fase 2, §8.35, só pra registro). Na prática,
+pra um ativo internacional com `preco_unitario` lançado em USD, o motor
+antigo calculava "ganho" misturando dólar como se fosse real, sem nenhuma
+conversão cambial — número sem sentido pra declaração brasileira. O motor
+novo desta fase corrige isso na origem.
+
+**Implementado nesta fase:**
+
+- **`lib/ir/motores/exterior-lei-14754.ts`** (novo, motor puro, Decimal, sem
+  `"use server"`): `apurarGanhoCapitalExterior(ativos, parametros)`. Recebe
+  vendas JÁ CONVERTIDAS pra reais (ver consulta abaixo) e roda uma apuração
+  ANUAL (não mensal) consolidada — TODOS os ativos internacionais entram no
+  MESMO pool de compensação de prejuízo (a Lei 14.754 trata "aplicações
+  financeiras no exterior" como um bloco só, diferente de renda variável
+  Brasil, que segrega por grupo fiscal). Alíquota vem do parâmetro já
+  seedado desde a fase 1 (`exterior_lei_14754.aliquota_padrao = 0.15`,
+  schema.sql §21.7 — nenhuma migração SQL nova foi necessária nesta fase).
+  Prejuízo de anos anteriores nunca prescreve (mesma regra de renda
+  variável, §8.11), acumulado ano a ano sem resetar.
+  - Ativos com câmbio faltando em qualquer evento monetário (compra, venda
+    ou bonificação) são excluídos INTEIROS da apuração (não uma venda
+    isolada) — listados em `ativosComPendencia`, nunca aproximados. A
+    exclusão é do ativo inteiro (mais conservadora que o padrão "por
+    evento" da renda variável/day trade) porque a conversão cambial é
+    sequencial: um câmbio faltando numa compra corrompe o custo médio de
+    toda a história seguinte daquele ativo, não só daquela linha.
+- **`lib/ir/consultas/exterior.ts`** (novo, sem `"use server"`):
+  `obterParametrosExteriorVigente()` (carrega a alíquota da versão de regra
+  vigente, `null` se faltar — mesmo padrão de bloqueio gracioso das fases
+  4-6) e `apurarGanhoCapitalExteriorDoUsuario()` (lê só `ativos.tipo =
+  'internacional'`, converte cada evento pra reais pelo câmbio DAQUELE
+  evento específico — nunca um câmbio médio ou o câmbio atual — e alimenta
+  o ledger fiscal de custo médio (fase 3, `construirLedgerFiscal`,
+  reaproveitado tal como está, sem nenhuma mudança). É essa conversão
+  evento a evento que faz a variação cambial entrar automaticamente no
+  ganho: o custo de cada compra fica travado em reais na data da compra; a
+  venda converte pelo câmbio do dia da venda; o resultado que sai do ledger
+  já é ganho "em reais", câmbio incluído — exatamente a exigência de
+  §8.32.18.1 ("reconhecer ganhos, inclusive variação cambial sobre o
+  principal").
+  - **Correção de um bug real encontrado durante o teste manual:** a
+    primeira versão desta conversão fazia `preco_unitario * cambio`
+    diretamente em `number` nativo do JS, que introduz erro de
+    arredondamento binário (ex. `12 * 5.2` vira `62.39999999999999` em vez
+    de `62.4`). Corrigido pra `new Decimal(valor).times(cambio).toNumber()`
+    — mesmo motivo de §8.32.32 (nunca fazer conta fiscal em ponto flutuante
+    nativo), só que aqui o ponto de entrada era a PRÓPRIA conversão de
+    moeda, não a soma de vendas. `.toNumber()` na saída porque
+    `EventoLedgerFiscal` (fase 3) já espera `number` nesses campos — o
+    ledger fiscal reconverte pra Decimal internamente de qualquer forma.
+- **Testado manualmente com 4 cenários** (script `tsx` temporário, não
+  commitado): ganho simples com variação cambial embutida (custo travado no
+  câmbio da compra, venda no câmbio do dia — bateu com o cálculo manual);
+  prejuízo em um ano compensando lucro no ano seguinte (mesmo prejuízo não
+  prescreve); ativo com câmbio faltando excluído inteiro da apuração e
+  listado em `ativosComPendencia`; dois ativos diferentes vendidos no mesmo
+  ano consolidados no MESMO pool anual (não em ledgers separados por
+  ativo). Todos bateram com o esperado calculado à mão — a única falha foi
+  o bug de ponto flutuante acima, corrigido antes de fechar a fase.
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Rendimentos/dividendos do exterior (§8.32.18.1) — `proventos.imposto_retido`
+   (já existe desde a fase 2) continua sem nenhum motor consumindo; hoje
+   dividendos de ativos internacionais não aparecem em NENHUM lugar do
+   relatório (nem no motor antigo).
+2. Crédito de imposto pago no exterior (§8.32.18.2) — estados
+   `informado/comprovado/potencial/admitido/parcialmente_admitido/
+   nao_admitido/pendente_documento` não implementados; nenhum limite,
+   nenhuma regra de vedação de uso.
+3. Posição patrimonial no exterior (§8.32.18.3) e depósitos/moeda
+   (§8.32.18.4) — nenhuma tela, nenhum motor.
+4. Camada EUA inteira (§8.32.19) — cadastro fiscal EUA, W-8BEN, retenção de
+   30% em dividendos, card de exposição sucessória (Form 706-NA). Nenhum
+   campo novo em `perfil_fiscal` além dos já coletados no questionário
+   inicial (fase 1).
+5. Nenhuma UI — mesmo padrão das fases 3/4/6 (motor-only): `ImpostoRendaView`
+   continua mostrando `internacional` pela aproximação antiga
+   (`origemMotor: "legado"`, sem conversão cambial) até uma futura fase 7b
+   conectar este motor na tela, do jeito que a 4b fez com renda variável.
+6. Este motor não alimenta a consolidação de DARF (fase 5) nem escreve em
+   `ir_retencoes` — mesma dívida técnica já registrada nas fases anteriores.
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos criados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Nota operacional:** o arquivo de teste manual temporário
+`src/lib/ir/motores/_teste_exterior_temp.ts` ficou parado no disco pelo
+mesmo motivo intermitente já registrado em §8.36-§8.41 (o
+`_teste_renda_fixa_temp.ts` da fase anterior sumiu sozinho antes desta fase
+começar, mas este não) — apagar manualmente antes do `git add` (comando na
+seção de comandos abaixo).
+
+**Arquivos tocados.** `lib/ir/motores/exterior-lei-14754.ts`,
+`lib/ir/consultas/exterior.ts` (novos).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
