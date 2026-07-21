@@ -6100,6 +6100,51 @@ arquivo mais recente fica preso a cada momento).
 `lib/ir/motores/dashboard-fiscal.test.ts`,
 `lib/ir/motores/relatorio-completo.test.ts` (todos novos).
 
+### 8.48 Correção: questionário inicial (e Bens e Direitos manual) não salvavam — double-parse do Zod (2026-07-21)
+
+Bug reportado pelo Guilherme (print de tela): abrir a aba Imposto de Renda,
+preencher o questionário inicial e clicar "Salvar e continuar" sempre
+devolvia o toast **"Dados do questionário inválidos."**, mesmo com os dados
+preenchidos corretamente (residência, EUA, escopo). Correção de bug óbvio —
+não passou pelo protocolo de pergunta 1 a 1 (§1 item 1 não se aplica).
+
+**Causa raiz:** `perfilFiscalSchema` (`lib/ir/schema.ts`) é usado DUAS vezes
+no mesmo envio — 1) no client, dentro de `QuestionarioIR.tsx`, via
+`zodResolver(perfilFiscalSchema)` do react-hook-form, que já entrega pro
+`onSubmit` o valor PÓS-`.transform()` (ex.: `residente_desde` vira `string |
+null`, `dias_presenca_eua` vira `number | null`); 2) de novo no servidor,
+dentro de `salvarPerfilFiscalIR` (`lib/ir/actions.ts`), que reaplica o MESMO
+schema sobre esse valor já transformado via `perfilFiscalSchema.safeParse(input)`.
+O schema original só aceitava `string | ""` (ou `number | NaN | ""`) nesses
+campos — nunca `null` — então a segunda passada (servidor) rejeitava
+QUALQUER envio onde o campo opcional tivesse ficado vazio (o caso mais
+comum: "Dias de presença física nos EUA" em branco), porque o client já
+tinha convertido `""` pra `null` antes de chegar no servidor. Mesmo
+exatamente o padrão em `bemManualSchema` (usado pelo formulário de item
+manual de Bens e Direitos, fase 9) — não reportado ainda pelo Guilherme, mas
+com o mesmo defeito estrutural, corrigido preventivamente na mesma sessão.
+
+**Correção:** adicionado `z.null()` às unions dos campos opcionais de
+`perfilFiscalSchema` (`residente_desde`, `dias_presenca_eua`) e
+`bemManualSchema` (`localizacao`, `cpf_cnpj`, `discriminacao`,
+`observacoes`), tornando os dois schemas **idempotentes** — aceitam tanto o
+formato bruto do formulário (`string | ""` / `number | NaN | ""`) quanto o
+formato já transformado (`string | null` / `number | null`), sempre
+produzindo a mesma saída normalizada. `situacao_anterior`/`situacao_atual`
+(em `bemManualSchema`) não precisaram do mesmo ajuste — sempre transformam
+pra `number` (nunca `null`, default `0`), então já eram idempotentes.
+
+**Verificação:** script `tsx` temporário simulando o double-parse exato
+(parseia o formulário bruto, depois reaplica o schema sobre o resultado já
+transformado — inclusive o caso do print do usuário, com o campo numérico
+vazio) — 5 cenários, todos passando depois da correção. `tsc --noEmit` sem
+erros; suíte de regressão da fase 12 (58 testes) continua 100% verde
+(mudança não afeta nenhum motor fiscal, só a camada de validação de
+formulário). Arquivo conferido via `wc -l -c` + contagem de bytes nulos (0).
+
+**Arquivos tocados.** `lib/ir/schema.ts` (`perfilFiscalSchema`,
+`bemManualSchema`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
