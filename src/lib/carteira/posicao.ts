@@ -119,8 +119,15 @@ export type PosicaoGrupoAlocacao = {
   semPrecoCount: number;
 };
 
-/** Chave reservada do bucket "Não classificado" — mesmo conceito da Alocação fase 6 (§8.55), aqui reaproveitado pra agrupar a Posição. */
-export const NAO_CLASSIFICADO_CHAVE = "nao-classificado";
+/**
+ * Chave reservada do bucket "Não classificado" — mesmo conceito da
+ * Alocação fase 6 (§8.55), aqui reaproveitado pra agrupar a Posição.
+ * NÃO exportada: arquivos `"use server"` só podem exportar async functions
+ * (ver docs/MAPA-DE-DADOS.md §8.12 decisão 4) — um `export const` de valor
+ * quebra o build real da Vercel mesmo com `tsc --noEmit` limpo (o check é
+ * do bundler do Next, não do compilador TS). Só usada dentro deste arquivo.
+ */
+const NAO_CLASSIFICADO_CHAVE = "nao-classificado";
 
 /**
  * Ativo que já teve aporte mas está com quantidade zerada hoje (sob o filtro

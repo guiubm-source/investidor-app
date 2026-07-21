@@ -7070,8 +7070,22 @@ testes, 10 arquivos — motores fiscais do IR) rodada e passando, sem
 nenhuma quebrada por esta mudança. Arquivos conferidos via `wc -l -c` +
 contagem de bytes nulos (0 em todos): `supabase/schema.sql` (1788 linhas),
 `lib/ativos/actions.ts` (1153), `lib/ativos/schema.ts` (152),
-`lib/ativos/empresas.ts` (128, novo), `lib/carteira/posicao.ts` (716),
+`lib/ativos/empresas.ts` (128, novo), `lib/carteira/posicao.ts` (723),
 `PosicaoView.tsx` (757), `AtivoDetalheView.tsx` (1972).
+
+**Bug pego só no deploy real (2026-07-21, pós-entrega):** o primeiro push
+quebrou o build da Vercel — `export const NAO_CLASSIFICADO_CHAVE` em
+`posicao.ts` (arquivo `"use server"`) disparou "Only async functions are
+allowed to be exported in a 'use server' file", derrubando o build inteiro
+via Turbopack. Exatamente a mesma classe de bug já documentada na seção 3
+deste arquivo (decisão 4 do §8.12) e no `CLAUDE.md`: `tsc --noEmit` não
+pega isso — é uma checagem específica do bundler do Next sobre o que pode
+ser exportado de um arquivo `"use server"`, não do compilador TypeScript.
+Corrigido removendo o `export` (a constante só era usada dentro do próprio
+arquivo, não precisava estar exposta). Lição registrada aqui pra reforçar
+o hábito: ao adicionar QUALQUER `export` novo num arquivo `"use server"`,
+conferir que é `async function` ou `type` — nunca `const`/valor síncrono —
+antes de considerar a fase pronta, não só depois que a Vercel reclamar.
 
 **Pendência real antes de usar de verdade:** o Guilherme ainda precisa (a)
 rodar `supabase/schema.sql` inteiro no SQL Editor do Supabase (tabela
