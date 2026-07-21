@@ -5967,6 +5967,139 @@ tipos/conversores de UI); `app/(app)/imposto-renda/ImpostoRendaView.tsx`
 (botão novo); `package.json`/`package-lock.json` (nova dependência
 `@react-pdf/renderer`).
 
+### 8.47 Imposto de Renda — fase 12 (suíte de regressão) implementada (2026-07-21)
+
+Continuação — "pode seguir" / "pede seguir". Fase 12 do §8.32.37 ("suíte de
+regressão e conferência com casos oficiais") é a última do plano original e
+não tinha subseção própria detalhada no mapa — só aparece na lista de fases
+e como item de governança (§8.32.40 item 7: "executar testes de regressão do
+exercício anterior" antes de abrir um novo exercício). Também já existia um
+item de backlog antigo (task #123: "testes automatizados Vitest para
+motores de cálculo"). Perguntado ao Guilherme como fatiar — escolhido
+**formalizar em Vitest os testes manuais já feitos ao longo desta sessão**
+(fases 3-11), sem pesquisa nova de casos oficiais (essa parte do nome da
+fase fica pra uma iteração futura, se decidido).
+
+**Implementado nesta fase:**
+
+- **`npm install -D vitest`** (`^4.1.10`) + **`vitest.config.ts`** (novo,
+  `environment: "node"`, alias `@/*` espelhando o `tsconfig.json`) +
+  script `"test": "vitest run"` em `package.json`.
+- **Escopo**: só os motores PUROS de IR (`lib/ir/ledger/*.ts` e
+  `lib/ir/motores/*.ts`) — nenhum precisa de mock de Supabase/Next porque
+  nenhum acessa banco/rede (mesmo motivo que já os fazia fáceis de testar
+  manualmente com `tsx` em toda fase anterior). As `consultas/*.ts` (que
+  fazem I/O) ficam fora desta fase — testá-las exigiria mockar o client
+  Supabase, decisão que não foi pedida nesta fatia.
+- **10 arquivos de teste novos, 59 testes, todos passando:**
+  - `ledger/construir-ledger.test.ts` (5): custo médio ponderado em duas
+    compras, venda maior que o estoque nunca deixa quantidade negativa,
+    desdobramento multiplica quantidade sem alterar custo total, bonificação
+    soma ao custo total, ordenação por data + `createdAt`.
+  - `ledger/classificar-day-trade.test.ts` (6): só compra vira
+    `nao_aplicavel`, 1 compra + 1 venda no dia vira day trade por
+    `min(qtd)`, falta de corretora bloqueia (`pendente_corretora`), múltiplas
+    ordens do mesmo lado sem horário bloqueia (`pendente_horario`),
+    pareamento FIFO por horário com múltiplas ordens dos dois lados, ativos/
+    dias diferentes classificados independentemente.
+  - `ledger/fifo-dias-renda-fixa.test.ts` (5): um lote consumido, dois lotes
+    com média ponderada, venda maior que o estoque disponível, desdobramento
+    multiplica quantidade sem alterar data do lote, bonificação entra como
+    lote novo na data do evento.
+  - `motores/renda-variavel-brasil.test.ts` (7): isenção swing por limite
+    mensal, tributação 15% acima do limite, prejuízo abatendo mês seguinte
+    sem prescrição, day trade pendente não entra no cálculo, venda dividida
+    proporcionalmente entre day trade e swing, FII sem isenção por limite,
+    grupos diferentes nunca compensam prejuízo entre si.
+  - `motores/renda-fixa-brasil.test.ts` (5): grupo isento sempre com base
+    zero, tabela regressiva nas 4 faixas de dias, prejuízo nunca fica
+    negativo na base, dois resgates do mesmo mês sem compensação entre si,
+    alíquota mensal agregada vira `null` quando mistura faixas.
+  - `motores/exterior-lei-14754.test.ts` (4): pool único somando ativos
+    diferentes no mesmo ano, prejuízo de um ano abatendo o seguinte sem
+    prescrição, ativo com pendência excluído INTEIRO (não só a venda),
+    lista vazia sem erro.
+  - `motores/darf.test.ts` (7): parcela que já atinge o mínimo sozinha,
+    acumulação entre competências até atingir o mínimo, saldo que nunca
+    atinge fica em `saldosPendentes`, códigos de receita nunca se misturam,
+    grupos diferentes na mesma competência somados antes do acumulador,
+    acumulador zera depois de gerar guia, parcela zero/negativa ignorada.
+  - `motores/bens-direitos.test.ts` (9): grupo/código de ação e
+    internacional idênticos (Grupo 03/01), FII no Grupo 07/03, renda fixa
+    isenta/tributável nos códigos corretos, custo na data de corte pega a
+    última linha anterior, custo zero se comprado depois do corte, item
+    aparece com posição em pelo menos uma data, baixa (zerado no ano) ainda
+    aparece, ativo sem posição em nenhuma das duas datas vira `null`, junção
+    de itens manuais + investimento ordenada por grupo/código.
+  - `motores/dashboard-fiscal.test.ts` (7): prejuízo mais recente por grupo
+    respeitando `anoLimite`, grupos rastreados independentemente, fundação
+    completa soma DARF + exterior, DARF indisponível bloqueia só o imposto a
+    pagar, exterior indisponível bloqveia os DOIS cards, cards de motor
+    inexistente sempre indisponíveis com motivo, prejuízo por grupo
+    repassado sem recalcular (mesma referência).
+  - `motores/relatorio-completo.test.ts` (3): os mesmos 3 cenários (26
+    asserções) já rodados manualmente na fase 11 — fundação ausente,
+    filtragem por ano + pendências consolidadas, DARF filtrado por
+    competência — agora permanentes.
+- **Um bug de asserção (não do motor) encontrado e corrigido durante a
+  escrita**: o teste de `renda-variavel-brasil.test.ts` pro caso "grupos
+  diferentes nunca compensam prejuízo" comparava `prejuizoAnteriorAplicado`
+  com `toBe(0)`, que falhou porque `.negated()` aplicado a um `Decimal(0)`
+  inicial produz `-0` ao converter pra `number` (`Object.is(-0, 0)` é
+  `false`, embora `-0 === 0` matematicamente) — trocado pra `toBeCloseTo(0)`
+  no teste. Confirmado que o MOTOR está correto (o valor é matematicamente
+  zero); era só uma armadilha de ponto flutuante nativo na asserção, não no
+  cálculo Decimal.
+- Também encontrado um erro de tipos (não de lógica) ao rodar `tsc --noEmit`
+  depois de escrever `darf.test.ts`: o helper de teste original tentava
+  `Partial<ParcelaParaDarf> & { valor: number }`, que colide com o `valor:
+  Decimal` do tipo real (interseção `Decimal & number` é inhabitável) —
+  corrigido trocando o helper pra um tipo próprio (`{codigoReceita, anoMes,
+  valor: number, grupo?}`) que constrói o `Decimal` explicitamente, sem
+  herdar o conflito de tipos do `Partial`.
+- **Verificação:** `npm test` roda os 59 testes, todos verdes; `tsc
+  --noEmit` sem erros; todos os arquivos novos conferidos via `wc -l -c` +
+  contagem de bytes nulos (0 em todos).
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Testes das `consultas/*.ts` (camada de I/O — precisaria mockar o client
+   Supabase) e das Server Actions em `actions.ts` — só os motores puros
+   foram cobertos.
+2. Pesquisa de casos oficiais (Manual ReVar, Perguntas e Respostas IRPF)
+   como gabarito numérico — o nome da fase no plano original ("conferência
+   com casos oficiais") menciona isso, mas foi decidido não pesquisar nesta
+   fatia; os casos de teste são hand-calculated pelo próprio Guilherme/
+   Claude, não validados contra um exemplo oficial publicado.
+3. GitHub Action rodando a suíte a cada push (task #125 do backlog,
+   continua pendente) — a suíte roda hoje só localmente via `npm test`.
+4. Testes de UI/componentes React (`ImpostoRendaView.tsx` e afins) — fora do
+   escopo, que era só os motores de cálculo.
+5. Cobertura de código (`--coverage`) não configurada — os 59 testes cobrem
+   os caminhos principais e os invariantes documentados em cada motor
+   (comentários de "por que" já existentes nos arquivos), mas não há
+   métrica formal de % de linhas cobertas.
+
+**Nota operacional:** o arquivo `src/lib/ir/motores/_smoke.test.ts` (teste
+trivial usado só pra confirmar que o Vitest estava rodando antes de escrever
+a suíte de verdade) ficou parado no disco pelo mesmo motivo intermitente já
+registrado em §8.36-§8.46 — apagar manualmente antes do `git add` (comando
+na seção de comandos abaixo). Os 2 arquivos de teste temporário da fase 11
+(`_teste_relatorio_completo_temp.ts`/`_teste_pdf_render_temp.tsx`) se
+resolveram sozinhos desta vez, confirmando o padrão já documentado (só o
+arquivo mais recente fica preso a cada momento).
+
+**Arquivos tocados.** `vitest.config.ts` (novo); `package.json` (script
+`test`, dependência `vitest`); `lib/ir/ledger/construir-ledger.test.ts`,
+`lib/ir/ledger/classificar-day-trade.test.ts`,
+`lib/ir/ledger/fifo-dias-renda-fixa.test.ts`,
+`lib/ir/motores/renda-variavel-brasil.test.ts`,
+`lib/ir/motores/renda-fixa-brasil.test.ts`,
+`lib/ir/motores/exterior-lei-14754.test.ts`, `lib/ir/motores/darf.test.ts`,
+`lib/ir/motores/bens-direitos.test.ts`,
+`lib/ir/motores/dashboard-fiscal.test.ts`,
+`lib/ir/motores/relatorio-completo.test.ts` (todos novos).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
