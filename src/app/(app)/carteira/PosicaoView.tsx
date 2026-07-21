@@ -73,6 +73,7 @@ function exportarCsv(posicao: PosicaoConsolidada) {
     "patrimonio_atual",
     "variacao_hoje_valor",
     "variacao_hoje_pct",
+    "lucro_realizado",
     "variacao_total_valor",
     "variacao_total_pct",
     "dividendos_recebidos",
@@ -83,7 +84,6 @@ function exportarCsv(posicao: PosicaoConsolidada) {
     // seções no mesmo arquivo/schema em vez de exportar 2 CSVs separados.
     "total_comprado",
     "total_vendido",
-    "lucro_realizado",
     "contribuicao_total",
     "custo_ajustado",
     "primeira_compra",
@@ -103,12 +103,12 @@ function exportarCsv(posicao: PosicaoConsolidada) {
         a.patrimonioAtual.toFixed(2),
         a.variacaoHojeValor?.toFixed(2) ?? "",
         a.variacaoHojePct?.toFixed(2) ?? "",
+        a.lucroRealizado.toFixed(2),
         a.variacaoTotalValor?.toFixed(2) ?? "",
         a.variacaoTotalPct?.toFixed(2) ?? "",
         a.dividendosRecebidos.toFixed(2),
         a.pctDentroDaClasse.toFixed(2),
         a.pctNaCarteira.toFixed(2),
-        "",
         "",
         "",
         "",
@@ -131,6 +131,7 @@ function exportarCsv(posicao: PosicaoConsolidada) {
       "",
       "",
       "",
+      a.lucroRealizado.toFixed(2),
       "",
       "",
       a.dividendosRecebidos.toFixed(2),
@@ -138,7 +139,6 @@ function exportarCsv(posicao: PosicaoConsolidada) {
       "",
       a.totalComprado.toFixed(2),
       a.totalVendido.toFixed(2),
-      a.lucroRealizado.toFixed(2),
       a.contribuicaoTotal.toFixed(2),
       a.custoAjustado.toFixed(2),
       a.primeiraCompra ?? "",
@@ -310,7 +310,17 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                           <ColunaOrdenavel label="Quantidade" sortKey="quantidade" sort={sort} onClick={() => alternarSort(grupo.grupo, "quantidade")} align="right" />
                           <ColunaOrdenavel label="Patrimônio atual" sortKey="patrimonioAtual" sort={sort} onClick={() => alternarSort(grupo.grupo, "patrimonioAtual")} align="right" />
                           <ColunaOrdenavel label="Variação hoje" sortKey="variacaoHoje" sort={sort} onClick={() => alternarSort(grupo.grupo, "variacaoHoje")} align="right" />
-                          <ColunaOrdenavel label="Variação total" sortKey="variacaoTotal" sort={sort} onClick={() => alternarSort(grupo.grupo, "variacaoTotal")} align="right" />
+                          <th className="py-2 pr-3 text-right" title="Lucro/prejuízo já realizado em vendas parciais anteriores deste ativo (histórico completo). Entra na conta de Variação total ao lado.">
+                            Lucro realizado
+                          </th>
+                          <ColunaOrdenavel
+                            label="Variação total"
+                            sortKey="variacaoTotal"
+                            sort={sort}
+                            onClick={() => alternarSort(grupo.grupo, "variacaoTotal")}
+                            align="right"
+                            title="Patrimônio atual + Lucro realizado (coluna ao lado) − total investido bruto (todo aporte já feito neste ativo, incluindo cotas já vendidas no passado) — retorno acumulado desde a primeira compra."
+                          />
                           <th className="py-2 pr-3 text-right">Dividendos</th>
                           <ColunaOrdenavel label="% classe" sortKey="pctDentroDaClasse" sort={sort} onClick={() => alternarSort(grupo.grupo, "pctDentroDaClasse")} align="right" />
                           <ColunaOrdenavel label="% carteira" sortKey="pctNaCarteira" sort={sort} onClick={() => alternarSort(grupo.grupo, "pctNaCarteira")} align="right" />
@@ -351,6 +361,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                                 </>
                               )}
                             </td>
+                            <td className={`py-1.5 pr-3 text-right ${classeSinal(a.lucroRealizado)}`}>{formatarMoeda(a.lucroRealizado)}</td>
                             <td className={`py-1.5 pr-3 text-right ${classeSinal(a.variacaoTotalValor)}`}>
                               {a.variacaoTotalValor === null ? (
                                 "—"
@@ -530,16 +541,18 @@ function ColunaOrdenavel({
   sort,
   onClick,
   align = "left",
+  title,
 }: {
   label: string;
   sortKey: SortKey;
   sort: SortState;
   onClick: () => void;
   align?: "left" | "right";
+  title?: string;
 }) {
   const ativo = sort?.key === sortKey;
   return (
-    <th className={`py-2 ${align === "right" ? "text-right pr-3" : "pl-4 pr-3 text-left"}`}>
+    <th className={`py-2 ${align === "right" ? "text-right pr-3" : "pl-4 pr-3 text-left"}`} title={title}>
       <button onClick={onClick} className={`hover:text-ink ${ativo ? "text-ink" : ""}`}>
         {label}
         {ativo && <span className="ml-0.5">{sort?.dir === "asc" ? "↑" : "↓"}</span>}

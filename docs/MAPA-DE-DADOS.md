@@ -2208,6 +2208,68 @@ leem de `TIPOS_PROVENTO`, herdam o novo tipo automaticamente),
 colunas novas nas duas tabelas, CSV com as colunas `preco_medio_ajustado`,
 `dividendos_recebidos` movido pra coluna compartilhada, `custo_ajustado`).
 
+### 8.27 Posição — correção do preço médio ajustado + transparência do Lucro realizado (2026-07-20)
+
+Motivado pelo Guilherme reportando dois números "errados" na AZZA3 (Ações,
+posição aberta): Variação total de -R$13.137,22 (-112,91%) parecendo
+absurda pra uma posição de R$1.817,00, e Preço médio ajustado de R$116,26
+muito acima do Preço médio oficial (R$28,71). Investigação sem acesso
+direto ao banco (só aos arquivos) — reconstrução algébrica a partir dos
+valores mostrados na tela, batendo os dois com as fórmulas do código:
+
+**Preço médio ajustado — bug de verdade, corrigido.** A fórmula da §8.26
+usava `(totalInvestidoBruto − dividendos) ÷ quantidade`. `totalInvestidoBruto`
+é a soma BRUTA de TODA compra já feita na vida do ativo — inclusive de
+cotas que já foram vendidas no passado (só cresce, nunca é reduzido por
+venda, ver `posicao-calculo.ts`). Pra um ativo com histórico de venda
+parcial (comprou, vendeu parte, comprou de novo — ficando com 100 cotas
+hoje mas tendo colocado muito mais dinheiro ao longo do caminho),
+`totalInvestidoBruto` fica MAIOR que o custo residual das cotas que ainda
+estão em carteira — daí o preço médio ajustado inflado (R$116,26 contra um
+Preço médio oficial de R$28,71, quatro vezes maior — sinal claro de conta
+errada). **Corrigido para usar o custo residual**: `precoMedio −
+dividendosRecebidos/quantidade` (equivalente a `custoTotal −
+dividendos, ÷ quantidade`, já que `custoTotal = precoMedio × quantidade`) —
+reflete só o dinheiro ainda "preso" nas cotas que você tem hoje, que é o que
+"preço médio ajustado" deveria significar (o pedido original do Guilherme
+foi literalmente "custo de aquisição ... pela quantidade", ou seja, custo
+das cotas possuídas, não gasto histórico bruto). Ativos encerrados
+(`custoAjustado`, também da §8.26) **não tinham esse bug**: lá quantidade
+é sempre 0 (posição totalmente zerada), então `totalComprado` É de fato o
+ciclo de vida inteiro do investimento — não há "cotas residuais" pra
+distinguir.
+
+**Variação total — não é bug, é fórmula pré-existente (§8.15) sem
+transparência.** `variacaoTotalValor = patrimonioAtual + lucroRealizado −
+totalInvestidoBruto` é o "retorno simples acumulado" já usado no app desde
+antes desta fase — de propósito soma o lucro/prejuízo JÁ REALIZADO em
+vendas parciais do passado ao patrimônio de hoje, e compara com TUDO que
+já foi investido (não só o custo residual). Reconstruindo os números da
+AZZA3 a partir da tela: `totalInvestidoBruto` = R$11.636,00 e
+`lucroRealizado` = −R$3.318,22 batem exatamente com os −R$13.137,22
+(−112,91%) mostrados — a fórmula está matematicamente consistente. O que
+tornava o número "parecendo errado" é que **`lucroRealizado` não aparecia
+em lugar nenhum** nas posições abertas (só existia pra Ativos encerrados,
+§8.25) — sem essa peça, o Guilherme não tinha como auditar de onde vinha o
+−R$13.137,22. Adicionada nova coluna **"Lucro realizado"** na tabela de
+cada grupo (entre Variação hoje e Variação total), com tooltip explicando
+a fórmula em cada cabeçalho.
+
+**Verificação pendente com o Guilherme.** A fórmula bate matematicamente,
+mas isso não confirma se os dados de origem (transações da AZZA3 que geram
+esse `totalInvestidoBruto`/`lucroRealizado`) refletem a realidade — como
+não há acesso direto ao banco de produção neste ambiente, só aos arquivos
+de código, a confirmação final de que a AZZA3 realmente teve uma venda
+parcial com prejuízo de ~R$3.318 no passado (e não um erro de importação/
+duplicata de lançamento) depende do Guilherme conferir o Livro-razão
+filtrado por AZZA3.
+
+**Arquivos tocados.** `lib/carteira/posicao.ts` (fórmula de
+`precoMedioAjustado` corrigida, novo campo `lucroRealizado` em
+`PosicaoAtivo`), `PosicaoView.tsx` (coluna "Lucro realizado" + tooltips nos
+cabeçalhos de "Preço médio ajustado"/"Variação total", CSV com nova coluna
+`lucro_realizado` também nas linhas de posição aberta).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

@@ -44,9 +44,12 @@ export type PosicaoAtivo = {
   /**
    * Preço médio ajustado (métrica informal do investidor, NUNCA usada pro
    * IR/lucro realizado — `precoMedio` continua sendo a única fonte oficial,
-   * ver §8.26): (totalInvestidoBruto − proventos já recebidos) ÷ quantidade
-   * atual. Pode ficar negativo — significa que os proventos já recebidos
-   * superam o capital de verdade colocado (posição "se pagou sozinha").
+   * ver §8.26): `precoMedio − (proventos já recebidos ÷ quantidade atual)`,
+   * ou seja, o custo residual das cotas que você AINDA TEM (não o gasto
+   * bruto histórico, que inclui cotas já vendidas — ver correção 2026-07-20
+   * nos comentários de `obterPosicaoConsolidada`). Pode ficar negativo —
+   * significa que os proventos já recebidos superam o capital de verdade
+   * ainda "preso" na posição atual (posição "se pagou sozinha").
    */
   precoMedioAjustado: number;
   precoAtual: number;
@@ -60,6 +63,15 @@ export type PosicaoAtivo = {
   /** "Retorno simples acumulado" (mesma fórmula unificada de lib/ativos/actions.ts). */
   variacaoTotalValor: number | null;
   variacaoTotalPct: number | null;
+  /**
+   * Lucro/prejuízo JÁ REALIZADO em vendas parciais anteriores deste ativo
+   * (histórico completo, nunca zera enquanto a posição ainda tem custo médio
+   * — só existe na Posição pra auditar `variacaoTotalValor`, que soma esse
+   * valor ao patrimônio atual antes de comparar com o total investido bruto;
+   * sem expor este campo, o número de "Variação total" fica inexplicável
+   * pra quem já vendeu parte de um ativo no passado, ver §8.27).
+   */
+  lucroRealizado: number;
   pctDentroDaClasse: number;
   pctNaCarteira: number;
   /** Total de proventos já recebidos por este ativo (todas as corretoras — proventos não têm corretora_id, ver §8.25/§8.26). */
@@ -389,12 +401,21 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     const variacaoTotalPct =
       p.totalInvestidoBruto > 0 ? ((patrimonioAtual + p.lucroRealizado) / p.totalInvestidoBruto - 1) * 100 : null;
 
-    // Ver §8.26 — preço médio ajustado (informal, não afeta IR): custo de
-    // aquisição líquido de proventos já recebidos, dividido pela quantidade
-    // atual. Bonificação nunca entra aqui porque não é contada em
-    // totalInvestidoBruto (só compra soma nesse acumulador).
+    // Ver §8.27 (correção 2026-07-20) — preço médio ajustado (informal, não
+    // afeta IR): custo RESIDUAL das cotas que ainda estão em carteira
+    // (precoMedio × quantidade = custoTotal), líquido de proventos já
+    // recebidos, dividido pela quantidade atual. Equivale a
+    // `precoMedio − dividendosRecebidos/quantidade`.
+    //
+    // Bug anterior: usava `totalInvestidoBruto` (soma bruta de TODA compra
+    // já feita, incluindo cotas já vendidas no passado) em vez do custo
+    // residual — pra um ativo com histórico de venda parcial isso infla o
+    // preço médio ajustado pra um valor sem sentido (ex.: AZZA3 mostrava
+    // R$116,26 de "ajustado" com preço médio oficial de R$28,71, porque
+    // totalInvestidoBruto carregava o custo de cotas já vendidas há muito
+    // tempo, dividido pela quantidade pequena que sobrou hoje).
     const dividendosRecebidos = dividendosPorAtivo.get(p.ativoId) ?? 0;
-    const precoMedioAjustado = p.quantidade > 0 ? (p.totalInvestidoBruto - dividendosRecebidos) / p.quantidade : p.precoMedio;
+    const precoMedioAjustado = p.quantidade > 0 ? p.precoMedio - dividendosRecebidos / p.quantidade : p.precoMedio;
 
     return {
       ativoId: p.ativoId,
@@ -413,6 +434,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       variacaoHojePct,
       variacaoTotalValor,
       variacaoTotalPct,
+      lucroRealizado: p.lucroRealizado,
       pctDentroDaClasse: 0, // preenchido depois de agrupar
       pctNaCarteira: totalCarteira > 0 ? (patrimonioAtual / totalCarteira) * 100 : 0,
       dividendosRecebidos,
