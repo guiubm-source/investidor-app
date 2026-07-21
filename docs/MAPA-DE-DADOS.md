@@ -2524,6 +2524,2172 @@ raiz, só que num par de arquivos ainda não corrigido.
 escrita); `lib/carteira/actions.ts` (todas as 4 funções de escrita de
 transação).
 
+### 8.32 Imposto de Renda completo — metodologia consolidada, arquitetura, fluxo e mapa de dados (2026-07-21)
+
+> **Status desta seção:** especificação funcional e técnica consolidada para a
+> evolução da rota `/imposto-renda`. Esta seção deve ser inserida imediatamente
+> antes de `## 9. Convenções a preservar`.
+>
+> **Regra de precedência:** em qualquer conflito, esta seção prevalece sobre as
+> seções 8.1, 8.5 e 8.6 e sobre premissas tributárias anteriores espalhadas no
+> histórico do documento. As seções antigas podem permanecer como registro
+> histórico das decisões, mas não devem ser usadas como regra vigente de
+> implementação.
+>
+> **Natureza do produto:** relatório e central de preparação fiscal auxiliar. O
+> app organiza dados, calcula valores, gera DARFs para pagamento fora do app e
+> produz um PDF de apoio ao preenchimento da declaração oficial. Não transmite a
+> DIRPF, não representa a Receita Federal e não substitui contador, advogado ou
+> consultoria tributária.
+
+#### 8.32.1 Objetivo do módulo
+
+Transformar a atual tela simples de resumo mensal em uma **Central de Imposto de
+Renda**, conectada a toda a base histórica do app, com cinco responsabilidades:
+
+1. reconstruir e manter a história fiscal dos investimentos desde a primeira
+   operação;
+2. apurar obrigações mensais e anuais por regime tributário;
+3. controlar prejuízos, retenções, DARFs, pagamentos e documentos;
+4. preparar a declaração anual individual completa do titular;
+5. gerar um único PDF final, organizado na ordem das fichas do IRPF, com
+   valores, instruções e memória de cálculo.
+
+O módulo não cria uma segunda carteira e não mantém um segundo custo médio. Ele
+lê as fontes existentes (`ativos`, `transacoes`, `proventos`, `corretoras`,
+eventos societários e históricos já consolidados) e acrescenta apenas os dados
+que são exclusivamente fiscais ou documentais.
+
+#### 8.32.2 Escopo confirmado do produto
+
+Decisões já tomadas pelo Guilherme e que devem ser tratadas como requisitos:
+
+1. **Perfil atendido:** pessoa física residente fiscal no Brasil, com ativos no
+   Brasil e nos Estados Unidos, que não seja cidadã americana, não tenha Green
+   Card e não seja classificada como `U.S. Person`.
+2. **Responsabilidade:** calcular imposto, controlar prejuízos e retenções,
+   gerar DARF, registrar pagamento e gerar relatório anual completo.
+3. **Entrada de investimentos:** integração automática, importação de arquivos
+   e lançamento manual, com conciliação e prevenção de duplicidades.
+4. **Ativos da primeira versão:** ações, ETFs, BDRs, FIIs, Fiagro, renda fixa,
+   fundos, Tesouro Direto, opções, futuros, criptoativos, ações e ETFs dos EUA,
+   dividendos, juros e demais rendimentos no exterior.
+5. **Histórico:** usar toda a base desde a primeira operação, não apenas um
+   saldo fiscal inicial informado pelo usuário.
+6. **Dados incompletos:** não estimar. Abrir pendência obrigatória e bloquear
+   apenas o ativo, operação e períodos diretamente afetados.
+7. **Divergência entre fontes:** o sistema sugere a fonte mais confiável e
+   explica o motivo, mas o titular precisa confirmar.
+8. **Acesso:** somente o titular. Não há perfil de contador, assessor ou
+   familiar na primeira versão.
+9. **Declaração anual:** preparar a declaração individual completa do titular,
+   não apenas investimentos.
+10. **Entrega:** gerar relatório auxiliar; não transmitir para a Receita.
+11. **Experiência:** questionário inicial para identificar fichas aplicáveis,
+    seguido de painel completo para revisão e edição.
+12. **Dependentes:** não suportados na primeira versão. O produto prepara apenas
+    a declaração individual do titular.
+13. **Dados não relacionados a investimentos:** entrada manual.
+14. **Comprovantes:** opcionais, com alerta persistente quando informação
+    relevante estiver sem documento.
+15. **Tela inicial:** dashboard híbrido, com resumo simples no topo e detalhes
+    expansíveis.
+16. **Gráfico principal:** evolução patrimonial versus rendimentos informados.
+    Diferenças são exibidas, mas não recebem classificação automática de risco.
+17. **DARF:** documento preenchido para pagamento fora do app.
+18. **Pagamento:** confirmação manual, com comprovante opcional.
+19. **Alertas de prazo:** somente dentro do dashboard; sem push, e-mail ou SMS.
+20. **DARF vencido:** recalcular multa e juros automaticamente para a data
+    atual, seguindo a metodologia oficial do Sicalc.
+21. **Valor inferior a R$ 10:** acumular automaticamente até atingir o mínimo
+    legal para recolhimento do mesmo código e período compatível.
+22. **Grupos internos da renda variável:** operações comuns, day trade e
+    FII/Fiagro, cada um com memória, prejuízo e retenções próprios.
+23. **Detalhamento:** exibir todas as compras, vendas, custos e resultados.
+24. **Edição:** operação importada pode ser editada diretamente e passa a ser
+    marcada como editada manualmente.
+25. **Exclusão:** pode remover definitivamente da base ativa, preservando apenas
+    trilha técnica mínima de auditoria.
+26. **Alteração de mês pago:** recalcular e mostrar somente a diferença entre o
+    valor pago e a apuração atual, sem iniciar automaticamente compensação,
+    restituição ou pagamento complementar.
+27. **Versões de apuração:** mostrar somente o cálculo atual. DARFs e pagamentos
+    efetivamente realizados continuam armazenados.
+28. **Relatório:** um único PDF, organizado por fichas do IRPF.
+29. **Armazenamento local versus nuvem:** decisão de produto adiada. A
+    arquitetura atual usa Supabase; qualquer implementação deve cumprir os
+    requisitos mínimos de segurança descritos nesta seção, sem assumir que a
+    escolha de UX sobre armazenamento já foi encerrada.
+
+#### 8.32.3 Correções técnicas obrigatórias sobre decisões anteriores
+
+Algumas respostas iniciais precisam ser ajustadas para não gerar um produto
+fiscalmente inconsistente:
+
+1. **Exercício não é ano-calendário.** A interface nunca deve mostrar apenas
+   `Ano 2026`. Deve mostrar, por exemplo, `Exercício 2026 — ano-calendário
+   2025`. Operações de 2026 pertencem, em regra, ao exercício 2027.
+2. **Aplicações financeiras no exterior não usam, em regra, o antigo fluxo
+   mensal de GCAP.** Desde a Lei nº 14.754/2023, rendimentos realizados de
+   aplicações financeiras no exterior são apurados separadamente no ajuste
+   anual, em regra à alíquota de 15%, com regras próprias para perdas e imposto
+   pago no exterior. Ganhos de bens no exterior que não sejam aplicações
+   financeiras continuam em regime próprio de ganho de capital.
+3. **A classificação de day trade não pode ser apenas uma aproximação por
+   data.** A regra operacional exige mesmo ativo, mesmo dia e mesma instituição
+   intermediadora, com pareamento das operações. Sem horário, sequência ou nota
+   suficiente, o sistema deve abrir pendência de classificação; não deve
+   assumir silenciosamente.
+4. **Guias separadas por grupo versus DARF oficial.** O dashboard pode e deve
+   manter três apurações internas separadas: `comum`, `day_trade` e
+   `fii_fiagro`. Entretanto, a geração do documento oficial deve respeitar o
+   código de receita e o período de apuração. Para o código 6015, o app deve
+   consolidar o valor oficial quando a norma e o sistema oficial exigirem um
+   único débito mensal, mantendo a divisão por grupo apenas na memória interna e
+   no relatório. Nunca emitir documentos incompatíveis apenas para reproduzir
+   a separação visual escolhida.
+5. **Imposto pago nos EUA não é crédito automático integral.** O app deve
+   calcular, por rendimento/aplicação, o imposto pago, o crédito potencial, o
+   limite admitido no Brasil e a parcela não aproveitada. O imposto externo não
+   utilizado não deve ser carregado automaticamente para outro ano.
+6. **Cripto no exterior depende de localização/custódia e enquadramento.** Um
+   simples campo `exchange estrangeira = 15% anual` não é suficiente. O motor
+   precisa aplicar as regras vigentes para ativos virtuais classificados como
+   aplicações financeiras no exterior e manter separado o regime de ganho de
+   capital aplicável aos demais casos.
+
+#### 8.32.4 Princípios de arquitetura
+
+1. **Fonte única de verdade.** Dados de carteira não são copiados para tabelas
+   fiscais. O módulo fiscal lê as entidades originais e guarda apenas fatos
+   fiscais inexistentes nelas, documentos, confirmações, pendências, DARFs e
+   informações anuais manuais.
+2. **Dados derivados não são persistidos por padrão.** Resultado mensal,
+   prejuízo acumulado, base tributável, alíquota, imposto devido, obrigação de
+   declarar, evolução patrimonial e progresso são recalculados a partir das
+   fontes. Persistem somente fatos externos ou irreversíveis: documentos,
+   confirmação do usuário, guia emitida, pagamento informado, regra legal
+   versionada e relatório gerado.
+3. **Regra legal versionada.** Nenhum limite anual, alíquota, código, prazo ou
+   ficha pode ficar hardcoded como verdade eterna. Toda apuração recebe uma
+   `versao_regra_id` associada ao exercício/ano-calendário.
+4. **Sem estimativa silenciosa.** Dado ausente ou conflitante gera pendência.
+   O sistema pode sugerir, nunca inventar.
+5. **Bloqueio localizado.** Uma pendência afeta somente os cálculos que
+   dependem dela. O restante da declaração continua utilizável.
+6. **Explicabilidade.** Todo valor calculado precisa abrir uma memória que
+   permita chegar às operações e documentos de origem.
+7. **Separação de jurisdições.** Imposto retido nos EUA, imposto brasileiro
+   sobre exterior e imposto brasileiro sobre ativos domésticos são camadas
+   diferentes. Nunca apresentar um único campo genérico `imposto`.
+8. **Precisão decimal.** Cálculo fiscal nunca usa `number` binário como fonte
+   final. Usar decimal exato no servidor; arredondar apenas nos pontos previstos
+   pela regra aplicável.
+9. **Regra mais recente vence, histórico não é apagado.** A versão atual da
+   metodologia governa novos cálculos; documentos e pagamentos passados
+   permanecem associados à versão vigente quando foram produzidos.
+
+#### 8.32.5 Conceitos que a interface deve distinguir
+
+| Conceito | Definição no app |
+|---|---|
+| Exercício | Ano em que a declaração é entregue. |
+| Ano-calendário | Ano em que ocorreram rendimentos, operações, pagamentos e posições. |
+| Obrigado a declarar | O titular atingiu ao menos um critério legal do exercício. |
+| Imposto a pagar | Existe débito calculado; não significa, por si só, obrigação de entregar a declaração. |
+| Posição patrimonial | Quantidade e custo de aquisição em 31/12; não é valor de mercado salvo regra específica. |
+| Rendimento | Receita produzida pelo ativo, como dividendo, JCP, juros ou rendimento de FII. |
+| Ganho realizado | Resultado de venda, resgate, liquidação, amortização ou evento equivalente. |
+| IRRF Brasil | Antecipação ou tributação definitiva retida pela fonte brasileira, conforme o caso. |
+| Imposto pago exterior | Tributo comprovadamente pago fora do Brasil. |
+| Crédito admitido | Parcela do imposto exterior que pode reduzir o IR brasileiro, após limites legais. |
+| Custo médio oficial | Base fiscal calculada pelas transações e eventos; nunca inclui dividendos como redução. |
+| Preço médio ajustado | Indicador gerencial informal já existente na Posição; nunca alimenta o IR. |
+| Calculado | Resultado atual do motor. |
+| DARF gerado | Documento emitido; ainda não significa pagamento. |
+| Pago | Pagamento informado manualmente pelo titular. |
+| Declarado | Informação incluída no PDF final daquele exercício. |
+
+#### 8.32.6 Fluxo geral de dados
+
+```mermaid
+flowchart TD
+  A[Ativos / Corretoras] --> E[Ledger fiscal unificado]
+  B[Transações e eventos societários] --> E
+  C[Proventos] --> E
+  D[Importações / documentos / lançamentos manuais] --> F[Conciliação e pendências]
+  E --> F
+  F -->|confirmado| G[Motores fiscais por regime]
+  F -->|divergente ou incompleto| P[Pendência localizada]
+  P -->|usuário confirma| F
+
+  G --> H[Apuração mensal Brasil]
+  G --> I[Apuração anual exterior]
+  G --> J[Posição patrimonial em 31/12]
+  G --> K[Obrigatoriedade e fichas aplicáveis]
+
+  H --> L[DARF / pagamento / atraso]
+  I --> M[Demonstrativo Lei 14.754]
+  J --> N[Bens e Direitos]
+  K --> O[Questionário e módulos manuais]
+
+  L --> Q[Dashboard fiscal]
+  M --> Q
+  N --> Q
+  O --> Q
+  Q --> R[Revisão final]
+  R --> S[PDF auxiliar por fichas do IRPF]
+```
+
+#### 8.32.7 Fonte única de verdade — extensão da seção 3
+
+Adicionar à tabela da seção 3:
+
+| Informação fiscal | Mora em | Quem lê |
+|---|---|---|
+| Custo, quantidade, lucro realizado e eventos | `transacoes` + `lib/ativos/posicao-calculo.ts` | IR, Carteira, Ativos, Posição |
+| Proventos recebidos/provisionados | `proventos` + `lib/proventos` | IR, Proventos, Ativo, Posição |
+| Perfil fiscal e escopo da declaração | `ir_perfis_fiscais` | questionário, dashboard, relatório |
+| Regra legal por exercício | `ir_versoes_regra` + `ir_parametros_regra` | todos os motores de IR |
+| Documento fiscal | `ir_documentos` | pendências, lançamentos, revisão, PDF |
+| Divergência ou dado ausente | `ir_pendencias` | dashboard, telas afetadas, revisão |
+| Confirmação do titular | `ir_confirmacoes` | conciliação, auditoria, cálculo |
+| IRRF e imposto exterior não deriváveis com segurança da operação | `ir_retencoes` | apuração mensal/anual |
+| DARF emitido | `ir_darfs` | pagamentos, dashboard, PDF |
+| Pagamento de DARF | `ir_darf_pagamentos` | dashboard, revisão, PDF |
+| Rendimentos e dados anuais não vindos da carteira | tabelas `ir_*_anuais` | declaração anual e PDF |
+| Resultado mensal/anual | calculado em runtime | dashboard, memória, PDF |
+| Prejuízo acumulado | ledger derivado de todo o histórico | apuração e PDF |
+| Obrigatoriedade | motor derivado da declaração + regra versionada | dashboard e PDF |
+
+#### 8.32.8 Hierarquia e conciliação das fontes
+
+As fontes possíveis convivem; nenhuma deve somar automaticamente com outra.
+
+**Ordem sugerida de confiabilidade**, sempre sujeita a confirmação do titular
+quando houver conflito:
+
+1. documento oficial da instituição ou da fonte pagadora;
+2. nota de corretagem, extrato de negociação ou informe detalhado;
+3. integração direta com instituição/corretora;
+4. arquivo exportado da instituição;
+5. dado já existente no app;
+6. lançamento manual.
+
+A hierarquia não autoriza sobrescrever silenciosamente. Fluxo obrigatório:
+
+```text
+Detectar possível duplicidade ou divergência
+→ agrupar os registros que representam o mesmo fato
+→ mostrar valores e origem lado a lado
+→ sugerir uma fonte e explicar o motivo
+→ exigir confirmação do titular
+→ recalcular somente dependências afetadas
+```
+
+**Chave de deduplicação de transação**, usada como indício e não como única
+prova:
+
+```text
+profile_id + ativo_id + corretora_id + data_pregao + tipo + quantidade
++ preco_unitario + numero_nota/ordem quando disponível
+```
+
+**Chave de deduplicação de provento**, usada como indício:
+
+```text
+profile_id + ativo_id + tipo + data_pagamento + valor_bruto
++ fonte_pagadora/documento quando disponível
+```
+
+As importações existentes por copiar/colar continuam válidas, mas cada lote
+passa a ter `importacao_id`, linha de origem, hash e status de conciliação.
+
+#### 8.32.9 Estados de qualidade do dado
+
+Todo fato fiscal relevante deve expor um estado:
+
+- `importado`: recebido, ainda não conciliado;
+- `conciliado`: bateu com outra fonte ou passou nas validações;
+- `confirmado`: titular aprovou explicitamente;
+- `editado_manual`: valor de cálculo foi alterado pelo titular;
+- `sem_comprovante`: aceito, mas sem documento;
+- `pendente`: falta informação necessária;
+- `divergente`: duas ou mais fontes discordam;
+- `bloqueado`: não pode alimentar o cálculo afetado;
+- `ignorado`: registro mantido apenas para rastreabilidade, fora do cálculo;
+- `excluido`: removido da base ativa, com auditoria mínima.
+
+**Regra de bloqueio:** `pendente`, `divergente` ou `bloqueado` impede somente:
+
+1. o ativo e a operação envolvidos;
+2. o mês do fato gerador;
+3. os meses posteriores que dependam do custo, estoque, prejuízo ou crédito;
+4. a ficha anual diretamente dependente.
+
+Outros ativos, períodos e fichas continuam calculando.
+
+#### 8.32.10 Edição, exclusão e auditoria mínima
+
+A decisão de produto é permitir edição direta e exclusão definitiva da base
+ativa. Para não perder capacidade de diagnóstico:
+
+- a linha editada mantém `editado_manual = true`;
+- o valor anterior não precisa aparecer na UI nem gerar versão de apuração;
+- uma tabela técnica registra operação, usuário, data, origem, entidade e
+  campos alterados;
+- a exclusão remove o fato dos cálculos, mas mantém um registro técnico mínimo
+  sem dados desnecessários;
+- se um DARF já foi gerado, a edição marca a guia como `desatualizada`;
+- se um DARF já foi pago, o app mantém o pagamento e mostra a diferença entre
+  pagamento e cálculo atual, sem iniciar outro fluxo automaticamente.
+
+#### 8.32.11 Ciclo de vida de uma declaração
+
+```text
+NÃO INICIADA
+  → EM CONFIGURAÇÃO
+  → EM PREENCHIMENTO
+  → EM REVISÃO
+  → PRONTA PARA RELATÓRIO
+  → RELATÓRIO GERADO
+```
+
+Uma declaração pode voltar de qualquer etapa para `EM PREENCHIMENTO` se um dado
+for alterado. Como o app não transmite a declaração, não existe status
+`TRANSMITIDA` como fato oficial; o usuário pode marcar externamente
+`preenchida_na_receita` apenas como anotação opcional, sem valor de protocolo.
+
+Ao iniciar um exercício:
+
+1. criar `ir_declaracoes` com `exercicio` e `ano_calendario` coerentes;
+2. vincular a versão de regras aplicável;
+3. executar o questionário de escopo;
+4. importar posições e fatos da base histórica;
+5. calcular critérios de obrigatoriedade;
+6. montar a lista de fichas aplicáveis;
+7. abrir pendências de origem, cadastro e documentação;
+8. conduzir o usuário ao dashboard.
+
+#### 8.32.12 Questionário inicial
+
+O questionário não calcula sozinho a declaração; ele determina módulos
+aplicáveis. Perguntas mínimas:
+
+- residência fiscal no Brasil durante o ano;
+- condição de cidadão, residente, Green Card ou outra classificação fiscal nos
+  EUA;
+- mudança de residência ou saída definitiva;
+- renda de trabalho, aposentadoria, aluguel ou atividade autônoma;
+- atividade rural;
+- venda de bens, imóveis ou direitos;
+- contas, bens e investimentos no exterior;
+- aplicações financeiras, entidades controladas ou trusts no exterior;
+- operações em bolsa, derivativos, criptoativos e renda fixa;
+- despesas médicas, educação, previdência, pensão, doações e outros pagamentos;
+- dívidas, financiamentos, imóveis, veículos e outros bens;
+- recebimentos isentos, tributados exclusivamente ou indenizações.
+
+Como a primeira versão é individual e sem dependentes, respostas que indiquem
+necessidade de dependentes, declaração conjunta, espólio, saída definitiva,
+trust ou entidade controlada devem criar um **aviso de escopo não suportado** e
+recomendar validação profissional, sem tentar encaixar o caso em regra
+simplificada.
+
+#### 8.32.13 Motor de obrigatoriedade
+
+O motor lê os dados do ano-calendário e os parâmetros da versão de regras. Não
+usar valores fixos no componente.
+
+Saída:
+
+```ts
+type ResultadoObrigatoriedade = {
+  obrigado: boolean
+  motivosAtendidos: MotivoObrigatoriedade[]
+  motivosNaoAtendidos: MotivoObrigatoriedade[]
+  motivosNaoAvaliados: MotivoObrigatoriedade[]
+  versaoRegraId: string
+}
+```
+
+Cada motivo contém:
+
+- identificador estável;
+- descrição para o usuário;
+- valor apurado;
+- limite aplicável;
+- fonte dos dados;
+- regra legal/versionada;
+- status `atendido | nao_atendido | nao_avaliado`;
+- pendências que impediram a avaliação.
+
+Para o exercício 2026, a versão inicial deve contemplar, entre outros critérios
+oficiais, rendimentos tributáveis, rendimentos isentos/exclusivos, atividade
+rural, bens e direitos, operações em bolsa, ganho de capital, residência e
+situações no exterior. Esses valores são **seed da versão 2026**, não constantes
+globais do produto.
+
+#### 8.32.14 Ledger fiscal unificado de investimentos
+
+Criar um motor puro, cronológico e auditável que produza fatos fiscais a partir
+das fontes existentes. Ele deve reutilizar `ordenarTransacoes`,
+`aplicarTransacaoNaPosicao`, `calcularPosicao` e o tratamento de eventos
+societários já implementado.
+
+Entrada mínima por operação:
+
+- `profile_id`;
+- `ativo_id`;
+- país e jurisdição fiscal;
+- corretora/instituição;
+- data e, quando disponível, horário/ordem;
+- tipo da operação ou evento;
+- quantidade;
+- preço unitário;
+- moeda;
+- câmbio fiscal da data aplicável;
+- custos discriminados;
+- mercado/modalidade;
+- número da nota/ordem;
+- origem e documento;
+- retenções vinculadas;
+- status de confirmação.
+
+Saída por venda/resgate/liquidação:
+
+- estoque anterior;
+- custo médio anterior;
+- quantidade alienada;
+- custo atribuído;
+- receita bruta;
+- custos dedutíveis;
+- resultado líquido;
+- grupo tributário;
+- modalidade comum/day trade quando aplicável;
+- isenção aplicável ou não;
+- prejuízo utilizado;
+- base tributável;
+- imposto antes de retenções;
+- retenções utilizadas;
+- imposto líquido;
+- estoque final;
+- documentos e operações de origem.
+
+#### 8.32.15 Classificação de day trade
+
+A classificação deve considerar, no mínimo:
+
+1. mesmo ativo;
+2. mesma data de pregão;
+3. mesma instituição intermediadora;
+4. compras e vendas no mesmo dia;
+5. sequência/pareamento das operações quando houver múltiplas ordens;
+6. possibilidade de liquidação parcial como day trade e saldo como operação
+   comum.
+
+Campos novos recomendados em `transacoes`:
+
+```text
+horario_negociacao time null
+numero_nota text null
+numero_ordem text null
+mercado text null
+modalidade_fiscal_confirmada text null
+classificacao_day_trade_status text
+```
+
+`classificacao_day_trade_status`:
+
+- `nao_aplicavel`;
+- `calculada_com_dados_completos`;
+- `confirmada_usuario`;
+- `pendente_horario`;
+- `pendente_corretora`;
+- `pendente_pareamento`.
+
+Sem informação suficiente, a operação não entra como comum nem day trade; fica
+bloqueada até confirmação.
+
+#### 8.32.16 Custos e retenções
+
+Custos efetivamente pagos e associados à operação devem ser tratados no custo
+de aquisição ou reduzidos da receita de venda conforme a natureza. Custos
+mensais não associados a uma operação específica devem existir em registro
+próprio e ser alocados pelo motor conforme regra versionada.
+
+Não guardar apenas `custos` agregado quando a fonte trouxer detalhamento. Campos
+recomendados:
+
+- corretagem;
+- emolumentos;
+- taxa de liquidação;
+- taxa de registro;
+- ISS;
+- outros custos;
+- custo total derivado.
+
+Retenções devem ser fatos próprios, porque nem sempre é possível distribuir com
+segurança por uma única transação:
+
+```text
+ir_retencoes
+  id
+  profile_id
+  jurisdicao          -- brasil | estados_unidos | outro
+  tipo                 -- irrf_comum | irrf_day_trade | jcp | renda_fixa |
+                         -- exterior_dividendo | exterior_outro
+  competencia
+  data_retencao
+  valor_moeda_original
+  moeda
+  cambio_utilizado
+  valor_reais
+  ativo_id null
+  transacao_id null
+  provento_id null
+  documento_id null
+  compensavel boolean
+  status_confirmacao
+```
+
+O motor mantém créditos separados conforme a regra. Exemplo importante: o saldo
+de IRRF de day trade não deve ser tratado como crédito perpétuo idêntico ao
+IRRF de operações comuns.
+
+#### 8.32.17 Regimes fiscais de investimentos no Brasil
+
+##### 8.32.17.1 Bolsa — operações comuns
+
+- apuração mensal;
+- custo médio oficial vindo do ledger único;
+- resultado líquido após custos;
+- prejuízo comum separado de day trade e de FII/Fiagro;
+- análise de isenção mensal somente para os ativos e condições previstos na
+  regra do exercício;
+- IRRF comum tratado como antecipação/crédito conforme limites e período;
+- vencimento no último dia útil do mês seguinte quando houver débito;
+- código de receita definido pela versão de regras.
+
+A análise de isenção precisa mostrar:
+
+```text
+Total de alienações elegíveis no mês
+Limite legal
+Ganho líquido das operações elegíveis
+Operações excluídas da isenção
+Conclusão e regra aplicada
+```
+
+ETF, BDR, opções, futuros e outros instrumentos não devem herdar por analogia a
+isenção de ações. A matriz de enquadramento vive na versão de regras.
+
+##### 8.32.17.2 Day trade
+
+- apuração mensal;
+- alíquota e retenção próprias;
+- prejuízo separado das operações comuns;
+- nenhuma isenção mensal de vendas;
+- pareamento completo ou confirmação obrigatória;
+- memória por ordem e por ativo.
+
+##### 8.32.17.3 FII/Fiagro
+
+- grupo fiscal separado;
+- alienações em bolsa com alíquota própria, sem aplicar automaticamente a
+  isenção mensal de ações;
+- prejuízo do grupo separado;
+- resultado de comum/day trade pode compartilhar a alíquota do grupo conforme a
+  regra, mas a tela ainda pode identificar a modalidade para auditoria;
+- rendimentos distribuídos precisam ser classificados separadamente e somente
+  tratados como isentos quando os requisitos legais estiverem confirmados.
+
+O cadastro do ativo deve possuir os dados necessários para validar requisitos
+de isenção quando isso não puder ser inferido: negociação em bolsa/balcão,
+natureza do fundo, percentual de participação conhecido e outros parâmetros da
+regra vigente.
+
+##### 8.32.17.4 Fundos e ativos de infraestrutura/isentos
+
+O motor não deve transformar alíquota zero em ausência de informação. Deve
+registrar o resultado gerencial, a natureza isenta/alíquota zero, a ficha anual
+e a base legal versionada.
+
+##### 8.32.17.5 Renda fixa, Tesouro e fundos brasileiros
+
+Separar:
+
+- renda fixa tributável;
+- renda fixa isenta;
+- fundo de curto prazo;
+- fundo de longo prazo;
+- fundo de ações;
+- come-cotas quando aplicável;
+- resgate, amortização e vencimento;
+- IRRF definitivo;
+- posição patrimonial e rendimento anual.
+
+O prazo tributário precisa de controle por lote. A fila FIFO auxiliar já
+planejada pode ser usada para prazo de permanência, mas não pode substituir o
+custo médio oficial quando a regra de cálculo do ganho exigir outra base. Para
+cada resgate, guardar na memória os lotes consumidos, dias e faixa aplicável.
+
+`ativos.subtipo_renda_fixa` deve ser ampliável e não limitar o motor a uma lista
+fechada. Campos adicionais recomendados:
+
+```text
+tributacao_renda_fixa       -- tributavel | isenta | regra_especial
+regime_fundo                -- curto_prazo | longo_prazo | acoes | outro
+possui_come_cotas boolean
+emissor_cnpj
+instituicao_custodiante_cnpj
+vencimento date null
+```
+
+##### 8.32.17.6 Criptoativos
+
+Separar por fato e localização:
+
+- custódia/negociação em instituição no Brasil;
+- custódia/negociação em instituição no exterior;
+- autocustódia;
+- ativo que representa outra aplicação financeira;
+- venda, permuta, uso em pagamento, staking, rendimento, airdrop e outros fatos;
+- obrigação acessória de cripto quando aplicável;
+- ganho de capital doméstico versus aplicação financeira no exterior.
+
+O antigo campo `cripto_exchange` pode continuar como auxiliar, mas não resolve o
+regime sozinho. Criar `localizacao_fiscal_cripto`, `tipo_custodia` e
+`natureza_rendimento`.
+
+##### 8.32.17.7 Opções, futuros, termo e outros derivativos
+
+Precisam de uma matriz de eventos própria:
+
+- abertura;
+- encerramento;
+- exercício;
+- expiração;
+- prêmio recebido/pago;
+- ajustes diários;
+- posição lançadora/tomadora;
+- operação coberta ou descoberta;
+- day trade versus comum;
+- custos e IRRF.
+
+Não tentar representar tudo apenas como compra e venda de quantidade positiva.
+O `tipo` de transação pode ganhar eventos específicos ou um `detalhes_derivativo
+jsonb` validado por schema discriminado. Enquanto o conjunto mínimo de dados não
+estiver completo, o cálculo daquele contrato fica pendente.
+
+#### 8.32.18 Aplicações e rendimentos no exterior — Brasil
+
+Para o perfil atendido, o app deve separar quatro blocos:
+
+1. aplicações financeiras no exterior sujeitas à Lei nº 14.754/2023;
+2. bens e direitos no exterior que não sejam aplicações financeiras;
+3. depósitos não remunerados e moeda estrangeira;
+4. entidades controladas, trusts ou estruturas fora do escopo da primeira
+   versão.
+
+##### 8.32.18.1 Aplicações financeiras no exterior
+
+Regras de motor:
+
+- apuração anual separada dos demais rendimentos;
+- reconhecer juros, dividendos e outras remunerações quando percebidos;
+- reconhecer ganhos, inclusive variação cambial sobre o principal, nos eventos
+  de resgate, amortização, alienação, vencimento ou liquidação;
+- converter valores conforme a regra específica de cada fato;
+- compensar perdas comprovadas dentro da ordem permitida;
+- carregar perdas não compensadas para exercícios posteriores quando a norma
+  permitir;
+- aplicar a alíquota anual da versão de regras;
+- gerar memória por aplicação, não apenas total consolidado.
+
+Por ativo/aplicação, produzir:
+
+```text
+Custo histórico em moeda original
+Custo histórico em reais
+Quantidade em 31/12
+Situação em 31/12 anterior e atual
+Rendimentos realizados
+Ganhos/perdas realizados
+Variação cambial incluída
+Imposto pago no exterior
+Crédito brasileiro admitido
+Perda anterior utilizada
+Perda a transportar
+Descrição sugerida para Bens e Direitos
+```
+
+##### 8.32.18.2 Imposto pago no exterior
+
+O crédito é calculado por aplicação/rendimento e limitado conforme a regra. O
+app deve impedir:
+
+- usar imposto passível de restituição no exterior;
+- usar imposto estadual/municipal quando a reciprocidade não o alcançar;
+- transportar crédito não usado para outro ano sem autorização legal;
+- usar imposto de uma aplicação para reduzir imposto de outra aplicação quando
+  a regra vedar;
+- converter pela cotação errada.
+
+Estados do crédito:
+
+- `informado`;
+- `comprovado`;
+- `potencial`;
+- `admitido`;
+- `parcialmente_admitido`;
+- `nao_admitido`;
+- `pendente_documento`.
+
+##### 8.32.18.3 Posição patrimonial no exterior
+
+A posição anual é custo histórico convertido conforme as regras aplicáveis, não
+valor de mercado. Manter simultaneamente:
+
+- valor original;
+- moeda;
+- câmbio de cada aquisição;
+- custo em reais por lote;
+- custo total em reais;
+- valor de mercado apenas gerencial, fora dos campos da declaração;
+- país e código de localização;
+- instituição/corretora;
+- identificador fiscal da instituição quando houver;
+- quantidade fracionária com precisão suficiente.
+
+##### 8.32.18.4 Depósitos e moeda
+
+Depósito não remunerado, conta de pagamento, dinheiro em espécie e aplicação
+remunerada não podem compartilhar o mesmo tratamento. O tipo do ativo e o
+rendimento precisam ser explícitos. O módulo deve ter regras próprias para
+variação cambial de depósitos não remunerados e moeda em espécie, incluindo
+limites e fatos geradores versionados.
+
+#### 8.32.19 Estados Unidos — camada informativa e documental
+
+O app não prepara uma declaração americana para o perfil suportado. Ele controla
+fatos americanos necessários para a declaração brasileira e mostra alertas
+informativos.
+
+##### 8.32.19.1 Cadastro fiscal EUA
+
+```text
+status_eua = nonresident_alien_confirmado
+us_person = false
+cidadania_eua = false
+green_card = false
+dias_presenca_eua_ano
+atividade_negocio_eua = false
+w8ben_status
+w8ben_assinado_em
+w8ben_expira_em
+```
+
+Mudança em qualquer item que possa transformar o titular em residente fiscal ou
+`U.S. Person` bloqueia o módulo EUA e exige reavaliação do perfil.
+
+##### 8.32.19.2 Dividendos e outros rendimentos
+
+Por pagamento:
+
+- valor bruto em USD;
+- imposto federal retido;
+- outras retenções;
+- valor líquido;
+- data de pagamento;
+- câmbio fiscal brasileiro;
+- formulário/documento 1042-S quando disponível;
+- aplicação de origem;
+- tratamento brasileiro;
+- crédito potencial e admitido.
+
+Dividendos de fonte americana pagos a nonresident alien normalmente sofrem
+retenção federal de 30% na ausência de benefício aplicável. O W-8BEN documenta a
+condição estrangeira perante o pagador; ele não transforma automaticamente toda
+retenção em crédito brasileiro.
+
+##### 8.32.19.3 Venda de ações/ETFs americanos
+
+O motor EUA marca o ganho como `normalmente sem imposto federal americano` para
+o perfil padrão somente quando:
+
+- titular permanece nonresident alien;
+- não há atividade comercial/negócio nos EUA relacionada;
+- presença física e exceções não acionam tributação;
+- não é ativo imobiliário ou outra exceção;
+- documento e classificação estão completos.
+
+Mesmo sem imposto nos EUA, o ganho continua entrando na apuração brasileira de
+aplicações financeiras no exterior.
+
+##### 8.32.19.4 Risco sucessório
+
+Card apenas informativo:
+
+```text
+EXPOSIÇÃO SUCESSÓRIA NOS EUA
+Valor de mercado estimado de ativos potencialmente situados nos EUA
+Limite informativo de apresentação do Form 706-NA
+Ativos incluídos/excluídos da estimativa
+Data e câmbio da estimativa
+```
+
+O limiar de US$ 60.000 é de apresentação do Form 706-NA para certos patrimônios
+de não residentes não cidadãos; não deve ser exibido como franquia universal
+nem como imposto automaticamente devido. O card não integra a apuração do IRPF
+brasileiro.
+
+#### 8.32.20 Módulos da declaração anual individual
+
+O painel anual deve seguir a ordem e a linguagem do programa oficial, sem copiar
+códigos fixos para todos os anos.
+
+##### 8.32.20.1 Identificação do contribuinte
+
+- nome civil/social;
+- CPF;
+- data de nascimento;
+- endereço e país;
+- ocupação/natureza da ocupação;
+- título eleitoral quando aplicável;
+- conta para restituição somente se o usuário desejar registrar;
+- residência fiscal;
+- alterações cadastrais do ano.
+
+Dados do perfil geral podem pré-preencher, mas a confirmação é anual.
+
+##### 8.32.20.2 Rendimentos tributáveis de pessoa jurídica
+
+- fonte pagadora;
+- CNPJ;
+- rendimentos;
+- contribuição previdenciária;
+- IRRF;
+- 13º salário e IRRF correspondente;
+- outros campos da versão do exercício.
+
+Entrada manual, comprovante opcional com alerta.
+
+##### 8.32.20.3 Rendimentos de pessoa física e do exterior
+
+- aluguéis;
+- trabalho autônomo;
+- pensão;
+- rendimentos comuns do exterior não enquadrados na Lei 14.754;
+- Carnê-Leão pago;
+- livro-caixa quando aplicável;
+- imposto pago no exterior.
+
+Não misturar com as aplicações financeiras da Lei 14.754.
+
+##### 8.32.20.4 Rendimentos isentos e não tributáveis
+
+- dividendos brasileiros;
+- rendimentos de FII/Fiagro quando requisitos atendidos;
+- rendimentos de LCI/LCA/CRI/CRA e outros isentos;
+- ganhos isentos em ações;
+- poupança;
+- FGTS, indenizações, heranças, doações e outros;
+- bonificações/eventos que devam aparecer como rendimento isento.
+
+A carteira preenche apenas o que realmente conhece. Outros dados são manuais.
+
+##### 8.32.20.5 Tributação exclusiva/definitiva
+
+- JCP;
+- renda fixa e fundos tributados na fonte;
+- 13º salário;
+- PLR;
+- prêmios e outros rendimentos;
+- imposto correspondente.
+
+##### 8.32.20.6 Pagamentos, deduções e doações
+
+- despesas médicas;
+- educação;
+- previdência oficial;
+- PGBL e outras previdências;
+- pensão alimentícia;
+- honorários e pagamentos exigidos pela ficha;
+- doações incentivadas ou efetuadas;
+- reembolso de despesa;
+- parcela dedutível calculada pela versão de regras.
+
+Como dependentes não são suportados, todo pagamento deve pertencer ao titular.
+Se o beneficiário for outra pessoa, criar aviso de escopo.
+
+##### 8.32.20.7 Bens e Direitos
+
+Combinar:
+
+- posições de investimentos em 31/12;
+- contas e saldos;
+- imóveis;
+- veículos;
+- participações societárias;
+- criptoativos;
+- bens no exterior;
+- créditos em trânsito e JCP a receber;
+- outros bens manuais.
+
+Cada item precisa de:
+
+```text
+grupo/codigo da versão
+localizacao
+CPF/CNPJ/identificador
+nome
+texto de discriminação sugerido
+situação em 31/12 anterior
+situação em 31/12 atual
+origem do valor
+comprovante
+status de revisão
+```
+
+Ativo vendido e zerado no ano pode continuar aparecendo com situação atual zero
+quando necessário para refletir a baixa e rendimentos associados.
+
+##### 8.32.20.8 Dívidas e ônus reais
+
+- credor;
+- CPF/CNPJ;
+- natureza;
+- situação em 31/12 anterior e atual;
+- valor pago no ano quando exigido;
+- vínculo com bem/financiamento;
+- comprovante.
+
+##### 8.32.20.9 Ganho de capital
+
+Módulo para bens que não pertencem à renda variável de bolsa nem às aplicações
+financeiras da Lei 14.754, incluindo imóveis, veículos e outros direitos. O app
+pode calcular e orientar, mas deve separar fatos que dependem de programa
+auxiliar ou regra especial.
+
+##### 8.32.20.10 Atividade rural
+
+Como a declaração escolhida é completa, o questionário precisa detectar
+atividade rural. A primeira versão pode tratar como módulo manual detalhado ou
+marcar `exige_modulo_especial`; não deve ignorar o critério de obrigatoriedade.
+
+##### 8.32.20.11 Resumo e modelo de tributação
+
+O app simula declaração completa e simplificada usando a versão de regras e
+mostra:
+
+- base tributável;
+- deduções legais;
+- desconto simplificado;
+- imposto devido;
+- imposto retido/pago;
+- saldo estimado a pagar ou restituir;
+- modelo mais favorável.
+
+É uma estimativa auxiliar, porque o programa oficial pode aplicar críticas,
+arredondamentos e integrações não reproduzidas no app.
+
+#### 8.32.21 Dashboard fiscal
+
+A rota `/imposto-renda` vira uma aba-mãe com sub-abas:
+
+```text
+Dashboard
+Apuração mensal
+Investimentos Brasil
+Exterior e EUA
+Rendimentos
+Deduções e pagamentos
+Bens e direitos
+Dívidas
+Documentos
+Pendências
+Relatório final
+```
+
+No mobile, manter cinco itens principais e agrupar o restante em `Mais`.
+
+##### 8.32.21.1 Cabeçalho
+
+```text
+IMPOSTO DE RENDA
+Exercício 2026 — ano-calendário 2025
+Perfil: residente no Brasil | nonresident alien nos EUA
+Versão fiscal: IRPF-2026-v1
+Última atualização dos dados
+Status: em preenchimento | 3 pendências localizadas
+```
+
+##### 8.32.21.2 Cards principais
+
+- Obrigação de declarar: `sim | não | não avaliada`, com motivos;
+- Imposto a pagar;
+- Imposto pago;
+- Imposto vencido;
+- Prejuízo acumulado por grupo;
+- IRRF disponível por grupo e validade;
+- Rendimentos no exterior;
+- Imposto pago no exterior;
+- crédito exterior admitido;
+- progresso da declaração;
+- documentos sem comprovante.
+
+Cada card abre sua memória e nunca mostra apenas um número sem origem.
+
+##### 8.32.21.3 Progresso da declaração
+
+Status por ficha:
+
+- `completa`;
+- `precisa_confirmar`;
+- `com_pendencia`;
+- `nao_aplicavel`;
+- `nao_iniciada`;
+- `bloqueada`.
+
+O percentual é derivado de itens aplicáveis; fichas `não aplicáveis` não entram
+no denominador.
+
+##### 8.32.21.4 Calendário mensal
+
+Cada mês recebe um estado:
+
+- `sem_imposto`;
+- `abaixo_minimo`;
+- `debito_existente`;
+- `darf_gerado`;
+- `aguardando_pagamento`;
+- `pago`;
+- `parcialmente_pago`;
+- `vencido`;
+- `pendente`;
+- `nao_calculado`;
+- `desatualizado_por_edicao`.
+
+Ao abrir o mês, mostrar quatro guias inspiradas na estrutura do ReVar:
+
+```text
+Detalhamento
+Pagamento
+Análise de isenção
+Custos e retenções
+```
+
+##### 8.32.21.5 Brasil versus exterior
+
+Dois cards independentes, sem compensação visual automática:
+
+```text
+BRASIL
+Resultados comuns
+Day trade
+FII/Fiagro
+Renda fixa/fundos
+Cripto doméstica
+DARFs e IRRF
+
+EXTERIOR
+Rendimentos realizados
+Ganhos/perdas realizados
+Perdas compensadas
+Imposto pago fora
+Crédito admitido
+Posição em 31/12
+```
+
+##### 8.32.21.6 Pendências prioritárias
+
+Ordenar por impacto:
+
+1. cálculo bloqueado e vencimento próximo;
+2. posição/custo que afeta vários meses;
+3. divergência de retenção ou pagamento;
+4. ficha anual bloqueada;
+5. falta de comprovante que não bloqueia.
+
+Cada card mostra `o que ocorreu`, `fontes em conflito`, `o que é afetado` e
+`resolver agora`.
+
+##### 8.32.21.7 Prazos
+
+Somente dentro do dashboard. Não criar push, e-mail ou SMS. Mostrar:
+
+- descrição;
+- competência;
+- vencimento;
+- valor;
+- status;
+- ação disponível.
+
+##### 8.32.21.8 Evolução patrimonial versus rendimentos
+
+O gráfico principal compara, por ano e opcionalmente por mês:
+
+- patrimônio inicial;
+- patrimônio final;
+- variação patrimonial;
+- rendimentos tributáveis;
+- rendimentos isentos/exclusivos;
+- ganhos de investimentos;
+- dívidas contraídas/quitadas;
+- aportes e retiradas identificados;
+- diferença não conciliada.
+
+A diferença é informativa. Não usar badge `crítico`, `suspeito` ou `risco`.
+Mostrar apenas o valor e a composição disponível.
+
+#### 8.32.22 Apuração mensal e memória de cálculo
+
+Tabela mensal mínima:
+
+| Campo | Regra |
+|---|---|
+| Competência | `YYYY-MM` |
+| Grupo fiscal | comum, day trade, FII/Fiagro etc. |
+| Vendas/alienações | valor bruto elegível |
+| Resultado antes de custos | derivado |
+| Custos dedutíveis | operações + custos diversos |
+| Resultado líquido | derivado |
+| Prejuízo anterior | saldo antes do mês |
+| Prejuízo utilizado | abatimento efetivo |
+| Prejuízo final | saldo transportado |
+| Base tributável | após isenção e compensação |
+| Alíquota | regra versionada |
+| Imposto bruto | base × alíquota |
+| IRRF/créditos | utilizados no mês |
+| Imposto líquido | antes do mínimo de DARF |
+| Saldo inferior a R$ 10 | carregado do mesmo código |
+| Valor a recolher | valor oficial |
+| Vencimento | calendário oficial |
+| Situação | estado mensal |
+
+A linha pode expandir até operação individual, nota, custo, retenção e
+confirmação do titular.
+
+#### 8.32.23 Prejuízos e créditos
+
+Prejuízos são ledgers derivados de todo o histórico, não do ano filtrado. A
+correção da seção 8.11 permanece válida, mas deve ser ampliada:
+
+- comum separado de day trade;
+- FII/Fiagro separado;
+- demais grupos conforme a versão de regras;
+- exterior em ledger anual separado;
+- perdas só entram se comprovadas/confirmadas;
+- a visualização de um exercício mostra o saldo de abertura, utilizações e
+  saldo final;
+- edição histórica recalcula os períodos posteriores afetados;
+- nenhum prejuízo recebe prazo de expiração inventado.
+
+Créditos de IRRF e imposto exterior possuem ledgers diferentes e regras de
+validade diferentes. Não reaproveitar a mesma função genérica sem estratégia de
+compensação parametrizada.
+
+#### 8.32.24 DARF
+
+##### 8.32.24.1 Geração
+
+O app gera um PDF preenchido para pagamento fora do aplicativo. Metadados:
+
+```text
+codigo_receita
+periodo_apuracao
+competencia_origem
+vencimento_original
+valor_principal
+multa
+juros
+valor_total
+data_base_calculo
+versao_regra_id
+hash_calculo
+status
+```
+
+`hash_calculo` é produzido a partir dos fatos e parâmetros usados. Se uma
+operação relevante for editada, a guia passa para `desatualizada`.
+
+##### 8.32.24.2 Consolidação por código
+
+As apurações internas continuam separadas por grupo. Antes de gerar a guia:
+
+1. agrupar débitos por código de receita e período de apuração;
+2. aplicar créditos e saldo inferior ao mínimo somente onde legalmente
+   compatíveis;
+3. produzir o valor oficial consolidado;
+4. anexar uma memória mostrando quanto cada grupo contribuiu.
+
+##### 8.32.24.3 Valor inferior a R$ 10
+
+Não gerar guia. Manter um ledger por `profile_id + codigo_receita` com a origem
+de cada competência. Somar apenas competências compatíveis até o mínimo legal.
+Quando atingir o mínimo, a memória do DARF lista todas as parcelas acumuladas.
+
+##### 8.32.24.4 Atraso
+
+Para guia vencida:
+
+- multa de mora diária conforme a regra vigente, limitada ao teto;
+- juros pela Selic acumulada e 1% no mês de pagamento, conforme Sicalc;
+- recalcular para a data atual quando o dashboard abrir;
+- mostrar principal, multa, juros, total e data-base;
+- gerar novo documento atualizado sem apagar o original.
+
+As taxas Selic usadas no cálculo devem ter fonte oficial e histórico completo;
+não usar o indicador manual da aba Indicadores como fonte fiscal se houver
+qualquer lacuna ou diferença de granularidade.
+
+##### 8.32.24.5 Pagamento
+
+Fluxo:
+
+```text
+calculado → abaixo do mínimo | DARF gerado
+DARF gerado → aguardando pagamento
+aguardando pagamento → pago | parcialmente pago | vencido
+pago → pago com diferença, se a apuração mudar
+```
+
+O usuário informa:
+
+- data;
+- valor;
+- banco/meio opcional;
+- comprovante opcional;
+- observação.
+
+O sistema nunca marca como pago apenas porque o PDF foi gerado.
+
+#### 8.32.25 Documentos
+
+Categorias:
+
+- notas de corretagem;
+- extratos de negociação/custódia;
+- informes de rendimentos;
+- DARFs;
+- comprovantes de pagamento;
+- comprovantes de rendimentos e IRRF;
+- despesas médicas;
+- educação;
+- previdência;
+- imóveis, veículos e contratos;
+- 1042-S;
+- W-8BEN;
+- extratos de corretora americana;
+- documentos de câmbio;
+- outros.
+
+Estados:
+
+- `recebido`;
+- `processado`;
+- `vinculado`;
+- `incompleto`;
+- `ilegivel`;
+- `divergente`;
+- `expirado`;
+- `arquivado`.
+
+O documento não é a fonte do cálculo até que seus dados tenham sido extraídos,
+conciliados e confirmados. Um documento pode vincular vários fatos e um fato
+pode possuir vários documentos.
+
+#### 8.32.26 PDF final
+
+A escolha foi `um único PDF`. Como o nível de detalhamento final não foi
+respondido antes do encerramento das perguntas, adotar o padrão técnico mais
+seguro: **um único arquivo com relatório principal resumido e anexos detalhados
+no próprio PDF**.
+
+Estrutura:
+
+1. capa;
+2. exercício, ano-calendário, titular e data de geração;
+3. disclaimer;
+4. versão das regras e fontes;
+5. resumo da obrigatoriedade;
+6. resumo da declaração;
+7. pendências e itens sem comprovante;
+8. instruções de uso no programa oficial;
+9. fichas na ordem do IRPF;
+10. Bens e Direitos;
+11. rendimentos tributáveis;
+12. rendimentos isentos;
+13. tributação exclusiva;
+14. renda variável mês a mês;
+15. ganho de capital;
+16. aplicações financeiras no exterior;
+17. imposto pago no exterior e crédito admitido;
+18. pagamentos/deduções;
+19. dívidas;
+20. resumo de DARFs e pagamentos;
+21. memória de cálculo por regime;
+22. anexo de operações;
+23. anexo de documentos e origem dos dados.
+
+Para cada item declaratório:
+
+```text
+Ficha
+Grupo/código
+País/localização
+CPF/CNPJ/identificador
+Nome
+Discriminação sugerida
+Situação anterior
+Situação atual
+Rendimento
+Imposto retido/pago
+Origem
+Comprovante
+Status de revisão
+```
+
+O PDF deve identificar claramente `valor para copiar` e `memória auxiliar`,
+para o usuário não colar totais gerenciais em campos oficiais.
+
+#### 8.32.27 Modelo de dados proposto
+
+##### 8.32.27.1 Atualizações em entidades existentes
+
+**`ativos`** — adicionar apenas dados mestres que pertencem ao ativo:
+
+```text
+pais_domicilio text default 'Brasil'
+moeda text default 'BRL'
+identificador_fiscal_emissor text null
+instituicao_custodiante_id uuid null
+subtipo_fiscal text null
+tributacao_renda_fixa text null
+regime_fundo text null
+possui_come_cotas boolean null
+localizacao_fiscal_cripto text null
+tipo_custodia_cripto text null
+```
+
+Não gravar alíquota ou código do IR no ativo; isso pertence à versão de regras.
+
+**`corretoras`**:
+
+```text
+pais text default 'Brasil'
+identificador_fiscal text null
+tipo_identificador text null
+```
+
+**`transacoes`**:
+
+```text
+moeda text default 'BRL'
+cambio numeric(18,8) null
+horario_negociacao time null
+numero_nota text null
+numero_ordem text null
+mercado text null
+corretagem numeric(18,2) null
+emolumentos numeric(18,2) null
+taxa_liquidacao numeric(18,2) null
+outras_taxas numeric(18,2) null
+origem_tipo text default 'manual'
+origem_id uuid null
+status_confirmacao text default 'confirmado'
+editado_manual boolean default false
+classificacao_day_trade_status text null
+modalidade_fiscal_confirmada text null
+```
+
+O campo `custos` pode continuar como total derivado/compatibilidade, mas novas
+telas devem preferir componentes discriminados.
+
+**`proventos`**:
+
+```text
+valor_bruto numeric(18,2)
+imposto_retido numeric(18,2) default 0
+valor_liquido numeric(18,2) -- derivado, não input quando possível
+moeda text default 'BRL'
+cambio numeric(18,8) null
+pais_fonte text default 'Brasil'
+fonte_pagadora_identificador text null
+data_com date null
+data_credito date null
+origem_tipo text default 'manual'
+origem_id uuid null
+status_confirmacao text default 'confirmado'
+```
+
+`valor_total` existente deve ser migrado/interpretado explicitamente como bruto
+ou líquido antes de ativar o motor fiscal; não assumir.
+
+##### 8.32.27.2 Tabelas de regras compartilhadas
+
+```text
+ir_versoes_regra
+  id
+  jurisdicao                -- brasil | estados_unidos
+  exercicio null
+  ano_calendario null
+  nome
+  versao
+  vigencia_inicio
+  vigencia_fim null
+  publicada_em
+  fonte_oficial
+  hash_fonte
+  status                    -- rascunho | validada | substituida
+  created_at
+  updated_at
+```
+
+```text
+ir_parametros_regra
+  id
+  versao_regra_id
+  chave                      -- ex. obrigatoriedade.rendimentos_tributaveis
+  valor_numero null
+  valor_texto null
+  valor_json null
+  unidade null
+  observacao null
+  unique (versao_regra_id, chave)
+```
+
+Sem `profile_id`. Usuário autenticado apenas lê; escrita via processo
+administrativo/service role.
+
+##### 8.32.27.3 Declaração e perfil fiscal
+
+```text
+ir_declaracoes
+  id
+  profile_id
+  exercicio
+  ano_calendario
+  versao_regra_brasil_id
+  status
+  progresso_pct_derivado    -- não persistir; listado aqui só como retorno de action
+  iniciada_em
+  relatorio_gerado_em null
+  observacoes null
+  unique (profile_id, exercicio)
+```
+
+```text
+ir_perfis_fiscais
+  id
+  profile_id
+  declaracao_id
+  residente_brasil boolean
+  residente_desde date null
+  saida_definitiva boolean
+  us_person boolean
+  cidadania_eua boolean
+  green_card boolean
+  nonresident_alien boolean
+  dias_presenca_eua integer null
+  possui_dependentes boolean
+  declaracao_conjunta boolean
+  possui_trust boolean
+  possui_controlada_exterior boolean
+  confirmado_em
+```
+
+Guardar snapshot anual; não colocar essas respostas mutáveis diretamente em
+`profiles`.
+
+##### 8.32.27.4 Importações e origem
+
+```text
+ir_importacoes
+  id
+  profile_id
+  declaracao_id null
+  tipo
+  nome_arquivo_origem null
+  hash_arquivo null
+  status
+  total_linhas
+  linhas_validas
+  linhas_pendentes
+  criada_em
+  confirmada_em null
+```
+
+```text
+ir_importacao_linhas
+  id
+  importacao_id
+  numero_linha
+  dados_brutos jsonb
+  entidade_destino null
+  entidade_id null
+  fingerprint null
+  status
+  mensagem null
+```
+
+##### 8.32.27.5 Documentos e vínculos
+
+```text
+ir_documentos
+  id
+  profile_id
+  declaracao_id null
+  categoria
+  nome_original
+  storage_path
+  mime_type
+  tamanho_bytes
+  hash_sha256
+  emissor null
+  data_documento null
+  ano_calendario null
+  status
+  created_at
+```
+
+```text
+ir_documento_vinculos
+  id
+  profile_id
+  documento_id
+  entidade_tipo
+  entidade_id
+  finalidade
+  unique (documento_id, entidade_tipo, entidade_id, finalidade)
+```
+
+Vínculo polimórfico exige validação rigorosa na action; não confiar apenas no
+cliente.
+
+##### 8.32.27.6 Pendências e confirmações
+
+```text
+ir_pendencias
+  id
+  profile_id
+  declaracao_id null
+  tipo
+  severidade_tecnica       -- bloqueia | nao_bloqueia
+  entidade_tipo
+  entidade_id null
+  ativo_id null
+  competencia_inicio null
+  competencia_fim null
+  titulo
+  descricao
+  dados_conflitantes jsonb null
+  impacto jsonb
+  status                   -- aberta | resolvida | descartada
+  criada_em
+  resolvida_em null
+```
+
+```text
+ir_confirmacoes
+  id
+  profile_id
+  pendencia_id null
+  entidade_tipo
+  entidade_id
+  campo
+  valor_confirmado jsonb
+  fonte_escolhida
+  justificativa null
+  documento_id null
+  confirmado_em
+```
+
+##### 8.32.27.7 Retenções
+
+Usar a estrutura descrita na seção 8.32.16. Índices por
+`profile_id, competencia, tipo` e por vínculos opcionais.
+
+##### 8.32.27.8 DARFs e pagamentos
+
+```text
+ir_darfs
+  id
+  profile_id
+  declaracao_id null
+  codigo_receita
+  periodo_apuracao
+  vencimento_original
+  data_base_calculo
+  valor_principal
+  multa
+  juros
+  valor_total
+  saldo_minimo_incorporado
+  versao_regra_id
+  hash_calculo
+  arquivo_path
+  status
+  gerado_em
+  substitui_darf_id null
+```
+
+```text
+ir_darf_componentes
+  id
+  darf_id
+  grupo_fiscal
+  competencia_origem
+  valor
+  memoria jsonb
+```
+
+```text
+ir_darf_pagamentos
+  id
+  profile_id
+  darf_id
+  data_pagamento
+  valor_pago
+  banco_meio null
+  documento_id null
+  observacao null
+  created_at
+```
+
+##### 8.32.27.9 Dados anuais manuais
+
+Uma tabela por domínio evita `jsonb` genérico demais e preserva validação:
+
+```text
+ir_fontes_pagadoras
+ir_rendimentos_anuais
+ir_pagamentos_deducoes
+ir_bens_direitos_manuais
+ir_dividas_onus
+ir_ganhos_capital_manuais
+ir_atividade_rural_resumo
+ir_doacoes
+```
+
+Campos comuns:
+
+```text
+id
+profile_id
+declaracao_id
+categoria/codigo_regra
+cpf_cnpj_identificador
+nome
+valor(es)
+datas
+pais
+observacao
+status_confirmacao
+documento_principal_id null
+created_at
+updated_at
+```
+
+Os schemas Zod discriminados definem campos específicos por categoria. Não
+criar uma tabela única `ir_dados jsonb` para toda a declaração.
+
+##### 8.32.27.10 Relatórios
+
+```text
+ir_relatorios
+  id
+  profile_id
+  declaracao_id
+  tipo                    -- auxiliar_irpf
+  arquivo_path
+  hash_sha256
+  versao_regra_id
+  dados_gerados_em
+  total_pendencias
+  possui_bloqueios
+  created_at
+```
+
+##### 8.32.27.11 Auditoria mínima
+
+```text
+ir_auditoria
+  id
+  profile_id
+  acao                    -- editar | excluir | confirmar | gerar_darf | pagar
+  entidade_tipo
+  entidade_id null
+  metadados_minimos jsonb
+  created_at
+```
+
+Não expor a tabela na UI como histórico de versões de apuração; ela existe para
+diagnóstico e segurança.
+
+#### 8.32.28 Relações propostas
+
+```mermaid
+erDiagram
+  profiles ||--o{ ir_declaracoes : possui
+  ir_declaracoes ||--|| ir_perfis_fiscais : snapshot
+  ir_declaracoes ||--o{ ir_pendencias : agrega
+  ir_declaracoes ||--o{ ir_documentos : organiza
+  ir_declaracoes ||--o{ ir_darfs : gera
+  ir_declaracoes ||--o{ ir_rendimentos_anuais : contem
+  ir_declaracoes ||--o{ ir_pagamentos_deducoes : contem
+  ir_declaracoes ||--o{ ir_bens_direitos_manuais : contem
+  ir_declaracoes ||--o{ ir_dividas_onus : contem
+
+  ativos ||--o{ transacoes : movimenta
+  ativos ||--o{ proventos : produz
+  transacoes ||--o{ ir_retencoes : pode_gerar
+  proventos ||--o{ ir_retencoes : pode_gerar
+
+  ir_documentos ||--o{ ir_documento_vinculos : vincula
+  ir_pendencias ||--o{ ir_confirmacoes : resolve
+  ir_darfs ||--o{ ir_darf_componentes : detalha
+  ir_darfs ||--o{ ir_darf_pagamentos : recebe
+
+  ir_versoes_regra ||--o{ ir_parametros_regra : define
+  ir_versoes_regra ||--o{ ir_declaracoes : rege
+  ir_versoes_regra ||--o{ ir_darfs : calcula
+```
+
+#### 8.32.29 Organização do código
+
+Evitar ampliar indefinidamente `lib/ir/actions.ts`. Estrutura recomendada:
+
+```text
+src/lib/ir/
+  actions.ts                    -- composição e Server Actions públicas
+  schema.ts                     -- schemas de formulários anuais
+  tipos.ts                      -- tipos puros
+  regras/
+    carregar-regras.ts
+    tipos.ts
+    validacoes.ts
+  ledger/
+    construir-ledger.ts
+    classificar-day-trade.ts
+    custos.ts
+    retencoes.ts
+  motores/
+    renda-variavel-brasil.ts
+    fii-fiagro.ts
+    renda-fixa-fundos.ts
+    cripto.ts
+    exterior-lei-14754.ts
+    ganho-capital.ts
+    obrigatoriedade.ts
+    declaracao-anual.ts
+    darf.ts
+    acrescimos-legais.ts
+  conciliacao/
+    fingerprints.ts
+    reconciliar-fontes.ts
+    impactos-pendencia.ts
+  relatorios/
+    montar-relatorio.ts
+    gerar-pdf.ts
+    descricoes-irpf.ts
+  consultas/
+    dashboard.ts
+    apuracao-mensal.ts
+    declaracao.ts
+```
+
+Funções matemáticas/puras ficam sem `"use server"`. Arquivos de Server Action
+exportam apenas actions assíncronas, conforme as lições das seções 8.12 e 8.21.
+
+#### 8.32.30 Contratos principais de serviço
+
+```ts
+async function obterDashboardIR(exercicio: number): Promise<DashboardIR>
+async function obterApuracaoMensal(exercicio: number): Promise<ApuracaoMensalIR>
+async function obterDetalheCompetencia(anoMes: string): Promise<DetalheCompetenciaIR>
+async function obterDeclaracaoIR(exercicio: number): Promise<DeclaracaoIR>
+async function analisarObrigatoriedade(exercicio: number): Promise<ResultadoObrigatoriedade>
+async function listarPendenciasIR(exercicio: number): Promise<PendenciaIR[]>
+async function resolverPendenciaIR(input: ResolverPendenciaInput): Promise<void>
+async function gerarDarfIR(input: GerarDarfInput): Promise<DarfGerado>
+async function registrarPagamentoDarf(input: PagamentoDarfInput): Promise<void>
+async function gerarRelatorioIRPF(exercicio: number): Promise<RelatorioGerado>
+```
+
+Nenhuma action recebe `profile_id` do cliente; obtém da sessão.
+
+#### 8.32.31 Validações e invariantes
+
+1. `exercicio = ano_calendario + 1`, salvo regime excepcional explicitamente
+   previsto.
+2. uma declaração por perfil e exercício;
+3. nenhuma venda pode deixar estoque negativo no ponto do tempo;
+4. evento societário precisa respeitar o schema discriminado já existente;
+5. valores monetários não podem ser `NaN`, infinitos ou negativos quando a
+   categoria não permitir;
+6. moeda e câmbio são obrigatórios para fatos estrangeiros;
+7. câmbio deve possuir fonte, data e natureza `compra/venda` quando a regra
+   distinguir;
+8. fato pendente não entra no cálculo bloqueado;
+9. pagamento não pode existir sem DARF;
+10. soma de pagamentos pode ser maior ou menor que a guia, mas gera diferença
+    visível;
+11. documento de outro perfil nunca pode ser vinculado;
+12. versão de regra `rascunho` não calcula relatório final;
+13. relatório final com bloqueio exige confirmação explícita de prosseguir e
+    traz a pendência na capa/resumo;
+14. o custo médio ajustado gerencial nunca é importado pelo motor fiscal;
+15. preço de mercado nunca substitui custo histórico em Bens e Direitos sem
+    regra específica;
+16. imposto exterior não comprovado pode ser mostrado, mas não tratado como
+    crédito admitido;
+17. IRRF de modalidades diferentes não é compensado fora da estratégia
+    permitida;
+18. nenhuma isenção é inferida apenas pelo nome/ticker do ativo.
+
+#### 8.32.32 Precisão, datas e moedas
+
+- quantidade: `numeric(28,12)`;
+- preço unitário: `numeric(24,10)`;
+- câmbio: `numeric(18,8)` ou maior se necessário;
+- valores monetários: armazenar com precisão suficiente, arredondando para duas
+  casas somente na saída/etapa legal;
+- percentuais: `numeric(12,8)`;
+- datas de pregão e pagamento: `date`;
+- horário de negociação: `time`;
+- timestamps de sistema: UTC;
+- competência e vencimentos exibidos em `America/Sao_Paulo`;
+- biblioteca decimal no motor; não fazer somas fiscais com ponto flutuante JS.
+
+#### 8.32.33 RLS, segurança e privacidade
+
+Mesmo com a decisão de produto sobre local/nuvem ainda pendente, estes requisitos
+são obrigatórios na arquitetura atual:
+
+- todas as tabelas pessoais têm `profile_id` e RLS `auth.uid() = profile_id`;
+- tabelas de regras legais são compartilhadas e somente leitura para usuários;
+- arquivos em bucket privado, com URL assinada de curta duração;
+- nunca expor `SUPABASE_SERVICE_ROLE_KEY` ao cliente;
+- CPF, documentos, 1042-S, W-8BEN e dados bancários não aparecem em logs;
+- não guardar arquivo em base64 em tabela;
+- validar MIME, tamanho e hash;
+- trilha mínima de edição/exclusão;
+- relatório PDF acessível somente ao titular;
+- exclusão de conta deve ter estratégia de retenção/eliminação compatível com
+  obrigações legais e escolha futura de política;
+- autenticação reforçada é recomendada antes de liberar documentos fiscais.
+
+#### 8.32.34 Cache e revalidação
+
+Toda escrita que afete IR deve revalidar:
+
+```text
+/imposto-renda
+/imposto-renda/*, se houver rotas por sub-aba
+/carteira
+/proventos
+/ativos/[id], quando o ativo for conhecido
+/dashboard, se exibir resumo fiscal
+```
+
+Importações em lote não devem chamar `revalidatePath` uma vez por linha. Criar
+funções internas sem revalidação e revalidar uma vez ao final do lote.
+
+#### 8.32.35 Paginação e desempenho
+
+O módulo trabalha com histórico completo. Toda consulta potencialmente acima de
+1.000 linhas deve paginar explicitamente, lembrando o incidente da seção 8.14.
+
+Estratégia:
+
+- buscar transações por páginas ordenadas por data/created_at;
+- processar ledger por ativo ou em streaming lógico;
+- cachear apenas resultados derivados na duração da request;
+- evitar N+1 por ativo para documentos, proventos e retenções;
+- índices em `profile_id + data`, `profile_id + ativo_id + data`,
+  `profile_id + competencia`, `declaracao_id + status`;
+- PDF gerado em job/request controlada, com limite e progresso se o histórico
+  for grande.
+
+#### 8.32.36 Testes obrigatórios
+
+##### 8.32.36.1 Ledger e custo
+
+- compra única;
+- várias compras;
+- venda parcial;
+- zeragem e recompra;
+- custos na compra e venda;
+- bonificação com e sem valor capitalizado;
+- desdobramento e grupamento;
+- transferência entre corretoras sem venda;
+- edição histórica que afeta meses seguintes.
+
+##### 8.32.36.2 Day trade
+
+- compra antes da venda;
+- venda antes da compra;
+- pareamento parcial;
+- duas corretoras no mesmo dia;
+- várias ordens e preços;
+- falta de horário;
+- saldo comum após parcela day trade.
+
+##### 8.32.36.3 Renda variável
+
+- venda de ações abaixo/acima do limite;
+- ETF sem isenção;
+- prejuízo comum atravessando ano;
+- prejuízo day trade separado;
+- FII/Fiagro separado;
+- IRRF comum e day trade;
+- imposto inferior a R$ 10;
+- mês com várias categorias e um código oficial consolidado.
+
+##### 8.32.36.4 Exterior
+
+- compra em várias datas/câmbios;
+- dividendo com 30% retido nos EUA;
+- ganho de venda sem imposto americano;
+- perda e compensação anual;
+- imposto exterior acima do limite brasileiro;
+- imposto não comprovado;
+- saldo em USD e depósito não remunerado;
+- ativo zerado com rendimento no ano.
+
+##### 8.32.36.5 DARF
+
+- geração no prazo;
+- abaixo de R$ 10 e acumulação;
+- multa diária até 20%;
+- Selic e 1% do mês;
+- pagamento parcial;
+- pagamento divergente;
+- edição depois de gerar;
+- edição depois de pagar.
+
+##### 8.32.36.6 Declaração anual
+
+- critérios de obrigatoriedade individualmente;
+- ficha não aplicável;
+- dado manual sem comprovante;
+- posição anterior/atual;
+- ativo encerrado;
+- simplificada versus completa;
+- relatório com pendência não bloqueante;
+- relatório com bloqueio e confirmação explícita.
+
+#### 8.32.37 Sequência de implementação
+
+A decisão foi cobrir todos os ativos no lançamento, mas o desenvolvimento pode
+seguir uma sequência técnica sem liberar cobertura incompleta como definitiva:
+
+1. regras versionadas, declaração, perfil fiscal e pendências;
+2. enriquecimento de transações/proventos e documentos;
+3. ledger fiscal único e classificação de day trade;
+4. renda variável Brasil, IRRF e prejuízos;
+5. DARF, pagamentos, mínimo e atraso;
+6. renda fixa/fundos;
+7. exterior Lei 14.754 e camada EUA;
+8. cripto e derivativos;
+9. módulos anuais manuais;
+10. dashboard completo;
+11. PDF final;
+12. suíte de regressão e conferência com casos oficiais.
+
+Até todos os motores aplicáveis ao perfil estarem validados, o dashboard deve
+marcar a cobertura como `em validação`, não como cálculo fiscal definitivo.
+
+#### 8.32.38 Critérios de aceite
+
+O módulo só pode ser considerado pronto quando:
+
+- exercício e ano-calendário são inequívocos;
+- todo valor do dashboard abre memória de cálculo;
+- nenhum cálculo reimplementa custo médio fora do motor comum;
+- day trade incompleto abre pendência;
+- prejuízos atravessam anos corretamente;
+- apuração externa usa regime anual correto;
+- imposto pago nos EUA é separado do crédito admitido;
+- DARF não é marcado como pago na geração;
+- valor abaixo de R$ 10 acumula por código compatível;
+- atraso bate com casos de teste do Sicalc;
+- posições em 31/12 usam custo fiscal e moeda corretos;
+- módulos anuais manuais validam CPF/CNPJ, datas e valores;
+- documentos sem comprovante aparecem na revisão;
+- bloqueio é localizado;
+- PDF segue a ordem das fichas e diferencia valor oficial de memória;
+- RLS impede leitura cruzada entre perfis;
+- consultas grandes são paginadas;
+- regras do exercício possuem fonte oficial e versão registrada.
+
+#### 8.32.39 Limitações explícitas da primeira versão
+
+- somente titular individual;
+- sem dependentes;
+- sem declaração conjunta;
+- sem contador/assessor com acesso;
+- sem transmissão à Receita;
+- sem declaração americana;
+- sem `U.S. Person`;
+- trust, controlada/offshore e espólio geram aviso de fora de escopo;
+- risco sucessório americano é informativo;
+- comprovante é opcional, salvo quando necessário para resolver divergência ou
+  validar crédito/perda;
+- sem notificações externas;
+- diferença patrimonial é mostrada sem classificação automática;
+- correção de mês pago mostra diferença, mas não executa compensação ou
+  restituição;
+- só o cálculo atual é exibido, embora pagamentos e auditoria permaneçam.
+
+#### 8.32.40 Governança das regras fiscais
+
+Antes de abrir um novo exercício:
+
+1. localizar a instrução normativa e os manuais oficiais;
+2. revisar limites de obrigatoriedade, tabelas, deduções, códigos e prazos;
+3. revisar mudanças em renda variável, fundos, cripto e exterior;
+4. revisar formulários e fichas do programa oficial;
+5. criar nova `ir_versoes_regra` em `rascunho`;
+6. preencher parâmetros com fonte e hash;
+7. executar testes de regressão do exercício anterior;
+8. validar casos novos;
+9. promover a versão para `validada`;
+10. nunca editar retroativamente uma versão usada em DARF ou relatório; criar
+    versão substituta.
+
+Fontes normativas e operacionais prioritárias:
+
+- legislação no Planalto;
+- Instruções Normativas da Receita Federal;
+- Perguntas e Respostas IRPF do exercício;
+- Manual Meu Imposto de Renda;
+- Manual ReVar;
+- Sicalc;
+- normas e manuais oficiais da B3/CVM quando necessários;
+- IRS, Form W-8BEN, Forms 1042-S/706-NA e Publications 515/519 para a camada
+  americana.
+
+Cartilhas privadas e relatórios de plataformas são referências de UX e
+cobertura, nunca fonte normativa final.
+
+#### 8.32.41 Base documental usada nesta consolidação
+
+A metodologia combina:
+
+- decisões tomadas na conversa de definição do produto;
+- a estrutura e as convenções do `MAPA-DE-DADOS.md` existente;
+- a cartilha `Guia rápido do Imposto de Renda 2026`, usada para checklist e
+  experiência de preparação;
+- o relatório auxiliar de investimentos enviado, usado como referência de
+  organização por fichas, descrições e posição em 31/12;
+- legislação e orientações oficiais vigentes consultadas em 21/07/2026.
+
+O relatório auxiliar de terceiros não deve ser reproduzido visualmente nem
+tratado como regra. Ele serve para demonstrar a necessidade de separar posição,
+rendimento, imposto, país, ficha, código e texto de discriminação.
+
+### 8.33 Imposto de Renda — fase 1 (fundação fiscal) implementada (2026-07-21)
+
+Motivado pelo Guilherme pedindo pra reformular toda a aba de Imposto de Renda
+a partir da especificação de §8.32. Dado o tamanho da especificação (12 fases
+propostas no próprio §8.32.37), perguntei uma pergunta por vez (protocolo do
+CLAUDE.md §1) antes de mexer em código: primeiro por onde começar (escolhida:
+fase 1, seguindo a sequência do próprio doc), depois se a fase 1 deveria ser
+só backend/schema ou já incluir uma tela mínima (escolhida: fundação +
+questionário inicial visível). Esta seção documenta o que foi **realmente
+implementado** — §8.32 continua sendo a especificação completa de
+referência; esta seção é o registro do progresso real contra ela.
+
+**Implementado nesta fase:**
+
+- **Schema** (`supabase/schema.sql`, seção 21): as 6 tabelas da fundação —
+  `ir_versoes_regra`, `ir_parametros_regra` (regras fiscais versionadas,
+  compartilhadas, somente leitura pra usuário comum), `ir_declaracoes`
+  (ciclo de vida por exercício, `unique(profile_id, exercicio)`),
+  `ir_perfis_fiscais` (snapshot anual do questionário, `unique
+  (declaracao_id)`), `ir_pendencias` e `ir_confirmacoes` (tabelas criadas,
+  mas SEM geração automática de pendência ainda — isso depende do ledger
+  fiscal unificado, fase 2/3 do §8.32.37, ainda não construído).
+- **Seed:** uma `ir_versoes_regra` (`brasil`, exercício 2027/ano-calendário
+  2026, status `rascunho`) com os parâmetros que já existiam hardcoded em
+  `lib/ir/actions.ts` (isenções de R$20.000/R$35.000, alíquotas de swing/day
+  trade/FII/cripto, tabela regressiva de renda fixa, alíquota padrão de 15%
+  do art. da Lei 14.754) — **nenhum valor novo foi pesquisado agora**, só
+  movidos pra um lugar versionado. Status `rascunho` de propósito: falta
+  rodar a checagem de fontes oficiais do §8.32.40 antes de virar `validada`.
+- **Por que exercício 2027, não 2026:** o doc usa "Exercício 2026 —
+  ano-calendário 2025" como exemplo ilustrativo de cabeçalho, mas hoje
+  (21/07/2026) o prazo desse exercício já passou. `exercicioCorrente()`
+  (`lib/ir/consultas/declaracao.ts`) calcula sempre ano-calendário-em-curso
+  + 1 — ou seja, o app está organizando os dados de 2026 pra declarar em
+  2027, que é o exercício "aberto" do ponto de vista de quem está usando o
+  app agora.
+- **Organização de código** (§8.32.29, aplicada só até onde a fase 1
+  precisa): `lib/ir/tipos.ts` (tipos puros), `lib/ir/schema.ts` (Zod do
+  questionário, com o mesmo padrão `Form`/`FormInput` — output vs. input do
+  `.transform()` — já usado em `proventoSchema`/`ProventoFormInput`),
+  `lib/ir/regras/carregar-regras.ts` e `lib/ir/consultas/declaracao.ts`
+  (helpers de leitura SEM `"use server"`, mesma razão de
+  `lib/ativos/posicao-calculo.ts`: Server Actions só podem exportar
+  `async function`, então lógica auxiliar fica em arquivo separado).
+  `lib/ir/actions.ts` ganhou 3 novas Server Actions
+  (`obterDeclaracaoAtualIR`, `avisosEscopoIR`, `salvarPerfilFiscalIR`) — o
+  motor de relatório pré-existente (`obterRelatorioIR` e tudo que ele usa)
+  **não foi tocado nesta fase**.
+- **UI:** `QuestionarioIR.tsx` (novo) — cobre só os campos que já têm tabela
+  (`ir_perfis_fiscais`): residência, saída definitiva, status EUA
+  (nonresident alien/cidadania/Green Card/US Person), dias de presença nos
+  EUA, e os 4 sinalizadores de fora-de-escopo (dependentes, declaração
+  conjunta, trust, controlada no exterior — §8.32.39). As demais perguntas
+  do questionário completo do §8.32.12 (renda de trabalho, aluguel,
+  atividade rural, bens, dívidas etc.) **não têm UI ainda** — ficam pras
+  fases que constroem os módulos manuais correspondentes (§8.32.20).
+  `ImpostoRendaView.tsx` agora funciona como um portão: se o perfil fiscal
+  da declaração do exercício ainda não foi confirmado, mostra o
+  questionário; depois de salvo, mostra um card de "Perfil fiscal" (com os
+  avisos de fora-de-escopo, se houver) acima do relatório existente, que
+  continua exatamente como estava. `page.tsx` agora busca e mostra o
+  cabeçalho "Exercício X — ano-calendário Y" (corrigindo a confusão
+  apontada em §8.32.3 item 1 — a página antiga só mostrava "ano" cru).
+
+**Dívidas técnicas explícitas desta fase (não escondidas, só não resolvidas
+ainda):**
+
+1. A versão de regras 2027 está em `rascunho` — falta o passo de governança
+   do §8.32.40 (checar Instrução Normativa/Perguntas e Respostas do
+   exercício) antes de virar `validada`.
+2. `ir_pendencias`/`ir_confirmacoes` existem no banco mas nada ainda GERA
+   pendência automaticamente — isso é papel do ledger fiscal unificado
+   (fase 2/3), que ainda não foi construído.
+3. Não existe motor de obrigatoriedade (§8.32.13) nesta fase — o
+   questionário coleta perfil, mas não calcula "obrigado a declarar:
+   sim/não". Isso depende de parâmetros de obrigatoriedade que ainda não
+   foram pesquisados/seedados.
+4. `salvarPerfilFiscalIR` sempre avança o status pra `em_preenchimento` na
+   gravação — funciona porque a fase 1 não tem mais nenhuma etapa depois do
+   questionário, mas essa lógica precisa ficar mais cuidadosa (não regredir
+   um status mais avançado) assim que as próximas fases adicionarem
+   `em_revisao`/`pronta_relatorio`.
+5. Os 4 avisos de fora-de-escopo (§8.32.39) só aparecem como texto no card
+   de perfil — nenhuma tela é de fato bloqueada por eles ainda (a
+   especificação também não pede bloqueio, só aviso).
+
+**Próximo passo sugerido (fase 2 de 12, não iniciado):** enriquecimento de
+`transacoes`/`proventos` com os campos fiscais do §8.32.27.1 (moeda, câmbio,
+horário de negociação, custos discriminados, `origem_tipo`/`status_
+confirmacao`) e documentos (§8.32.25) — pré-requisito pro ledger fiscal
+unificado da fase 3.
+
+**Arquivos tocados/criados.** `supabase/schema.sql` (seção 21);
+`lib/ir/tipos.ts`, `lib/ir/schema.ts`, `lib/ir/regras/carregar-regras.ts`,
+`lib/ir/consultas/declaracao.ts` (novos); `lib/ir/actions.ts` (3 novas
+actions, resto intocado); `app/(app)/imposto-renda/QuestionarioIR.tsx`
+(novo); `app/(app)/imposto-renda/ImpostoRendaView.tsx` e `page.tsx`
+(portão do questionário + cabeçalho de exercício).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

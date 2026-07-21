@@ -1131,3 +1131,264 @@ alter table public.proventos add constraint proventos_tipo_check
 alter table public.proventos drop constraint if exists proventos_tipo_check;
 alter table public.proventos add constraint proventos_tipo_check
   check (tipo in ('dividendo','jcp','rendimento','aluguel','reembolso','outro'));
+
+-- ============================================================================
+-- 21. Imposto de Renda — fundação fiscal (fase 1 de 12 da reformulação
+--     completa, decisões em docs/MAPA-DE-DADOS.md §8.32/§8.33, 2026-07-21).
+--     Só a fundação entra aqui: regras versionadas, declaração, perfil
+--     fiscal e pendências/confirmações. O motor de cálculo por regime
+--     (renda variável, exterior, DARF etc.) e o dashboard completo são
+--     fases futuras (§8.32.37) — hoje o app continua usando
+--     `lib/ir/actions.ts#obterRelatorioIR` como está, sem nenhuma mudança
+--     de comportamento nesta seção.
+--
+--     Princípio central (§8.32.4): nenhuma dessas tabelas duplica dado que
+--     já mora em `ativos`/`transacoes`/`proventos` — só guarda fato
+--     exclusivamente fiscal (regra legal, resposta do questionário,
+--     pendência, confirmação). Resultado calculado (imposto devido, base
+--     tributável etc.) nunca é persistido aqui; fica pra quando o motor de
+--     cálculo (fases 4+) existir.
+-- ============================================================================
+
+-- 21.1 Regras fiscais versionadas — nenhum limite/alíquota/código vira
+--      constante "eterna" no código (§8.32.4 item 3). Sem profile_id: são
+--      compartilhadas entre todos os usuários, cadastradas via este script
+--      (ou processo administrativo futuro), nunca pela UI do usuário comum
+--      (§8.32.27.2 — "usuário autenticado apenas lê").
+create table if not exists public.ir_versoes_regra (
+  id              uuid primary key default gen_random_uuid(),
+  jurisdicao      text not null check (jurisdicao in ('brasil','estados_unidos')),
+  exercicio       integer null,
+  ano_calendario  integer null,
+  nome            text not null,
+  versao          text not null,
+  vigencia_inicio date not null,
+  vigencia_fim    date null,
+  publicada_em    timestamptz null,
+  fonte_oficial   text null,
+  hash_fonte      text null,
+  -- 'rascunho' = seed inicial, ainda sem passar pela checagem completa de
+  -- fontes oficiais (§8.32.40) — nunca usada pra fechar relatório final
+  -- (invariante #12, §8.32.31), só pra dar aos motores futuros um lugar de
+  -- onde ler parâmetro em vez de constante hardcoded.
+  status          text not null default 'rascunho' check (status in ('rascunho','validada','substituida')),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+comment on table public.ir_versoes_regra is
+  'Versão de regras fiscais por jurisdição/exercício (§8.32.4 item 3). Compartilhada entre usuários, somente leitura para authenticated.';
+
+-- 21.2 Parâmetros de cada versão (limite, alíquota, código etc.) — chave
+--      livre em vez de uma coluna por parâmetro, porque o conjunto de
+--      parâmetros muda de exercício pra exercício (§8.32.40).
+create table if not exists public.ir_parametros_regra (
+  id              uuid primary key default gen_random_uuid(),
+  versao_regra_id uuid not null references public.ir_versoes_regra (id) on delete cascade,
+  chave           text not null,
+  valor_numero    numeric(20,8) null,
+  valor_texto     text null,
+  valor_json      jsonb null,
+  unidade         text null,
+  observacao      text null,
+  unique (versao_regra_id, chave)
+);
+comment on table public.ir_parametros_regra is
+  'Parâmetros nomeados de uma ir_versoes_regra (limite de isenção, alíquota, código de receita etc.) — nunca hardcoded no motor.';
+
+-- 21.3 Declaração anual do titular — 1 linha por (perfil, exercício).
+--      Ver ciclo de vida em §8.32.11 (nao_iniciada → ... → relatorio_gerado).
+create table if not exists public.ir_declaracoes (
+  id                     uuid primary key default gen_random_uuid(),
+  profile_id             uuid not null references public.profiles (id) on delete cascade,
+  exercicio              integer not null,
+  ano_calendario         integer not null,
+  versao_regra_brasil_id uuid null references public.ir_versoes_regra (id),
+  status                 text not null default 'nao_iniciada'
+    check (status in ('nao_iniciada','em_configuracao','em_preenchimento','em_revisao','pronta_relatorio','relatorio_gerado')),
+  iniciada_em            timestamptz not null default now(),
+  relatorio_gerado_em    timestamptz null,
+  observacoes            text null,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  unique (profile_id, exercicio)
+);
+comment on table public.ir_declaracoes is
+  'Declaração anual do titular (§8.32.11). exercicio ≠ ano_calendario — ver §8.32.3 item 1 (operação de 2026 cai, em regra, no exercício 2027).';
+
+-- 21.4 Perfil fiscal — snapshot ANUAL das respostas do questionário
+--      (§8.32.12/§8.32.20.1), 1 linha por declaração (não em `profiles`,
+--      porque residência/US person podem mudar de ano pra ano).
+create table if not exists public.ir_perfis_fiscais (
+  id                          uuid primary key default gen_random_uuid(),
+  profile_id                  uuid not null references public.profiles (id) on delete cascade,
+  declaracao_id               uuid not null references public.ir_declaracoes (id) on delete cascade,
+  residente_brasil            boolean not null default true,
+  residente_desde             date null,
+  saida_definitiva            boolean not null default false,
+  us_person                   boolean not null default false,
+  cidadania_eua               boolean not null default false,
+  green_card                  boolean not null default false,
+  nonresident_alien           boolean not null default true,
+  dias_presenca_eua           integer null,
+  possui_dependentes          boolean not null default false,
+  declaracao_conjunta         boolean not null default false,
+  possui_trust                boolean not null default false,
+  possui_controlada_exterior  boolean not null default false,
+  confirmado_em               timestamptz null,
+  created_at                  timestamptz not null default now(),
+  updated_at                  timestamptz not null default now(),
+  unique (declaracao_id)
+);
+comment on table public.ir_perfis_fiscais is
+  'Snapshot anual do questionário inicial (§8.32.12). possui_dependentes/declaracao_conjunta/possui_trust/possui_controlada_exterior=true dispara aviso de escopo não suportado (§8.32.39) — primeira versão é só titular individual.';
+
+-- 21.5 Pendências — dado fiscal ausente/conflitante bloqueia SÓ o que
+--      depende dele (§8.32.9), nunca a declaração inteira. Fase 1 só cria a
+--      tabela; a geração automática de pendência a partir de conciliação
+--      real chega junto do ledger fiscal (fase 2/3, §8.32.37).
+create table if not exists public.ir_pendencias (
+  id                    uuid primary key default gen_random_uuid(),
+  profile_id            uuid not null references public.profiles (id) on delete cascade,
+  declaracao_id         uuid null references public.ir_declaracoes (id) on delete cascade,
+  tipo                  text not null,
+  severidade_tecnica    text not null check (severidade_tecnica in ('bloqueia','nao_bloqueia')),
+  entidade_tipo         text not null,
+  entidade_id           uuid null,
+  ativo_id              uuid null references public.ativos (id) on delete set null,
+  competencia_inicio    date null,
+  competencia_fim       date null,
+  titulo                text not null,
+  descricao             text not null,
+  dados_conflitantes    jsonb null,
+  impacto               jsonb null,
+  status                text not null default 'aberta' check (status in ('aberta','resolvida','descartada')),
+  criada_em             timestamptz not null default now(),
+  resolvida_em          timestamptz null
+);
+comment on table public.ir_pendencias is
+  'Pendência fiscal localizada (§8.32.9) — bloqueia só ativo/período/ficha afetados, nunca a declaração inteira.';
+
+-- 21.6 Confirmações — decisão explícita do titular ao resolver uma
+--      pendência ou escolher entre fontes divergentes (§8.32.8/§8.32.9).
+create table if not exists public.ir_confirmacoes (
+  id                  uuid primary key default gen_random_uuid(),
+  profile_id          uuid not null references public.profiles (id) on delete cascade,
+  pendencia_id        uuid null references public.ir_pendencias (id) on delete set null,
+  entidade_tipo       text not null,
+  entidade_id         uuid not null,
+  campo               text not null,
+  valor_confirmado    jsonb not null,
+  fonte_escolhida     text not null,
+  justificativa       text null,
+  documento_id        uuid null,
+  confirmado_em       timestamptz not null default now()
+);
+comment on table public.ir_confirmacoes is
+  'Confirmação explícita do titular sobre um fato fiscal (nunca sobrescrita silenciosa entre fontes, §8.32.8).';
+
+-- updated_at automático (reaproveita o trigger genérico da seção 4)
+drop trigger if exists set_updated_at on public.ir_versoes_regra;
+create trigger set_updated_at before update on public.ir_versoes_regra
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists set_updated_at on public.ir_parametros_regra;
+create trigger set_updated_at before update on public.ir_parametros_regra
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists set_updated_at on public.ir_declaracoes;
+create trigger set_updated_at before update on public.ir_declaracoes
+  for each row execute function public.set_updated_at();
+
+drop trigger if exists set_updated_at on public.ir_perfis_fiscais;
+create trigger set_updated_at before update on public.ir_perfis_fiscais
+  for each row execute function public.set_updated_at();
+
+-- RLS
+alter table public.ir_versoes_regra enable row level security;
+alter table public.ir_parametros_regra enable row level security;
+alter table public.ir_declaracoes enable row level security;
+alter table public.ir_perfis_fiscais enable row level security;
+alter table public.ir_pendencias enable row level security;
+alter table public.ir_confirmacoes enable row level security;
+
+-- Regras versionadas: SEM profile_id, compartilhadas — usuário comum só lê
+-- (§8.32.27.2). Sem policy de insert/update/delete pra role authenticated:
+-- escrita só acontece rodando este script (role dono do banco) ou, no
+-- futuro, por um processo administrativo com service role.
+drop policy if exists "ir_versoes_regra_select_authenticated" on public.ir_versoes_regra;
+create policy "ir_versoes_regra_select_authenticated" on public.ir_versoes_regra
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "ir_parametros_regra_select_authenticated" on public.ir_parametros_regra;
+create policy "ir_parametros_regra_select_authenticated" on public.ir_parametros_regra
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "ir_declaracoes_all_own" on public.ir_declaracoes;
+create policy "ir_declaracoes_all_own" on public.ir_declaracoes
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+drop policy if exists "ir_perfis_fiscais_all_own" on public.ir_perfis_fiscais;
+create policy "ir_perfis_fiscais_all_own" on public.ir_perfis_fiscais
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+drop policy if exists "ir_pendencias_all_own" on public.ir_pendencias;
+create policy "ir_pendencias_all_own" on public.ir_pendencias
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+drop policy if exists "ir_confirmacoes_all_own" on public.ir_confirmacoes;
+create policy "ir_confirmacoes_all_own" on public.ir_confirmacoes
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+-- 21.7 Seed inicial da versão 2026 (rascunho) — reaproveita os MESMOS
+--      parâmetros que já estavam hardcoded em `lib/ir/actions.ts` (isenções,
+--      alíquotas de day trade/swing/FII/cripto, tabela regressiva de renda
+--      fixa), só movidos pra cá como primeiro passo — NENHUM valor novo foi
+--      pesquisado agora. Status 'rascunho' de propósito: antes de virar
+--      'validada', alguém precisa rodar a checagem de fontes oficiais do
+--      §8.32.40 (Instrução Normativa do exercício, Perguntas e Respostas
+--      IRPF, Manual ReVar) — isso é dívida técnica explícita, não uma
+--      omissão silenciosa.
+do $
+declare
+  v_versao_id uuid;
+begin
+  -- Exercício 2027 (ano-calendário 2026) — é o que `obterDeclaracaoAtual()`
+  -- usa como padrão (ano corrente em curso + 1, ver lib/ir/consultas/
+  -- declaracao.ts), já que hoje (21/07/2026) o prazo do exercício 2026
+  -- (ano-calendário 2025) já passou. Se um dia o app precisar reabrir um
+  -- exercício anterior, basta rodar este mesmo bloco com outro par
+  -- exercicio/ano_calendario — nada aqui é exclusivo de 2027.
+  if not exists (
+    select 1 from public.ir_versoes_regra where jurisdicao = 'brasil' and exercicio = 2027
+  ) then
+    insert into public.ir_versoes_regra
+      (jurisdicao, exercicio, ano_calendario, nome, versao, vigencia_inicio, status, fonte_oficial)
+    values
+      ('brasil', 2027, 2026, 'IRPF 2027 (ano-calendário 2026) — seed inicial', 'v1-rascunho',
+       '2026-01-01', 'rascunho',
+       'Valores herdados de lib/ir/actions.ts pré-existente — AINDA NÃO validados contra IN/RFB do exercício 2027, ver §8.32.40.')
+    returning id into v_versao_id;
+
+    insert into public.ir_parametros_regra (versao_regra_id, chave, valor_numero, unidade, observacao) values
+      (v_versao_id, 'renda_variavel.isencao_acao_swing_limite_mensal', 20000, 'BRL', 'Isenção mensal de vendas em ações — swing trade (soma do mês).'),
+      (v_versao_id, 'renda_variavel.isencao_cripto_nacional_limite_mensal', 35000, 'BRL', 'Isenção mensal de vendas de cripto em exchange nacional.'),
+      (v_versao_id, 'renda_variavel.aliquota_acao_swing', 0.15, 'fracao', 'Alíquota sobre ganho líquido — ações/fundos, swing trade.'),
+      (v_versao_id, 'renda_variavel.aliquota_acao_day_trade', 0.20, 'fracao', 'Alíquota sobre ganho líquido — ações/fundos, day trade.'),
+      (v_versao_id, 'renda_variavel.aliquota_fii', 0.20, 'fracao', 'Alíquota sobre ganho líquido — venda de cotas de FII.'),
+      (v_versao_id, 'cripto.aliquota_faixa_1', 0.15, 'fracao', 'Ganho até R$5.000.000 no mês.'),
+      (v_versao_id, 'cripto.aliquota_faixa_2', 0.175, 'fracao', 'Ganho de R$5.000.000,01 até R$10.000.000.'),
+      (v_versao_id, 'cripto.aliquota_faixa_3', 0.20, 'fracao', 'Ganho de R$10.000.000,01 até R$30.000.000.'),
+      (v_versao_id, 'cripto.aliquota_faixa_4', 0.225, 'fracao', 'Ganho acima de R$30.000.000.'),
+      (v_versao_id, 'renda_fixa.regressiva_ate_180_dias', 0.225, 'fracao', 'Tabela regressiva — até 180 dias corridos.'),
+      (v_versao_id, 'renda_fixa.regressiva_ate_360_dias', 0.20, 'fracao', 'Tabela regressiva — 181 a 360 dias corridos.'),
+      (v_versao_id, 'renda_fixa.regressiva_ate_720_dias', 0.175, 'fracao', 'Tabela regressiva — 361 a 720 dias corridos.'),
+      (v_versao_id, 'renda_fixa.regressiva_acima_720_dias', 0.15, 'fracao', 'Tabela regressiva — acima de 720 dias corridos.'),
+      (v_versao_id, 'exterior_lei_14754.aliquota_padrao', 0.15, 'fracao', 'Alíquota anual padrão sobre rendimentos/ganhos de aplicações financeiras no exterior (§8.32.18.1) — AINDA NÃO valida faixas/exceções da lei.'),
+      (v_versao_id, 'darf.codigo_receita_renda_variavel_comum', null, 'texto', null),
+      (v_versao_id, 'darf.valor_minimo_recolhimento', 10, 'BRL', 'Abaixo disso, acumula pro próximo período compatível (§8.32.24.3).');
+
+    update public.ir_parametros_regra
+      set valor_texto = '6015'
+      where versao_regra_id = v_versao_id and chave = 'darf.codigo_receita_renda_variavel_comum';
+  end if;
+end $;

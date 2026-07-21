@@ -1,6 +1,10 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { perfilFiscalSchema, type PerfilFiscalForm } from "./schema";
+import { obterDeclaracaoAtual as _obterDeclaracaoAtual, type DeclaracaoComPerfil } from "./consultas/declaracao";
+import type { AvisoEscopoIR, PerfilFiscalIR } from "./tipos";
 
 export type AcaoResultado = { error?: string };
 
@@ -587,4 +591,133 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
   resumoAnual.sort((a, b) => a.categoria.localeCompare(b.categoria));
 
   return { ano, anosDisponiveis, mensal, resumoAnual };
+}
+
+// ============================================================================
+// Fundação fiscal (fase 1 de 12, ver docs/MAPA-DE-DADOS.md §8.32/§8.33) —
+// regras versionadas, declaração e perfil fiscal (questionário inicial).
+// Reaproveita `lib/ir/consultas/declaracao.ts` e `lib/ir/regras/
+// carregar-regras.ts` (arquivos sem "use server", só helpers de leitura —
+// ver comentário no topo desses arquivos) pra não misturar Server Actions
+// com funções auxiliares no mesmo arquivo, seguindo a organização proposta
+// em §8.32.29. O motor de relatório ACIMA continua 100% intocado nesta
+// fase — nenhuma linha das funções antigas foi alterada.
+// ============================================================================
+
+/**
+ * Declaração do exercício + perfil fiscal (se já preenchido). Cria a
+ * declaração na hora (`status: em_configuracao`) se ainda não existir —
+ * é o ponto de entrada da página `/imposto-renda`.
+ */
+export async function obterDeclaracaoAtualIR(exercicio?: number): Promise<DeclaracaoComPerfil | null> {
+  const resultado = await _obterDeclaracaoAtual(exercicio, { criarSeNaoExistir: true });
+  return resultado;
+}
+
+/**
+ * Avisos de "fora de escopo" derivados das respostas do questionário
+ * (§8.32.12/§8.32.39) — nunca bloqueiam o uso do app, só avisam que aquele
+ * aspecto específico (dependentes, declaração conjunta, trust, controlada
+ * no exterior) não tem suporte na primeira versão e recomendam validação
+ * profissional.
+ */
+export async function avisosEscopoIR(perfil: PerfilFiscalIR): Promise<AvisoEscopoIR[]> {
+  const avisos: AvisoEscopoIR[] = [];
+  if (perfil.possuiDependentes) {
+    avisos.push({
+      campo: "possuiDependentes",
+      titulo: "Dependentes não suportados ainda",
+      descricao:
+        "Esta versão prepara só a declaração individual do titular. Se você tem dependentes na declaração, valide com um contador antes de usar este relatório como apoio.",
+    });
+  }
+  if (perfil.declaracaoConjunta) {
+    avisos.push({
+      campo: "declaracaoConjunta",
+      titulo: "Declaração conjunta não suportada ainda",
+      descricao: "O app não modela declaração conjunta na primeira versão — trate os números aqui como só a parte individual do titular.",
+    });
+  }
+  if (perfil.possuiTrust) {
+    avisos.push({
+      campo: "possuiTrust",
+      titulo: "Trust fora de escopo",
+      descricao: "Estruturas do tipo trust não são tratadas por nenhum motor do app ainda — procure orientação profissional especializada.",
+    });
+  }
+  if (perfil.possuiControladaExterior) {
+    avisos.push({
+      campo: "possuiControladaExterior",
+      titulo: "Entidade controlada no exterior fora de escopo",
+      descricao: "Regras de entidades controladas/offshore não são calculadas pelo app — procure orientação profissional especializada.",
+    });
+  }
+  if (perfil.usPerson || perfil.cidadaniaEua || perfil.greenCard) {
+    avisos.push({
+      campo: "usPerson",
+      titulo: "Perfil fora do escopo americano suportado",
+      descricao:
+        "O módulo americano deste app pressupõe nonresident alien, sem cidadania e sem Green Card. Com qualquer um desses marcados, a camada informativa EUA não deve ser usada sem revisão de um profissional.",
+    });
+  }
+  return avisos;
+}
+
+/**
+ * Salva o questionário inicial (§8.32.12) — cria ou atualiza
+ * `ir_perfis_fiscais` (1 linha por declaração, `unique(declaracao_id)`) e
+ * avança a declaração de `em_configuracao` pra `em_preenchimento` na
+ * primeira confirmação.
+ */
+export async function salvarPerfilFiscalIR(declaracaoId: string, input: PerfilFiscalForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const dados = perfilFiscalSchema.safeParse(input);
+  if (!dados.success) return { error: "Dados do questionário inválidos." };
+
+  const { error: erroUpsert } = await supabase.from("ir_perfis_fiscais").upsert(
+    {
+      profile_id: user.id,
+      declaracao_id: declaracaoId,
+      residente_brasil: dados.data.residente_brasil,
+      residente_desde: dados.data.residente_desde,
+      saida_definitiva: dados.data.saida_definitiva,
+      us_person: dados.data.us_person,
+      cidadania_eua: dados.data.cidadania_eua,
+      green_card: dados.data.green_card,
+      nonresident_alien: dados.data.nonresident_alien,
+      dias_presenca_eua: dados.data.dias_presenca_eua,
+      possui_dependentes: dados.data.possui_dependentes,
+      declaracao_conjunta: dados.data.declaracao_conjunta,
+      possui_trust: dados.data.possui_trust,
+      possui_controlada_exterior: dados.data.possui_controlada_exterior,
+      confirmado_em: new Date().toISOString(),
+    },
+    { onConflict: "declaracao_id" }
+  );
+
+  if (erroUpsert) return { error: "Não foi possível salvar o questionário." };
+
+  // Só avança o status na PRIMEIRA confirmação — se o titular voltar aqui
+  // depois (ex.: mudou de residência no meio do ano) e refizer o
+  // questionário, não faz sentido regredir uma declaração que já estava em
+  // revisão de volta pra "em_preenchimento" sozinha; por ora, como a fase 1
+  // não tem mais nenhuma etapa depois do questionário, atualizamos sempre —
+  // isso deixará de ser correto quando as próximas fases adicionarem mais
+  // status intermediários, ver dívida técnica em docs/MAPA-DE-DADOS.md §8.33.
+  const { error: erroStatus } = await supabase
+    .from("ir_declaracoes")
+    .update({ status: "em_preenchimento" })
+    .eq("id", declaracaoId)
+    .eq("profile_id", user.id)
+    .eq("status", "em_configuracao");
+
+  if (erroStatus) return { error: "Perfil salvo, mas não foi possível atualizar o status da declaração." };
+
+  revalidatePath("/imposto-renda");
+  return {};
 }

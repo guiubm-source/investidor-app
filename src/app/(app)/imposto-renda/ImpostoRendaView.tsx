@@ -1,7 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { obterRelatorioIR, type RelatorioIR } from "@/lib/ir/actions";
+import { useEffect, useState } from "react";
+import { obterRelatorioIR, obterDeclaracaoAtualIR, avisosEscopoIR, type RelatorioIR } from "@/lib/ir/actions";
+import type { DeclaracaoComPerfil } from "@/lib/ir/consultas/declaracao";
+import type { AvisoEscopoIR } from "@/lib/ir/tipos";
+import QuestionarioIR from "./QuestionarioIR";
 
 const formatarMoeda = (valor: number) => valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -10,9 +13,74 @@ const formatarMes = (anoMes: string) => {
   return `${mes}/${ano}`;
 };
 
-export default function ImpostoRendaView({ relatorioInicial }: { relatorioInicial: RelatorioIR }) {
+function CardPerfilFiscal({
+  declaracaoComPerfil,
+  onRefazer,
+}: {
+  declaracaoComPerfil: DeclaracaoComPerfil;
+  onRefazer: () => void;
+}) {
+  const [avisos, setAvisos] = useState<AvisoEscopoIR[]>([]);
+
+  useEffect(() => {
+    if (!declaracaoComPerfil.perfil) return;
+    avisosEscopoIR(declaracaoComPerfil.perfil).then(setAvisos);
+  }, [declaracaoComPerfil.perfil]);
+
+  if (!declaracaoComPerfil.perfil) return null;
+
+  return (
+    <div className="card p-4 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-ink">Perfil fiscal</p>
+        <button onClick={onRefazer} className="text-xs text-accent hover:underline">
+          Refazer questionário
+        </button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <div>
+          <p className="text-faint">Residência</p>
+          <p className="text-ink">{declaracaoComPerfil.perfil.residenteBrasil ? "Brasil" : "Fora do Brasil"}</p>
+        </div>
+        <div>
+          <p className="text-faint">Status EUA</p>
+          <p className="text-ink">{declaracaoComPerfil.perfil.nonresidentAlien ? "Nonresident alien" : "Outro"}</p>
+        </div>
+        <div>
+          <p className="text-faint">Versão de regras</p>
+          <p className="text-ink">{declaracaoComPerfil.versaoRegraEncontrada ? "vigente" : "não cadastrada"}</p>
+        </div>
+        <div>
+          <p className="text-faint">Status da declaração</p>
+          <p className="text-ink">{declaracaoComPerfil.declaracao.status}</p>
+        </div>
+      </div>
+      {avisos.length > 0 && (
+        <div className="pt-1 space-y-1">
+          {avisos.map((a) => (
+            <p key={a.campo} className="text-xs text-danger bg-danger-soft rounded-md px-2 py-1.5">
+              <strong>{a.titulo}:</strong> {a.descricao}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ImpostoRendaView({
+  relatorioInicial,
+  declaracaoComPerfilInicial,
+}: {
+  relatorioInicial: RelatorioIR;
+  declaracaoComPerfilInicial: DeclaracaoComPerfil | null;
+}) {
   const [relatorio, setRelatorio] = useState(relatorioInicial);
   const [carregando, setCarregando] = useState(false);
+  const [declaracaoComPerfil, setDeclaracaoComPerfil] = useState(declaracaoComPerfilInicial);
+  const [mostrarQuestionario, setMostrarQuestionario] = useState(
+    !declaracaoComPerfilInicial?.perfil?.confirmadoEm
+  );
 
   const trocarAno = async (ano: number) => {
     setCarregando(true);
@@ -21,8 +89,47 @@ export default function ImpostoRendaView({ relatorioInicial }: { relatorioInicia
     setCarregando(false);
   };
 
+  const recarregarDeclaracao = async () => {
+    const novo = await obterDeclaracaoAtualIR();
+    setDeclaracaoComPerfil(novo);
+    setMostrarQuestionario(false);
+  };
+
+  if (!declaracaoComPerfil) {
+    return <p className="text-sm text-faint">Não foi possível carregar a declaração deste exercício.</p>;
+  }
+
+  if (mostrarQuestionario) {
+    return (
+      <QuestionarioIR
+        declaracaoId={declaracaoComPerfil.declaracao.id}
+        valoresIniciais={
+          declaracaoComPerfil.perfil
+            ? {
+                residente_brasil: declaracaoComPerfil.perfil.residenteBrasil,
+                residente_desde: declaracaoComPerfil.perfil.residenteDesde ?? "",
+                saida_definitiva: declaracaoComPerfil.perfil.saidaDefinitiva,
+                us_person: declaracaoComPerfil.perfil.usPerson,
+                cidadania_eua: declaracaoComPerfil.perfil.cidadaniaEua,
+                green_card: declaracaoComPerfil.perfil.greenCard,
+                nonresident_alien: declaracaoComPerfil.perfil.nonresidentAlien,
+                dias_presenca_eua: declaracaoComPerfil.perfil.diasPresencaEua ?? "",
+                possui_dependentes: declaracaoComPerfil.perfil.possuiDependentes,
+                declaracao_conjunta: declaracaoComPerfil.perfil.declaracaoConjunta,
+                possui_trust: declaracaoComPerfil.perfil.possuiTrust,
+                possui_controlada_exterior: declaracaoComPerfil.perfil.possuiControladaExterior,
+              }
+            : undefined
+        }
+        onSalvo={recarregarDeclaracao}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
+      <CardPerfilFiscal declaracaoComPerfil={declaracaoComPerfil} onRefazer={() => setMostrarQuestionario(true)} />
+
       <div className="flex items-center gap-2">
         <label className="label mb-0">Ano</label>
         <select
