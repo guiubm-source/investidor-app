@@ -83,6 +83,15 @@ export type LinhaLedgerFiscal = {
   precoMedioDepois: Decimal;
   /** Lucro/prejuízo realizado NESTA linha — sempre 0, exceto em vendas. */
   resultadoRealizado: Decimal;
+  /**
+   * Valor BRUTO da venda (quantidade × preço unitário, SEM descontar
+   * custos) — sempre 0 exceto em vendas. Usado pelos motores de regime
+   * (fase 4+) pra checar limites de isenção mensal definidos por "valor das
+   * alienações" (ex. R$20.000/mês em ações — §8.32.17.1), que são sobre o
+   * valor BRUTO da venda, não sobre `resultadoRealizado` (que já é líquido
+   * de custos) nem sobre um valor líquido de venda.
+   */
+  valorVendaBruto: Decimal;
 };
 
 export type LedgerFiscalAtivo = {
@@ -120,6 +129,7 @@ export function aplicarEventoAoLedgerFiscal(
 
   let novoEstado: EstadoLedgerFiscal;
   let resultadoRealizado = new Decimal(0);
+  let valorVendaBruto = new Decimal(0);
 
   if (evento.tipo === "compra") {
     const qtd = new Decimal(evento.quantidade ?? 0);
@@ -138,6 +148,7 @@ export function aplicarEventoAoLedgerFiscal(
     const custos = new Decimal(evento.custos ?? 0);
     const custoBaixado = precoMedioAntes.times(qtdVenda);
     resultadoRealizado = preco.minus(precoMedioAntes).times(qtdVenda).minus(custos);
+    valorVendaBruto = preco.times(qtdVenda);
     novoEstado = {
       quantidade: estado.quantidade.minus(qtdVenda),
       custoTotal: estado.custoTotal.minus(custoBaixado),
@@ -172,6 +183,7 @@ export function aplicarEventoAoLedgerFiscal(
     precoMedioAntes,
     precoMedioDepois: precoMedio(novoEstado),
     resultadoRealizado,
+    valorVendaBruto,
   };
 
   return { estado: novoEstado, linha };

@@ -5029,6 +5029,101 @@ outro.
 **Arquivos tocados.** `supabase/schema.sql` (seção 23); `lib/ir/ledger/classificar-day-trade.ts`,
 `lib/ir/consultas/day-trade.ts` (novos).
 
+### 8.38 Imposto de Renda — fase 4 (renda variável Brasil: ações/fundos/FII) implementada (2026-07-21)
+
+Continuação de §8.37 — "proxima fase", com uma pergunta antes de codar
+(motor novo isolado vs. já conectar no relatório visível da aba — escolhido:
+motor novo isolado, mesmo padrão da fase 3).
+
+**Implementado nesta fase:**
+
+- **`lib/ir/ledger/construir-ledger.ts` ganhou `valorVendaBruto`** em
+  `LinhaLedgerFiscal` — quantidade × preço unitário de uma venda, SEM
+  descontar custos. Necessário porque a isenção mensal de R$20.000
+  (§8.32.17.1) é sobre o "valor das alienações" (bruto), não sobre o
+  resultado líquido — o motor antigo (`lib/ir/actions.ts`) usa por engano
+  um valor já líquido de custos pra esse teste (`receitaVendidaDia`, que já
+  subtrai custos); o motor novo corrige isso, embora isso não mude nenhum
+  número visível ainda (motor antigo continua intocado, ver abaixo).
+- **`lib/ir/motores/renda-variavel-brasil.ts`** (novo, motor puro, Decimal,
+  sem `"use server"`): `apurarRendaVariavelBrasil(ativos, parametros)` —
+  apura mensalmente 3 grupos fiscais (`acao_swing`, `acao_day`, `fii`),
+  cada um com seu próprio ledger de prejuízo (nunca se misturam, §8.32.17.1/
+  §8.32.23), isenção mensal (só `acao_swing`, sobre `valorVendaBruto` do
+  mês), alíquota por grupo e compensação de prejuízo entre meses/anos sem
+  prazo de expiração (mesmo princípio do motor antigo, §8.11, mas agora
+  parametrizado em vez de hardcoded — alíquotas/limite vêm de
+  `ir_parametros_regra`, fase 1).
+- **Cada venda é dividida PROPORCIONALMENTE** entre day trade e comum, pela
+  fração de quantidade que o classificador (fase 3) atribuiu a cada lado —
+  mesmo preço médio/resultado do ledger, só repartido; não há um "preço
+  médio separado" para a fatia day trade.
+- **Fato pendente não entra no cálculo** (§8.32.31 item 8): quando o
+  classificador devolve um status bloqueante (`pendente_horario`/
+  `pendente_corretora`/`pendente_pareamento`) pra uma venda de ação/fundo, o
+  valor dela é EXCLUÍDO da soma do mês (não estimado, não aproximado) e o
+  mês/grupo é marcado `pendente: true` com os motivos em
+  `motivosPendencia` — sinalizado, mas ainda sem gravar em `ir_pendencias`
+  (ver dívida técnica abaixo). Testado explicitamente (caso 6 do teste
+  manual).
+- **`lib/ir/consultas/renda-variavel.ts`** (novo, sem `"use server"`):
+  `obterParametrosRendaVariavelVigente()` (lê `ir_versoes_regra`/
+  `ir_parametros_regra` da versão vigente do exercício corrente — devolve
+  `null` sem fallback se faltar qualquer parâmetro, §8.32.4 item 4) e
+  `apurarRendaVariavelBrasilDoUsuario()` (lê `ativos` tipo
+  `acao`/`fundo`/`fii`, monta o ledger fiscal + a classificação de day
+  trade de TODO o usuário de uma vez — `construirLedgerFiscalDoUsuario`/
+  `classificarDayTradeDoUsuario`, fase 3 — junta tudo por `transacaoId` e
+  chama o motor puro).
+- **Testado manualmente com 6 cenários** (script `tsx` temporário, não
+  commitado): swing isento (venda ≤ 20k), swing tributado (15%), FII
+  tributado sem isenção (20%, mesmo com venda pequena — confirma que FII
+  não herda a isenção de ações), day trade tributado (20%), prejuízo
+  atravessando 3 meses (perda em jan abate parcialmente fev, resto abate
+  mar, imposto só sobre o saldo positivo remanescente), e day trade
+  pendente (excluído do cálculo, sinalizado). Todos bateram com o valor
+  calculado à mão.
+
+**Nada do motor antigo foi tocado** — `lib/ir/actions.ts#obterRelatorioIR`/
+`apurarVendasDoAtivo` continuam sendo o que a aba Imposto de Renda mostra
+hoje, com a aproximação de day trade e o teste de isenção sobre valor
+líquido já documentados como imperfeitos (§8.6). A decisão de aposentar
+essa aproximação em favor do motor novo é de uma fase futura (depois de
+DARF, renda fixa, exterior, cripto — fases 5–9 — pra não trocar uma tela
+funcionando por uma cobertura parcial, seguindo a diretriz do próprio
+§8.32.37: "o dashboard deve marcar a cobertura como em validação, não como
+cálculo fiscal definitivo" até todos os motores aplicáveis existirem).
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Renda fixa, exterior (Lei 14.754), cripto e derivativos — fases 6, 7 e 8
+   do §8.32.37, não iniciadas.
+2. IRRF como crédito (abatimento do imposto devido pelo "dedo-duro" retido
+   na fonte) — não implementado porque `ir_retencoes` (fase 3) ainda não
+   tem NENHUM motor populando ela; não há crédito nenhum pra aplicar ainda.
+3. DARF (geração de guia, código de receita, valor mínimo de R$10 que
+   acumula pro próximo período) — fase 5 do §8.32.37.
+4. Nenhuma escrita em `ir_pendencias` a partir de vendas com day trade
+   pendente — o motor sinaliza (`pendente`/`motivosPendencia`), mas ainda
+   não persiste isso como pendência de verdade; isso é trabalho de uma
+   camada de orquestração/conciliação futura (§8.32.29 sugere
+   `conciliacao/impactos-pendencia.ts`).
+5. Nenhuma tela — mesma decisão da fase 3, motor pronto pra quando alguma
+   fase futura decidir conectar (ou substituir o motor antigo).
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Nota operacional:** mais um arquivo de teste manual temporário
+(`src/lib/ir/motores/_teste_renda_variavel_temp.ts`) ficou parado no disco
+pelo mesmo motivo dos outros dois já registrados em §8.36/§8.37. NÃO deve
+ser commitado — apagar manualmente antes do `git add`, junto com os
+demais.
+
+**Arquivos tocados.** `lib/ir/ledger/construir-ledger.ts` (campo novo
+`valorVendaBruto`); `lib/ir/motores/renda-variavel-brasil.ts`,
+`lib/ir/consultas/renda-variavel.ts` (novos).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
