@@ -1457,3 +1457,55 @@ alter table public.proventos
 comment on column public.proventos.valor_bruto is 'Espelha valor_total (quantidade × valor_por_cota) — mesmo valor, campo separado só pra alinhar nome com o vocabulário fiscal do §8.32.27.1 (bruto vs. líquido após imposto_retido). Nenhum cálculo novo aqui.';
 comment on column public.proventos.imposto_retido is 'Imposto retido na fonte (ex.: withholding tax no exterior — Lei 14.754, §8.32.18.1). Default 0 preserva lançamentos antigos. Ainda sem motor de crédito de imposto (fase 7).';
 comment on column public.proventos.pais_fonte is 'País da fonte pagadora do provento. Default Brasil preserva lançamentos antigos (todos nacionais até aqui).';
+
+-- =====================================================================
+-- 23. IR fase 3, segunda metade (§8.32.37) — tabela ir_retencoes
+-- =====================================================================
+-- Ver docs/MAPA-DE-DADOS.md §8.37. Retenções (IRRF comum/day trade, JCP,
+-- renda fixa, exterior) como FATOS PRÓPRIOS (§8.32.16) — não dá pra
+-- distribuir com segurança uma retenção agregada por uma única transação
+-- ou provento, então isso vive em tabela separada, referenciando (sem
+-- exigir) a origem quando conhecida. Só fundação nesta fase: schema +
+-- RLS, sem UI e sem nada ainda populando esta tabela automaticamente —
+-- isso é trabalho dos motores de regime (fase 4+), que vão decidir o que
+-- é retenção "de fato" a partir dos dados de transacoes/proventos.
+create table if not exists public.ir_retencoes (
+  id                      uuid primary key default gen_random_uuid(),
+  profile_id              uuid not null references public.profiles (id) on delete cascade,
+  jurisdicao              text not null check (jurisdicao in ('brasil', 'estados_unidos', 'outro')),
+  tipo                    text not null check (
+                            tipo in ('irrf_comum', 'irrf_day_trade', 'jcp', 'renda_fixa', 'exterior_dividendo', 'exterior_outro')
+                          ),
+  competencia             date not null,
+  data_retencao           date not null,
+  valor_moeda_original    numeric(14, 2) not null,
+  moeda                   text not null default 'BRL' check (moeda in ('BRL', 'USD')),
+  cambio_utilizado        numeric(10, 4) check (cambio_utilizado is null or cambio_utilizado > 0),
+  valor_reais             numeric(14, 2) not null,
+  ativo_id                uuid null references public.ativos (id) on delete set null,
+  transacao_id            uuid null references public.transacoes (id) on delete set null,
+  provento_id             uuid null references public.proventos (id) on delete set null,
+  documento_id            uuid null,
+  compensavel             boolean not null default true,
+  status_confirmacao      text not null default 'nao_confirmado' check (
+                            status_confirmacao in ('nao_confirmado', 'confirmado_usuario', 'divergente')
+                          ),
+  criado_em               timestamptz not null default now()
+);
+comment on table public.ir_retencoes is
+  'Retenção fiscal (IRRF/JCP/renda fixa/exterior) como fato próprio (§8.32.16) — o motor mantém créditos separados por tipo (ex.: IRRF de day trade NÃO é crédito perpétuo idêntico ao IRRF comum). Fundação de schema (fase 3): nenhum motor ainda escreve aqui.';
+comment on column public.ir_retencoes.documento_id is 'Referência solta (sem FK ainda) para um futuro ir_documentos — documentos/upload ficou explicitamente fora do escopo desta fase (§8.35).';
+comment on column public.ir_retencoes.compensavel is 'Se este valor pode ser usado como crédito/antecipação no cálculo do imposto devido — nem toda retenção é compensável (ex.: imposto exterior não comprovado, §8.32.31 item 16).';
+
+alter table public.ir_retencoes enable row level security;
+
+drop policy if exists "ir_retencoes_all_own" on public.ir_retencoes;
+create policy "ir_retencoes_all_own" on public.ir_retencoes
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+create index if not exists ir_retencoes_profile_competencia_idx on public.ir_retencoes (profile_id, competencia);
+create index if not exists ir_retencoes_profile_ativo_idx on public.ir_retencoes (profile_id, ativo_id);
+
+-- Sem trigger set_updated_at: tabela não tem coluna updated_at (registro de
+-- retenção é um fato pontual, não algo editado in-place — mesma razão de
+-- ir_parametros_regra na seção 21).

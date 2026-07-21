@@ -4931,6 +4931,104 @@ apagar manualmente antes do `git add` ou excluir da área de stage.
 `decimal.js`); `lib/ir/ledger/construir-ledger.ts`,
 `lib/ir/consultas/ledger.ts` (novos).
 
+### 8.37 Imposto de Renda — fase 3, segunda metade (day trade + ir_retencoes) implementada (2026-07-21)
+
+Continuação de §8.36 — "ok, proxima fase", com uma pergunta de desambiguação
+antes de codar (terminar o resto da fase 3 vs. pular pra fase 4 — escolhido:
+terminar a fase 3) e uma segunda sobre a forma da classificação de day trade
+(só em memória, como o ledger, vs. já gravando coluna nova em `transacoes` —
+escolhido: só em memória).
+
+**Implementado nesta fase:**
+
+- **`lib/ir/ledger/classificar-day-trade.ts`** (novo, motor puro, Decimal,
+  sem `"use server"`): `classificarDayTrade(operacoes)` — recebe uma lista
+  de compras/vendas (ativo, data, corretora, horário, quantidade) e devolve,
+  por transação, um status (`nao_aplicavel` | `calculada_com_dados_completos`
+  | `pendente_horario` | `pendente_corretora` | `pendente_pareamento` |
+  `confirmada_usuario`) + `quantidadeDayTrade`/`quantidadeComum`. Critérios
+  do §8.32.15 aplicados: agrupa por mesmo ativo + mesma data; dentro disso,
+  por mesma corretora (instituição intermediadora) — se QUALQUER operação do
+  dia não tiver corretora informada, o dia inteiro fica `pendente_corretora`
+  (conservador: não arrisca parear operações que podem ser de corretoras
+  diferentes); se o subgrupo (ativo+data+corretora) tem só compra ou só
+  venda, é `nao_aplicavel` (não há day trade possível); se tem 1 compra e 1
+  venda, resolve direto (`min(quantidades)` é day trade, resto fica comum no
+  lado que sobrou); se tem múltiplas ordens de qualquer lado, exige horário
+  de negociação em TODAS pra montar uma sequência — sem isso, `pendente_
+  horario` pra todo o subgrupo (nunca aproxima sem essa informação, seguindo
+  a exigência literal do §8.32.15: "sem informação suficiente, a operação
+  não entra como comum nem day trade; fica bloqueada até confirmação").
+- **Pareamento FIFO por horário** (`parearComFifo`): quando há múltiplas
+  ordens de compra e/ou venda com horário preenchido, a ordem mais antiga de
+  compra pareia primeiro com a mais antiga de venda, e assim sucessivamente
+  — mesma convenção já usada neste app pra consumir lotes por ordem
+  cronológica (fila FIFO auxiliar de renda fixa, §8.6), reaproveitada aqui
+  por consistência interna. O total pareado (dia todo) é sempre
+  `min(soma compras, soma vendas)` independente de sequência — o que a
+  sequência decide é só QUAL ordem específica fica com qual pedaço, pra
+  sustentar "memória por ordem" (§8.32.17.2). Testado manualmente com 7
+  cenários (par simples, parcial, só compra, sem corretora, múltiplas ordens
+  sem horário, múltiplas ordens com horário/FIFO, corretoras diferentes) —
+  todos bateram com o esperado calculado à mão.
+- **Substitui EM ESPÍRITO** (não em uso — nada do motor antigo foi trocado)
+  a aproximação documentada em §8.6/§8.32.15 que `lib/ir/actions.ts#apurarVendasDoAtivo`
+  usa hoje (`min(qtd comprada no dia, qtd vendida no dia)`, sem considerar
+  corretora nem sequência de ordens, deliberadamente descrita como "não um
+  motor de casamento de ordens real"). Este motor novo fica pronto pra fase
+  4 decidir se/quando substitui aquela aproximação — por decisão do
+  Guilherme, sem coluna nova em `transacoes` e sem escrita no banco nesta
+  fase (evita persistir um status que teria que ser re-sincronizado toda
+  vez que um lançamento do mesmo dia for editado).
+- **`lib/ir/consultas/day-trade.ts`** (novo, sem `"use server"`, mesmo
+  padrão de `consultas/ledger.ts`): `classificarDayTradeDoUsuario()` e
+  `classificarDayTradeDoAtivo(ativoId)` — leem só `tipo in (compra, venda)`
+  de `transacoes` (paginado em lotes de 1000, mesmo motivo de sempre,
+  §8.14/§8.32.35) e chamam o classificador.
+- **`supabase/schema.sql` seção 23 — tabela `ir_retencoes`** (fundação de
+  schema, §8.32.16): retenções (IRRF comum/day trade, JCP, renda fixa,
+  exterior) como fatos próprios, com jurisdição, tipo, competência, valor na
+  moeda original + câmbio + valor em reais, referências opcionais (`ativo_id`/
+  `transacao_id`/`provento_id`/`documento_id` — este último solto, sem FK,
+  já que `ir_documentos` não existe ainda), `compensavel` (nem toda retenção
+  vira crédito — §8.32.31 item 16) e `status_confirmacao`. RLS
+  `auth.uid() = profile_id`, sem trigger `updated_at` (retenção é fato
+  pontual, não editado in-place — mesma razão de `ir_parametros_regra`).
+  Só fundação: nenhum motor ainda escreve nesta tabela.
+
+**Explicitamente adiado (mantém as mesmas exclusões já registradas em
+§8.35/§8.36, mais as específicas desta parte):**
+
+1. Nenhuma tela nova — nem pra day trade, nem pra retenções (mesma decisão
+   "só motor" da primeira metade da fase 3).
+2. Nenhuma escrita automática em `ir_retencoes` a partir de `transacoes`/
+   `proventos` — isso exige decidir, por regra de regime (fase 4+), o que
+   conta como retenção "de fato" (ex.: 1% automático de day trade que a
+   B3 já retém).
+3. `confirmada_usuario` e `pendente_pareamento` existem no tipo mas não são
+   produzidos por este motor — reservados pra uma futura tela de
+   confirmação manual (`confirmada_usuario`) e pra ambiguidades que esta
+   versão do pareamento ainda não cobre (`pendente_pareamento` — a
+   implementação atual do FIFO sempre resolve deterministicamente).
+4. Nada foi trocado no motor antigo de IR (`lib/ir/actions.ts`) — a
+   aproximação de day trade documentada em §8.6 continua sendo o que o
+   relatório existente usa. A decisão de aposentar aquela aproximação em
+   favor deste motor novo é da fase 4.
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos). Motor testado manualmente
+contra 7 cenários (script `tsx` temporário, não commitado).
+
+**Nota operacional:** mais um arquivo de teste manual temporário
+(`src/lib/ir/ledger/_teste_day_trade_temp.ts`) ficou parado no disco pelo
+mesmo motivo do `teste_ledger_temp.ts` registrado em §8.36 (limitação de
+`rm` neste ambiente sobre o mount do Windows, ver seção 3 do CLAUDE.md).
+NÃO deve ser commitado — apagar manualmente antes do `git add`, junto com o
+outro.
+
+**Arquivos tocados.** `supabase/schema.sql` (seção 23); `lib/ir/ledger/classificar-day-trade.ts`,
+`lib/ir/consultas/day-trade.ts` (novos).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
