@@ -5,6 +5,7 @@ import {
   obterDeclaracaoAtualIR,
   obterBensDireitosIR,
   obterTabelaGruposCodigosIR,
+  obterDashboardIR,
 } from "@/lib/ir/actions";
 import ImpostoRendaView from "./ImpostoRendaView";
 
@@ -19,11 +20,12 @@ export default async function ImpostoRendaPage() {
   const anoAtual = new Date().getFullYear();
   const [relatorio, declaracaoComPerfil] = await Promise.all([obterRelatorioIR(anoAtual), obterDeclaracaoAtualIR()]);
 
-  const [bensInicial, tabelaGrupos] = await Promise.all([
+  const [bensInicial, tabelaGrupos, dashboardInicial] = await Promise.all([
     declaracaoComPerfil
       ? obterBensDireitosIR(declaracaoComPerfil.declaracao.id, declaracaoComPerfil.declaracao.anoCalendario)
       : Promise.resolve({ itens: [], ativosComPendencia: [] }),
     obterTabelaGruposCodigosIR(),
+    obterDashboardIR(anoAtual),
   ]);
 
   return (
@@ -51,6 +53,7 @@ export default async function ImpostoRendaPage() {
           declaracaoComPerfilInicial={declaracaoComPerfil}
           bensInicial={bensInicial}
           tabelaGrupos={tabelaGrupos}
+          dashboardInicial={dashboardInicial}
         />
       </div>
     </div>

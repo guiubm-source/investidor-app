@@ -13,6 +13,8 @@ import {
   type ResultadoBensDireitos,
 } from "./consultas/bens-direitos";
 import type { GrupoCodigoBensDireitos } from "./motores/bens-direitos";
+import { obterDashboardIR as _obterDashboardIR } from "./consultas/dashboard";
+import type { CardsPrincipaisIR, CardValor, PrejuizoGrupo } from "./motores/dashboard-fiscal";
 
 export type AcaoResultado = { error?: string };
 
@@ -948,4 +950,61 @@ export async function excluirBemManualIR(id: string): Promise<AcaoResultado> {
 
   revalidatePath("/imposto-renda");
   return {};
+}
+
+// ============================================================================
+// Fase 10 (§8.32.37) — Dashboard fiscal: cabeçalho + cards principais. Ver
+// docs/MAPA-DE-DADOS.md §8.45. NENHUM cálculo novo — só agrega os motores
+// das fases 4/5/7 (consultas/dashboard.ts faz a orquestração).
+// ============================================================================
+
+/** Forma pra UI (`number`, não `Decimal`) — mesmo padrão de `ItemBensDireitosUI`. */
+export type CardValorUI = { status: CardValor["status"]; valor: number | null; motivo: string | null };
+export type PrejuizoGrupoUI = { grupo: string; label: string; saldo: number };
+
+export type CardsPrincipaisUI = {
+  obrigacaoDeclarar: CardsPrincipaisIR["obrigacaoDeclarar"];
+  impostoAPagar: CardValorUI;
+  impostoPago: CardValorUI;
+  impostoVencido: CardValorUI;
+  prejuizoPorGrupo: PrejuizoGrupoUI[];
+  irrfDisponivel: CardValorUI;
+  ganhoCapitalExterior: CardValorUI;
+  impostoPagoExterior: CardValorUI;
+  creditoExteriorAdmitido: CardValorUI;
+  documentosSemComprovante: CardValorUI;
+};
+
+export type DashboardUI = {
+  cards: CardsPrincipaisUI;
+  quantidadePendencias: number;
+  versaoFiscalNome: string | null;
+};
+
+function converterCardValor(c: CardValor): CardValorUI {
+  return { status: c.status, valor: c.valor ? c.valor.toNumber() : null, motivo: c.motivo };
+}
+
+function converterPrejuizoGrupo(p: PrejuizoGrupo): PrejuizoGrupoUI {
+  return { grupo: p.grupo, label: p.label, saldo: p.saldo.toNumber() };
+}
+
+export async function obterDashboardIR(ano: number): Promise<DashboardUI> {
+  const resultado = await _obterDashboardIR(ano);
+  return {
+    cards: {
+      obrigacaoDeclarar: resultado.cards.obrigacaoDeclarar,
+      impostoAPagar: converterCardValor(resultado.cards.impostoAPagar),
+      impostoPago: converterCardValor(resultado.cards.impostoPago),
+      impostoVencido: converterCardValor(resultado.cards.impostoVencido),
+      prejuizoPorGrupo: resultado.cards.prejuizoPorGrupo.map(converterPrejuizoGrupo),
+      irrfDisponivel: converterCardValor(resultado.cards.irrfDisponivel),
+      ganhoCapitalExterior: converterCardValor(resultado.cards.ganhoCapitalExterior),
+      impostoPagoExterior: converterCardValor(resultado.cards.impostoPagoExterior),
+      creditoExteriorAdmitido: converterCardValor(resultado.cards.creditoExteriorAdmitido),
+      documentosSemComprovante: converterCardValor(resultado.cards.documentosSemComprovante),
+    },
+    quantidadePendencias: resultado.quantidadePendencias,
+    versaoFiscalNome: resultado.versaoFiscalNome,
+  };
 }

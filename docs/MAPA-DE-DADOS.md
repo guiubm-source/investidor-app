@@ -5680,6 +5680,118 @@ exportadas, sem mudança de lógica); `lib/ir/schema.ts` (novo
 `app/(app)/imposto-renda/BensDireitosView.tsx` (novo),
 `app/(app)/imposto-renda/page.tsx` (busca os novos dados iniciais).
 
+### 8.45 Imposto de Renda — fase 10 (Dashboard fiscal: cabeçalho + cards principais) implementada (2026-07-21)
+
+Continuação — "otimo, seguir proxima fase". Fase 10 do §8.32.37 (dashboard
+completo, §8.32.21) também é grande — cabeçalho, cards principais,
+progresso por ficha, calendário mensal com status de pagamento de DARF,
+Brasil vs. exterior, pendências prioritárias, prazos, gráfico de evolução
+patrimonial vs. rendimentos. Boa parte depende de coisas que ainda não
+existem (controle de pagamento de DARF, dívidas cadastradas, pendências
+como registro de verdade em `ir_pendencias`). Perguntado ao Guilherme por
+onde começar — escolhido **cabeçalho + cards principais** (§8.32.21.1/
+§8.32.21.2), por amarrar tudo que as fases 3-9 já calculam numa tela de
+resumo, sem exigir cálculo novo. Perguntado em seguida como tratar os cards
+sem dado real (imposto pago/vencido, IRRF disponível, crédito exterior
+admitido, obrigação de declarar, documentos sem comprovante) — escolhido
+mostrar todos os cards do spec, com um aviso explícito "não disponível
+ainda" nos que dependem de motor inexistente, em vez de omitir o card ou
+mostrar um valor fabricado.
+
+**Implementado nesta fase:**
+
+- **`lib/ir/motores/dashboard-fiscal.ts`** (novo, motor puro, Decimal, sem
+  `"use server"`) — diferente de todos os motores anteriores, este NÃO
+  calcula nada fiscal novo, só agrega o que já existe:
+  `ultimoPrejuizoPorGrupo(mensal, anoLimite)` pega, por grupo fiscal de
+  renda variável, o `prejuizoSaldoFinal` da linha mensal mais recente até o
+  ano selecionado (mesma convenção "prejuízo não prescreve" já usada nos
+  motores de apuração, §8.11). `montarCardsPrincipais(input)` monta os 10
+  cards do §8.32.21.2: os que têm fundação completa (DARF + fase 4 pro
+  imposto a pagar, fase 7 pro ganho de capital exterior) recebem `status:
+  "disponivel"` com o valor; os que dependem de um motor inexistente
+  recebem `status: "nao_disponivel"` com um `motivo` explícito nunca um
+  valor `0` ou aproximado que pareça um cálculo de verdade — isso vale
+  tanto pra "fundação incompleta" (versão de regra vigente ausente) quanto
+  pra "motor nunca foi construído" (crédito exterior, documentos,
+  obrigação de declarar).
+- **`lib/ir/consultas/dashboard.ts`** (novo, sem `"use server"`) —
+  `obterDashboardIR(ano)` chama em paralelo os motores já prontos
+  (`apurarRendaVariavelBrasilDoUsuario` fase 4, `consolidarDarfRendaVariavelDoUsuario`
+  fase 5, `apurarGanhoCapitalExteriorDoUsuario` fase 7,
+  `obterVersaoRegraVigente` fase 1) e monta o resultado. A contagem de
+  "pendências localizadas" do cabeçalho NÃO lê a tabela `ir_pendencias`
+  (existe desde a fase 1, mas nenhum motor ainda escreve nela — contar por
+  lá daria sempre 0, o que seria enganoso) — em vez disso, soma os sinais
+  de pendência que os motores das fases 4/7 já produzem (linhas de renda
+  variável com `pendente: true` no ano selecionado + ativos internacionais
+  excluídos por falta de câmbio).
+- **`lib/ir/actions.ts`** (Server Action nova): `obterDashboardIR(ano)` —
+  wrapper com conversão Decimal→número na fronteira (mesmo padrão de
+  `converterLinhaRendaVariavelNova`/`converterBensDireitos`).
+- **UI nova**: `ImpostoRendaView.tsx` ganhou uma 3ª sub-aba **Dashboard**,
+  agora a aba padrão (antes de Relatório/Bens e Direitos) — mesmo padrão de
+  sub-abas já usado em Carteira/Configurações/o resto de Imposto de Renda.
+  `DashboardIRView.tsx` (novo): cabeçalho com exercício/ano-calendário,
+  resumo de perfil (residente Brasil | nonresident alien), nome da versão
+  fiscal vigente, status da declaração e contagem de pendências; cards
+  principais organizados em blocos (Obrigação de declarar; Imposto a
+  pagar/pago/vencido; Prejuízo acumulado por grupo; IRRF; Exterior; 
+  Documentos) — cards com `status: "nao_disponivel"` mostram "Não
+  disponível ainda" com o motivo no `title` (tooltip), nunca um valor. O
+  card do exterior foi rotulado **"Ganho de capital no exterior"**, não
+  "Rendimentos no exterior" (nome do spec original) — a fase 7 só cobre
+  alienação, nunca dividendos/juros do exterior, e chamar de "rendimentos"
+  sugeriria uma cobertura que não existe ainda. Trocar o ano no seletor da
+  aba Relatório agora também recarrega o dashboard (`trocarAno` busca os
+  dois em paralelo).
+- **Testado manualmente com 11 cenários** (script `tsx` temporário, não
+  commitado): `ultimoPrejuizoPorGrupo` respeitando o `anoLimite` e pegando a
+  linha mais recente por grupo; `montarCardsPrincipais` com fundação
+  completa (imposto a pagar = soma DARF + exterior do ano, ganho de capital
+  exterior disponível, demais cards indisponíveis com motivo); fundação
+  incompleta pro motor DARF (imposto a pagar vira indisponível mesmo com o
+  exterior ok); fundação incompleta pro motor exterior (ganho de capital
+  exterior E imposto a pagar ficam indisponíveis, nunca aproximados).
+  Todos bateram com o esperado.
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Progresso da declaração por ficha (§8.32.21.3), calendário mensal com
+   status de pagamento de DARF (§8.32.21.4), pendências prioritárias
+   ordenadas por impacto (§8.32.21.6), prazos (§8.32.21.7) e o gráfico de
+   evolução patrimonial vs. rendimentos (§8.32.21.8) — nenhum construído
+   ainda.
+2. Obrigação de declarar — regra de obrigatoriedade (limites de renda/bens/
+   ganho de capital/atividade rural) não implementada; card sempre mostra
+   "não avaliada".
+3. Imposto pago/vencido — o app não rastreia status de pagamento de guia/
+   DARF (deferido desde a fase 5, §8.40); cards sempre "não disponível".
+4. IRRF disponível e imposto pago no exterior — dependem de `ir_retencoes`
+   ter algum motor escrevendo nela; nenhum tem, desde a fundação (fase 3,
+   §8.37).
+5. Crédito de imposto pago no exterior (§8.32.18.2) — motor nunca
+   construído (já registrado como fora de escopo na fase 7, §8.42).
+6. Documentos sem comprovante — upload/controle de documento nunca foi
+   construído (deferido desde a fase 2, §8.35).
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos criados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Nota operacional:** o arquivo de teste manual temporário
+`src/lib/ir/motores/_teste_dashboard_temp.ts` ficou parado no disco pelo
+mesmo motivo intermitente já registrado em §8.36-§8.44 (o
+`_teste_bens_direitos_temp.ts` da fase anterior sumiu sozinho antes desta
+fase começar, mas este não) — apagar manualmente antes do `git add`
+(comando na seção de comandos abaixo).
+
+**Arquivos tocados.** `lib/ir/motores/dashboard-fiscal.ts`,
+`lib/ir/consultas/dashboard.ts` (novos); `lib/ir/actions.ts` (nova Server
+Action `obterDashboardIR` + tipos de UI); `app/(app)/imposto-renda/
+ImpostoRendaView.tsx` (3ª sub-aba, agora padrão),
+`app/(app)/imposto-renda/DashboardIRView.tsx` (novo),
+`app/(app)/imposto-renda/page.tsx` (busca o dashboard inicial).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

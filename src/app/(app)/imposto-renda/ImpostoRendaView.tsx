@@ -5,16 +5,20 @@ import {
   obterRelatorioIR,
   obterDeclaracaoAtualIR,
   avisosEscopoIR,
+  obterDashboardIR,
   type RelatorioIR,
   type BensDireitosUI,
+  type DashboardUI,
 } from "@/lib/ir/actions";
 import type { DeclaracaoComPerfil } from "@/lib/ir/consultas/declaracao";
 import type { AvisoEscopoIR } from "@/lib/ir/tipos";
 import type { GrupoCodigoBensDireitos } from "@/lib/ir/motores/bens-direitos";
 import QuestionarioIR from "./QuestionarioIR";
 import BensDireitosView from "./BensDireitosView";
+import DashboardIRView from "./DashboardIRView";
 
 const ABAS = [
+  { id: "dashboard", label: "Dashboard" },
   { id: "relatorio", label: "Relatório" },
   { id: "bens_direitos", label: "Bens e Direitos" },
 ] as const;
@@ -87,14 +91,17 @@ export default function ImpostoRendaView({
   declaracaoComPerfilInicial,
   bensInicial,
   tabelaGrupos,
+  dashboardInicial,
 }: {
   relatorioInicial: RelatorioIR;
   declaracaoComPerfilInicial: DeclaracaoComPerfil | null;
   bensInicial: BensDireitosUI;
   tabelaGrupos: GrupoCodigoBensDireitos[] | null;
+  dashboardInicial: DashboardUI;
 }) {
-  const [aba, setAba] = useState<AbaId>("relatorio");
+  const [aba, setAba] = useState<AbaId>("dashboard");
   const [relatorio, setRelatorio] = useState(relatorioInicial);
+  const [dashboard, setDashboard] = useState(dashboardInicial);
   const [carregando, setCarregando] = useState(false);
   const [declaracaoComPerfil, setDeclaracaoComPerfil] = useState(declaracaoComPerfilInicial);
   const [mostrarQuestionario, setMostrarQuestionario] = useState(
@@ -103,8 +110,9 @@ export default function ImpostoRendaView({
 
   const trocarAno = async (ano: number) => {
     setCarregando(true);
-    const novo = await obterRelatorioIR(ano);
-    setRelatorio(novo);
+    const [novoRelatorio, novoDashboard] = await Promise.all([obterRelatorioIR(ano), obterDashboardIR(ano)]);
+    setRelatorio(novoRelatorio);
+    setDashboard(novoDashboard);
     setCarregando(false);
   };
 
@@ -162,6 +170,8 @@ export default function ImpostoRendaView({
           </button>
         ))}
       </div>
+
+      {aba === "dashboard" && <DashboardIRView dashboard={dashboard} declaracaoComPerfil={declaracaoComPerfil} />}
 
       {aba === "bens_direitos" && (
         <BensDireitosView
