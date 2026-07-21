@@ -1729,3 +1729,60 @@ from (
   from public.alocacao_setores
 ) sub
 where s.id = sub.id;
+
+-- =====================================================================
+-- 27. Empresas — cadastro do "cartão de visita" (CNPJ/nome/logo/segmento
+--     oficial) por trás de Ações/FIIs/ETF Brasil e ações/ETF/REIT
+--     internacionais (ver docs/MAPA-DE-DADOS.md §8.56). Tabela SEPARADA de
+--     `ativos` (em vez de colunas soltas nela) porque dois ativos podem ser
+--     da MESMA empresa/fundo (ex. PETR3 e PETR4 são a mesma Petrobras) — uma
+--     tabela `empresas` com `ativos.empresa_id` apontando pra ela garante
+--     que esse dado cadastral more em UM lugar só, nunca duplicado entre as
+--     duas linhas de `ativos` (mesmo princípio de fonte única do §3).
+--
+--     `chave_externa` é o identificador natural usado tanto pra dedupe
+--     (dois ativos com a mesma chave reaproveitam o mesmo registro) quanto
+--     pra evitar rebuscar a mesma empresa via API toda hora: CNPJ pra
+--     empresas nacionais (sempre disponível via brapi.dev pra Ações/FIIs/
+--     ETF B3); pra internacionais (sem CNPJ) usa o próprio ticker limpo
+--     (maiúsculo, sem sufixo de bolsa) como fallback — pior que CNPJ (duas
+--     ações do mesmo emissor em bolsas diferentes NÃO dedupam), mas simples
+--     e correto pro caso comum (1 ticker = 1 empresa estrangeira).
+--
+--     Todos os campos de dado cadastral são nullable e livremente
+--     editáveis à mão — a API (brapi.dev/Yahoo) só popula um ponto de
+--     partida; ver `origem_dados` pra saber se o valor atual veio de busca
+--     automática ou foi sobrescrito manualmente (mesmo espírito de
+--     `ativos.preco_fonte`).
+-- =====================================================================
+create table if not exists public.empresas (
+  id                uuid primary key default gen_random_uuid(),
+  profile_id        uuid not null references public.profiles (id) on delete cascade,
+  chave_externa     text not null,
+  cnpj              text,
+  razao_social      text,
+  nome_fantasia     text,
+  logo_url          text,
+  segmento          text,
+  descricao         text,
+  origem_dados      text not null default 'manual'
+    check (origem_dados in ('manual', 'brapi', 'yahoo')),
+  atualizado_em     timestamptz,
+  created_at        timestamptz not null default now(),
+  unique (profile_id, chave_externa)
+);
+
+comment on table public.empresas is 'Cadastro do "cartão de visita" de empresas/fundos por trás de um ticker (CNPJ, nome, logo, segmento) — fase 4 do card de empresa (§8.56). Separada de `ativos` pra permitir que ON/PN do mesmo emissor (ou dois FIIs da mesma gestora) compartilhem o mesmo registro, sem duplicar dado cadastral.';
+comment on column public.empresas.chave_externa is 'CNPJ (nacional) ou ticker limpo em maiúsculo (internacional, sem CNPJ) — usado tanto pra dedupe entre ativos quanto como chave de busca da API.';
+comment on column public.empresas.origem_dados is 'De onde veio o valor atual dos campos cadastrais: brapi (B3, automático), yahoo (internacional, automático) ou manual (usuário editou/preencheu à mão).';
+
+create index if not exists idx_empresas_profile_id on public.empresas (profile_id);
+
+alter table public.empresas enable row level security;
+
+drop policy if exists "empresas_all_own" on public.empresas;
+create policy "empresas_all_own" on public.empresas
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+alter table public.ativos add column if not exists empresa_id uuid references public.empresas (id) on delete set null;
+create index if not exists idx_ativos_empresa_id on public.ativos (empresa_id);

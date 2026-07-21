@@ -97,6 +97,32 @@ export type PosicaoGrupo = {
 };
 
 /**
+ * Mesma forma de `PosicaoGrupo`, mas agrupado pela árvore Macro › Classe ›
+ * Setor da Alocação (fase 4 do card de empresa/fonte única, §8.56) em vez da
+ * taxonomia fixa por tipo de instrumento (`GrupoPosicao`). `chave` é
+ * `${macroId}:${classeId}:${setorId}` (ou o literal "nao-classificado" pra
+ * ativos sem `setor_id`, mesmo bucket usado na Alocação fase 6, §8.55) —
+ * string genérica em vez de enum porque, ao contrário de `GrupoPosicao`
+ * (fixo, conhecido em tempo de compilação), os grupos aqui são dinâmicos
+ * (dependem de quantos Macros/Classes/Setores o usuário cadastrou).
+ */
+export type PosicaoGrupoAlocacao = {
+  chave: string;
+  label: string;
+  ativos: PosicaoAtivo[];
+  patrimonioAtual: number;
+  pctNaCarteira: number;
+  variacaoHojeValor: number;
+  variacaoHojePct: number | null;
+  variacaoTotalValor: number;
+  variacaoTotalPct: number | null;
+  semPrecoCount: number;
+};
+
+/** Chave reservada do bucket "Não classificado" — mesmo conceito da Alocação fase 6 (§8.55), aqui reaproveitado pra agrupar a Posição. */
+export const NAO_CLASSIFICADO_CHAVE = "nao-classificado";
+
+/**
  * Ativo que já teve aporte mas está com quantidade zerada hoje (sob o filtro
  * de corretora aplicado, se houver) — "participou da carteira e saiu por
  * completo". Ver docs/MAPA-DE-DADOS.md §8.25. `dividendosRecebidos` é a
@@ -138,6 +164,8 @@ export type PosicaoConsolidada = {
   ativosSemPrecoCount: number;
   /** Ordenado por última venda mais recente primeiro — ver §8.25. */
   ativosEncerrados: AtivoEncerrado[];
+  /** Mesmos ativos de `grupos`, reagrupados por Alocação (Macro›Classe›Setor) — ver §8.56. */
+  gruposPorAlocacao: PosicaoGrupoAlocacao[];
 };
 
 /**
@@ -240,13 +268,16 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     variacaoTotalPct: null,
     ativosSemPrecoCount: 0,
     ativosEncerrados: [],
+    gruposPorAlocacao: [],
   };
   if (!user) return vazio;
 
   const [ativosRes, transacoesRes, corretorasRes, proventosRes] = await Promise.all([
     supabase
       .from("ativos")
-      .select("id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual, preco_atualizado_em")
+      .select(
+        "id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual, preco_atualizado_em, setor_id, setor:alocacao_setores(id, nome, ordem, classe:alocacao_classes(id, nome, ordem, macro:alocacao_macros(id, nome, ordem)))"
+      )
       .eq("profile_id", user.id),
     supabase
       .from("transacoes")
@@ -276,6 +307,41 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
   const ativos = ativosRes.data ?? [];
   const todasTransacoes = transacoesRes.data ?? [];
   const corretoras = corretorasRes.data ?? [];
+
+  // Classificação Macro›Classe›Setor de cada ativo (fase 4, §8.56) — mesma
+  // fonte única já usada pela Alocação (`ativos.setor_id`), só relida aqui
+  // pra reagrupar a Posição sem duplicar a decisão de "onde vive a
+  // classificação" (ver §3 do mapa: single source via setor_id). `ordemSort`
+  // reaproveita a coluna `ordem` persistida na fase 5 da Alocação (§8.54)
+  // pra exibir os grupos na MESMA ordem em que aparecem lá — "Não
+  // classificado" sempre por último, mesmo bucket runtime da fase 6 (§8.55).
+  type InfoClassificacao = { chave: string; label: string; ordemSort: [number, number, number] };
+  const classificacaoPorAtivo = new Map<string, InfoClassificacao>();
+  for (const ativo of ativos) {
+    const setorRaw = (ativo as { setor?: unknown }).setor;
+    const setor = Array.isArray(setorRaw) ? setorRaw[0] : setorRaw;
+    const classeRaw = setor ? (setor as { classe?: unknown }).classe : null;
+    const classe = Array.isArray(classeRaw) ? classeRaw[0] : classeRaw;
+    const macroRaw = classe ? (classe as { macro?: unknown }).macro : null;
+    const macro = Array.isArray(macroRaw) ? macroRaw[0] : macroRaw;
+
+    if (setor && classe && macro) {
+      const s = setor as { id: string; nome: string; ordem: number };
+      const c = classe as { id: string; nome: string; ordem: number };
+      const m = macro as { id: string; nome: string; ordem: number };
+      classificacaoPorAtivo.set(ativo.id, {
+        chave: `${m.id}:${c.id}:${s.id}`,
+        label: `${m.nome} › ${c.nome} › ${s.nome}`,
+        ordemSort: [m.ordem, c.ordem, s.ordem],
+      });
+    } else {
+      classificacaoPorAtivo.set(ativo.id, {
+        chave: NAO_CLASSIFICADO_CHAVE,
+        label: "Não classificado",
+        ordemSort: [Infinity, Infinity, Infinity],
+      });
+    }
+  }
 
   const dividendosPorAtivo = new Map<string, number>();
   for (const p of proventosRes.data ?? []) {
@@ -509,6 +575,89 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     };
   });
 
+  // Mesma agregação acima (patrimônio/variação hoje/variação total/sem
+  // preço), só que reagrupando por Alocação (Macro›Classe›Setor) em vez de
+  // tipo de instrumento — fase 4 do card de empresa/fonte única (§8.56).
+  // Deliberadamente um bloco PARALELO ao de cima (não uma função
+  // compartilhada refatorada): o agrupamento por tipo já teve vários bugs
+  // sutis corrigidos (§8.26/8.27/8.28) e é lido pelo CSV/Ativos encerrados;
+  // manter o bloco original intocado e duplicar a mesma matemática aqui,
+  // com sua própria cópia de `PosicaoAtivo` (pctDentroDaClasse recalculado
+  // pra este agrupamento, sem sobrescrever o objeto usado pelo bloco de
+  // cima), é o jeito mais seguro de adicionar isso sem arriscar regressão
+  // num cálculo já sensível.
+  const infoPorChave = new Map<string, InfoClassificacao>();
+  for (const info of classificacaoPorAtivo.values()) infoPorChave.set(info.chave, info);
+
+  const porAlocacao = new Map<string, PosicaoAtivo[]>();
+  for (const a of ativosCalculados) {
+    const info = classificacaoPorAtivo.get(a.ativoId)!;
+    const lista = porAlocacao.get(info.chave) ?? [];
+    lista.push(a);
+    porAlocacao.set(info.chave, lista);
+  }
+
+  const chavesAlocacaoOrdenadas = [...porAlocacao.keys()].sort((c1, c2) => {
+    const o1 = infoPorChave.get(c1)!.ordemSort;
+    const o2 = infoPorChave.get(c2)!.ordemSort;
+    for (let i = 0; i < 3; i++) {
+      if (o1[i] !== o2[i]) return o1[i] - o2[i];
+    }
+    return 0;
+  });
+
+  const gruposPorAlocacao: PosicaoGrupoAlocacao[] = chavesAlocacaoOrdenadas.map((chave) => {
+    const ativosDoGrupoOriginais = porAlocacao.get(chave)!;
+    const infoGrupo = infoPorChave.get(chave)!;
+    const patrimonioGrupo = ativosDoGrupoOriginais.reduce((s, a) => s + a.patrimonioAtual, 0);
+
+    // Cópia rasa de cada ativo com `pctDentroDaClasse` recalculado pra este
+    // agrupamento — não reutiliza o mesmo objeto do bloco `grupos` acima
+    // (que já tem seu próprio pctDentroDaClasse relativo ao grupo por tipo).
+    const ativosDoGrupo = ativosDoGrupoOriginais
+      .map((a) => ({
+        ...a,
+        pctDentroDaClasse: patrimonioGrupo > 0 ? (a.patrimonioAtual / patrimonioGrupo) * 100 : 0,
+      }))
+      .sort((a, b) => b.patrimonioAtual - a.patrimonioAtual);
+
+    let somaHojeAlocacao = 0;
+    let somaOntemAlocacao = 0;
+    for (const a of ativosDoGrupoOriginais) {
+      if (a.variacaoHojeValor !== null) {
+        somaHojeAlocacao += a.variacaoHojeValor;
+        somaOntemAlocacao += a.patrimonioAtual - a.variacaoHojeValor;
+      }
+    }
+    const variacaoHojePctAlocacao = somaOntemAlocacao > 0 ? (somaHojeAlocacao / somaOntemAlocacao) * 100 : null;
+
+    const somaVendidoLiquidoAlocacao = posicoesBase
+      .filter((p) => ativosDoGrupoOriginais.some((a) => a.ativoId === p.ativoId))
+      .reduce((s, p) => s + p.totalVendidoLiquido, 0);
+    const somaInvestidoBrutoAlocacao = posicoesBase
+      .filter((p) => ativosDoGrupoOriginais.some((a) => a.ativoId === p.ativoId))
+      .reduce((s, p) => s + p.totalInvestidoBruto, 0);
+    const variacaoTotalValorAlocacao =
+      somaInvestidoBrutoAlocacao > 0 ? patrimonioGrupo + somaVendidoLiquidoAlocacao - somaInvestidoBrutoAlocacao : 0;
+    const variacaoTotalPctAlocacao =
+      somaInvestidoBrutoAlocacao > 0
+        ? ((patrimonioGrupo + somaVendidoLiquidoAlocacao) / somaInvestidoBrutoAlocacao - 1) * 100
+        : null;
+
+    return {
+      chave,
+      label: infoGrupo.label,
+      ativos: ativosDoGrupo,
+      patrimonioAtual: patrimonioGrupo,
+      pctNaCarteira: totalCarteira > 0 ? (patrimonioGrupo / totalCarteira) * 100 : 0,
+      variacaoHojeValor: somaHojeAlocacao,
+      variacaoHojePct: variacaoHojePctAlocacao,
+      variacaoTotalValor: variacaoTotalValorAlocacao,
+      variacaoTotalPct: variacaoTotalPctAlocacao,
+      semPrecoCount: ativosDoGrupoOriginais.filter((a) => !a.precoDefinido).length,
+    };
+  });
+
   const totalHojeValor = grupos.reduce((s, g) => s + g.variacaoHojeValor, 0);
   const totalOntem = ativosCalculados.reduce(
     (s, a) => (a.variacaoHojeValor !== null ? s + (a.patrimonioAtual - a.variacaoHojeValor) : s),
@@ -562,5 +711,6 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     variacaoTotalPct: totalVariacaoTotalPct,
     ativosSemPrecoCount: posicoesBase.filter((p) => !p.precoDefinido).length,
     ativosEncerrados,
+    gruposPorAlocacao,
   };
 }

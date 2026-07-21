@@ -1,11 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { obterPosicaoConsolidada, type PosicaoAtivo, type PosicaoConsolidada, type AtivoEncerrado } from "@/lib/carteira/posicao";
 import { LABEL_GRUPO, type GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
 import { atualizarTodasCotacoesAgora } from "@/lib/ativos/actions";
 import { useToast } from "@/components/ToastProvider";
+
+/**
+ * Fase 4 do card de empresa/fonte única (§8.56): a Posição pode agrupar por
+ * tipo de instrumento (taxonomia fixa `GrupoPosicao`, comportamento
+ * original) ou por Alocação (Macro›Classe›Setor, incluindo "Não
+ * classificado"). `GrupoExibicao` é a forma comum que a UI renderiza,
+ * independente de qual das duas fontes (`posicao.grupos` ou
+ * `posicao.gruposPorAlocacao`) está ativa — só a `chave` muda de tipo
+ * (enum fixo vs. string dinâmica), por isso vira string aqui também.
+ */
+type ModoAgrupamento = "tipo" | "alocacao";
+
+type GrupoExibicao = {
+  chave: string;
+  label: string;
+  ativos: PosicaoAtivo[];
+  patrimonioAtual: number;
+  pctNaCarteira: number;
+  variacaoHojeValor: number;
+  variacaoHojePct: number | null;
+  variacaoTotalValor: number;
+  variacaoTotalPct: number | null;
+  semPrecoCount: number;
+};
 
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -172,12 +196,25 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
   const [corretoraFiltro, setCorretoraFiltro] = useState<string>("");
   const [carregando, setCarregando] = useState(false);
   const [atualizandoCotacoes, setAtualizandoCotacoes] = useState(false);
-  const [colapsados, setColapsados] = useState<Set<GrupoPosicao>>(new Set());
+  const [modoAgrupamento, setModoAgrupamento] = useState<ModoAgrupamento>("tipo");
+  const [colapsados, setColapsados] = useState<Set<string>>(new Set());
   const [encerradosColapsado, setEncerradosColapsado] = useState(false);
-  const [sortPorGrupo, setSortPorGrupo] = useState<Partial<Record<GrupoPosicao, SortState>>>({});
-  const [paginaPorGrupo, setPaginaPorGrupo] = useState<Partial<Record<GrupoPosicao, number>>>({});
-  const [linhasPorGrupo, setLinhasPorGrupo] = useState<Partial<Record<GrupoPosicao, number>>>({});
+  const [sortPorGrupo, setSortPorGrupo] = useState<Record<string, SortState>>({});
+  const [paginaPorGrupo, setPaginaPorGrupo] = useState<Record<string, number>>({});
+  const [linhasPorGrupo, setLinhasPorGrupo] = useState<Record<string, number>>({});
   const toast = useToast();
+
+  // Não reseta os mapas de estado (colapsados/sort/página) ao trocar de modo
+  // — as chaves de "por tipo" (GrupoPosicao) e "por Alocação" (composta,
+  // ver posicao.ts) nunca colidem, então preferências deixadas num modo
+  // simplesmente ficam paradas (e corretas) quando o usuário volta pra ele.
+  const gruposExibidos: GrupoExibicao[] = useMemo(
+    () =>
+      modoAgrupamento === "tipo"
+        ? posicao.grupos.map((g) => ({ chave: g.grupo, ...g }))
+        : posicao.gruposPorAlocacao,
+    [modoAgrupamento, posicao]
+  );
 
   const aplicarFiltroCorretora = async (corretoraId: string) => {
     setCorretoraFiltro(corretoraId);
@@ -220,7 +257,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
     }
   };
 
-  const toggleGrupo = (grupo: GrupoPosicao) => {
+  const toggleGrupo = (grupo: string) => {
     setColapsados((atual) => {
       const novo = new Set(atual);
       if (novo.has(grupo)) novo.delete(grupo);
@@ -229,7 +266,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
     });
   };
 
-  const alternarSort = (grupo: GrupoPosicao, key: SortKey) => {
+  const alternarSort = (grupo: string, key: SortKey) => {
     setSortPorGrupo((atual) => {
       const estadoAtual = atual[grupo];
       const novoDir: "asc" | "desc" = estadoAtual?.key === key && estadoAtual.dir === "asc" ? "desc" : "asc";
@@ -281,12 +318,34 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
         atualizandoCotacoes={atualizandoCotacoes}
       />
 
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-faint">Agrupar:</span>
+        <div className="inline-flex rounded-md border border-border overflow-hidden">
+          <button
+            onClick={() => setModoAgrupamento("tipo")}
+            className={`px-3 py-1.5 transition-colors ${
+              modoAgrupamento === "tipo" ? "bg-accent/15 text-accent" : "text-muted hover:bg-surface-2"
+            }`}
+          >
+            Por tipo de ativo
+          </button>
+          <button
+            onClick={() => setModoAgrupamento("alocacao")}
+            className={`px-3 py-1.5 border-l border-border transition-colors ${
+              modoAgrupamento === "alocacao" ? "bg-accent/15 text-accent" : "text-muted hover:bg-surface-2"
+            }`}
+          >
+            Por Alocação
+          </button>
+        </div>
+      </div>
+
       <div className="space-y-3">
-        {posicao.grupos.map((grupo) => {
-          const colapsado = colapsados.has(grupo.grupo);
-          const sort = sortPorGrupo[grupo.grupo] ?? null;
-          const pagina = paginaPorGrupo[grupo.grupo] ?? 1;
-          const linhasPagina = linhasPorGrupo[grupo.grupo] ?? 10;
+        {gruposExibidos.map((grupo) => {
+          const colapsado = colapsados.has(grupo.chave);
+          const sort = sortPorGrupo[grupo.chave] ?? null;
+          const pagina = paginaPorGrupo[grupo.chave] ?? 1;
+          const linhasPagina = linhasPorGrupo[grupo.chave] ?? 10;
 
           const ativosOrdenados = sort
             ? [...grupo.ativos].sort((a, b) => {
@@ -303,9 +362,9 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
           const ativosPagina = ativosOrdenados.slice(inicio, inicio + linhasPagina);
 
           return (
-            <div key={grupo.grupo} className="card overflow-hidden">
+            <div key={grupo.chave} className="card overflow-hidden">
               <button
-                onClick={() => toggleGrupo(grupo.grupo)}
+                onClick={() => toggleGrupo(grupo.chave)}
                 className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left"
               >
                 <div className="flex items-center gap-2">
@@ -351,16 +410,16 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                     <table className="w-full text-xs whitespace-nowrap">
                       <thead>
                         <tr className="text-faint text-left border-b border-t border-border">
-                          <ColunaOrdenavel label="Ativo" sortKey="ticker" sort={sort} onClick={() => alternarSort(grupo.grupo, "ticker")} />
-                          <ColunaOrdenavel label="Preço médio" sortKey="precoMedio" sort={sort} onClick={() => alternarSort(grupo.grupo, "precoMedio")} align="right" />
+                          <ColunaOrdenavel label="Ativo" sortKey="ticker" sort={sort} onClick={() => alternarSort(grupo.chave, "ticker")} />
+                          <ColunaOrdenavel label="Preço médio" sortKey="precoMedio" sort={sort} onClick={() => alternarSort(grupo.chave, "precoMedio")} align="right" />
                           <th className="py-2 pr-3 text-right" title="Custo de aquisição líquido de proventos já recebidos (dividendo/JCP/rendimento/aluguel), dividido pela quantidade atual — indicador informal, não usado no IR.">
                             Preço médio ajustado
                           </th>
-                          <ColunaOrdenavel label="Preço atual" sortKey="precoAtual" sort={sort} onClick={() => alternarSort(grupo.grupo, "precoAtual")} align="right" />
-                          <ColunaOrdenavel label="Diferença" sortKey="diferenca" sort={sort} onClick={() => alternarSort(grupo.grupo, "diferenca")} align="right" />
-                          <ColunaOrdenavel label="Quantidade" sortKey="quantidade" sort={sort} onClick={() => alternarSort(grupo.grupo, "quantidade")} align="right" />
-                          <ColunaOrdenavel label="Patrimônio atual" sortKey="patrimonioAtual" sort={sort} onClick={() => alternarSort(grupo.grupo, "patrimonioAtual")} align="right" />
-                          <ColunaOrdenavel label="Variação hoje" sortKey="variacaoHoje" sort={sort} onClick={() => alternarSort(grupo.grupo, "variacaoHoje")} align="right" />
+                          <ColunaOrdenavel label="Preço atual" sortKey="precoAtual" sort={sort} onClick={() => alternarSort(grupo.chave, "precoAtual")} align="right" />
+                          <ColunaOrdenavel label="Diferença" sortKey="diferenca" sort={sort} onClick={() => alternarSort(grupo.chave, "diferenca")} align="right" />
+                          <ColunaOrdenavel label="Quantidade" sortKey="quantidade" sort={sort} onClick={() => alternarSort(grupo.chave, "quantidade")} align="right" />
+                          <ColunaOrdenavel label="Patrimônio atual" sortKey="patrimonioAtual" sort={sort} onClick={() => alternarSort(grupo.chave, "patrimonioAtual")} align="right" />
+                          <ColunaOrdenavel label="Variação hoje" sortKey="variacaoHoje" sort={sort} onClick={() => alternarSort(grupo.chave, "variacaoHoje")} align="right" />
                           <th className="py-2 pr-3 text-right" title="Lucro/prejuízo já realizado em vendas parciais anteriores deste ativo (histórico completo). Entra na conta de Variação total ao lado.">
                             Lucro realizado
                           </th>
@@ -368,13 +427,13 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                             label="Variação total"
                             sortKey="variacaoTotal"
                             sort={sort}
-                            onClick={() => alternarSort(grupo.grupo, "variacaoTotal")}
+                            onClick={() => alternarSort(grupo.chave, "variacaoTotal")}
                             align="right"
                             title="Patrimônio atual + Lucro realizado (coluna ao lado) − total investido bruto (todo aporte já feito neste ativo, incluindo cotas já vendidas no passado) — retorno acumulado desde a primeira compra."
                           />
                           <th className="py-2 pr-3 text-right">Dividendos</th>
-                          <ColunaOrdenavel label="% classe" sortKey="pctDentroDaClasse" sort={sort} onClick={() => alternarSort(grupo.grupo, "pctDentroDaClasse")} align="right" />
-                          <ColunaOrdenavel label="% carteira" sortKey="pctNaCarteira" sort={sort} onClick={() => alternarSort(grupo.grupo, "pctNaCarteira")} align="right" />
+                          <ColunaOrdenavel label="% classe" sortKey="pctDentroDaClasse" sort={sort} onClick={() => alternarSort(grupo.chave, "pctDentroDaClasse")} align="right" />
+                          <ColunaOrdenavel label="% carteira" sortKey="pctNaCarteira" sort={sort} onClick={() => alternarSort(grupo.chave, "pctNaCarteira")} align="right" />
                           <th className="py-2 pr-4"></th>
                         </tr>
                       </thead>
@@ -443,8 +502,8 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                       <select
                         value={linhasPagina}
                         onChange={(e) => {
-                          setLinhasPorGrupo((atual) => ({ ...atual, [grupo.grupo]: Number(e.target.value) }));
-                          setPaginaPorGrupo((atual) => ({ ...atual, [grupo.grupo]: 1 }));
+                          setLinhasPorGrupo((atual) => ({ ...atual, [grupo.chave]: Number(e.target.value) }));
+                          setPaginaPorGrupo((atual) => ({ ...atual, [grupo.chave]: 1 }));
                         }}
                         className="input w-auto text-xs py-0.5"
                       >
@@ -460,7 +519,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                       <div className="flex items-center gap-2">
                         <button
                           disabled={paginaAtual <= 1}
-                          onClick={() => setPaginaPorGrupo((atual) => ({ ...atual, [grupo.grupo]: paginaAtual - 1 }))}
+                          onClick={() => setPaginaPorGrupo((atual) => ({ ...atual, [grupo.chave]: paginaAtual - 1 }))}
                           className="hover:text-ink disabled:opacity-30"
                         >
                           ← Anterior
@@ -470,7 +529,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                         </span>
                         <button
                           disabled={paginaAtual >= totalPaginas}
-                          onClick={() => setPaginaPorGrupo((atual) => ({ ...atual, [grupo.grupo]: paginaAtual + 1 }))}
+                          onClick={() => setPaginaPorGrupo((atual) => ({ ...atual, [grupo.chave]: paginaAtual + 1 }))}
                           className="hover:text-ink disabled:opacity-30"
                         >
                           Próxima →

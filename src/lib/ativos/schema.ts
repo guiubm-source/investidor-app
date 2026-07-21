@@ -70,6 +70,23 @@ export const ativoSchema = z.object({
 });
 export type AtivoForm = z.infer<typeof ativoSchema>;
 
+/**
+ * Edição manual do "cartão de visita" da empresa (ver docs/MAPA-DE-DADOS.md
+ * §8.56) — sobrepõe o que veio automático de brapi.dev/Yahoo (ou preenche
+ * do zero se a busca automática falhou/não achou). Todos os campos são
+ * opcionais: o usuário pode preencher só o que quiser, sem bloquear o
+ * salvamento por um campo em branco.
+ */
+export const empresaSchema = z.object({
+  cnpj: z.string().trim().optional(),
+  razao_social: z.string().trim().optional(),
+  nome_fantasia: z.string().trim().optional(),
+  logo_url: z.union([z.string().trim().url("URL inválida"), z.literal("")]).optional(),
+  segmento: z.string().trim().optional(),
+  descricao: z.string().trim().optional(),
+});
+export type EmpresaForm = z.infer<typeof empresaSchema>;
+
 export const classificacaoSchema = z.object({
   setor_id: z.string().uuid("Selecione um setor"),
   peso_alvo: z.number().min(0, "Deve ser entre 0 e 100").max(100, "Deve ser entre 0 e 100"),

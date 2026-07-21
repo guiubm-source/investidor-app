@@ -6971,6 +6971,120 @@ some do "Não classificado" → reordenar → mover Classe entre Macros →
 excluir com "mover filhos" → usar/distribuir saldo restante — tudo isso em
 telas desktop e mobile.
 
+### 8.56 Cartão de visita da empresa (CNPJ/nome/logo/segmento) + Posição agrupada por Alocação (2026-07-21)
+
+Pedido do Guilherme: reforçar Ativos como fonte única de identidade/
+classificação, com um card "cartão de visita" de empresa na página do Ativo
+(CNPJ, dados cadastrais, logo) e as demais abas comparando peso real
+(Carteira) com peso-alvo (Alocação) a partir dela. Investigação antes de
+implementar (obrigatória pelo protocolo, ver seção 1) encontrou que grande
+parte disso já existia: `ativos.setor_id` já é o único lugar onde o vínculo
+Macro/Classe/Setor mora (só 6 arquivos no projeto tocam nesse campo, todos
+dentro do domínio Ativos/Alocação) e a comparação peso-alvo vs. peso-real já
+aparece no card "Classificação" da página do Ativo desde a fase 3 da
+Alocação. O que realmente faltava: nenhum dado cadastral de empresa existia
+em lugar nenhum do schema, e a sub-aba Posição usa uma segunda taxonomia
+(`grupo-classificacao.ts`, baldes fixos por tipo de instrumento) paralela à
+árvore da Alocação — decisões tomadas com o Guilherme (uma pergunta de cada
+vez): (1) escopo do card — Ações/FIIs/ETF Brasil + Internacional (ação/ETF/
+REIT exterior), renda fixa/fundo/cripto/outro ficam de fora por não terem
+"empresa" no sentido tradicional; (2) preenchimento — automático (brapi.dev
+pra B3, Yahoo Finance pra internacional) com edição manual por cima; (3)
+modelo de dados — tabela `empresas` separada (não colunas em `ativos`),
+pra PETR3/PETR4 (ou dois FIIs da mesma gestora) compartilharem o mesmo
+registro sem duplicar CNPJ/logo/segmento; (4) a segunda taxonomia da
+Posição entra no escopo desta rodada — toggle "Por tipo de ativo" / "Por
+Alocação", não substituição.
+
+**Schema (`supabase/schema.sql` seção 27).** Tabela nova `empresas`
+(`profile_id`, `chave_externa` único por perfil, `cnpj`, `razao_social`,
+`nome_fantasia`, `logo_url`, `segmento`, `descricao`, `origem_dados`
+`manual`/`brapi`/`yahoo`, `atualizado_em`) + `ativos.empresa_id` (FK,
+`on delete set null`). `chave_externa` é CNPJ quando disponível (nacional)
+ou `TK:{ticker}` como fallback (internacional, que nunca tem CNPJ, ou
+nacional sem CNPJ encontrado) — usada tanto pra dedupe (upsert por
+`profile_id, chave_externa`) quanto como identificador natural do registro.
+
+**Motor de busca (`lib/ativos/empresas.ts`, novo arquivo puro — sem
+`"use server"`, mesmo padrão de `yahoo-finance.ts`).** `TIPOS_CARTAO_EMPRESA`
+= `["acao","fii","etf","internacional"]`. `buscarDadosEmpresaBrapi(ticker)`
+chama `brapi.dev/api/quote/{ticker}?modules=summaryProfile` (token opcional
+via env `BRAPI_TOKEN` — sem token só cobre os 4 tickers de teste da API:
+PETR4/MGLU3/VALE3/ITUB4; o Guilherme vai criar uma conta gratuita em
+brapi.dev/dashboard e passar o token pra cobertura completa — decisão
+explícita, eu não crio contas em nome dele). `buscarDadosEmpresaYahoo(ticker)`
+chama o mesmo endpoint não-oficial já usado pra cotação
+(`quoteSummary?modules=assetProfile,quoteType`), sem CNPJ (empresa
+estrangeira não tem), com logo por melhor esforço via Clearbit a partir do
+domínio do site da empresa (`assetProfile.website`) — aproximação, não
+fonte oficial, documentado no código. As duas funções nunca lançam, sempre
+devolvem `{ erro }` amigável (mesmo padrão de `buscarCotacaoYahoo`).
+
+**Server actions (`lib/ativos/actions.ts`).** `buscarDadosCadastraisAtivo(id)`
+— botão "Atualizar dados cadastrais"/"Buscar automaticamente": escolhe
+brapi ou Yahoo pelo tipo do ativo, faz upsert em `empresas` e vincula
+`ativos.empresa_id`. `atualizarEmpresaManual(ativoId, dados)` — edição
+manual: atualiza o registro existente (se `empresa_id` já setado) ou cria
+um novo com `chave_externa` derivada do ticker (se o ativo nunca teve busca
+automática). `EmpresaView` novo tipo, `AtivoResumo.empresa: EmpresaView |
+null` adicionado (populado via join `empresas` na mesma query já existente
+de `obterAtivosComPosicao` — nenhuma query nova).
+
+**UI (`AtivoDetalheView.tsx`).** Novo card "Empresa" logo abaixo do
+cabeçalho de identidade do ativo (só renderizado pra tipos em
+`TIPOS_CARTAO_EMPRESA`), com logo (fallback: círculo com a inicial do nome
+se não tiver logo ou a imagem falhar ao carregar), nome fantasia/razão
+social, CNPJ (ou aviso "Empresa estrangeira" pra internacional), segmento,
+descrição truncada em 3 linhas, "atualizado há X · fonte: Y". Botões
+"Atualizar dados cadastrais"/"Buscar automaticamente" (chama a busca
+automática) e "Editar"/"Preencher manualmente" (abre `FormEmpresa`, edição
+livre de todos os campos). Deliberadamente um card SEPARADO do
+"Classificação" (Macro/Classe/Setor) logo abaixo — são conceitos
+diferentes (identidade da empresa vs. meta de alocação), cada um com sua
+própria fonte única.
+
+**Posição agrupada por Alocação (`lib/carteira/posicao.ts` +
+`PosicaoView.tsx`).** `obterPosicaoConsolidada` ganhou um segundo campo
+`gruposPorAlocacao: PosicaoGrupoAlocacao[]`, calculado num bloco PARALELO
+ao agrupamento por tipo já existente (`grupos`) — mesma matemática
+(patrimônio, variação hoje/total, sem-preço), só que agrupando por
+`${macroId}:${classeId}:${setorId}` (ou o bucket "Não classificado", igual
+ao runtime da Alocação fase 6, §8.55) em vez de `GrupoPosicao`. Decisão
+deliberada de duplicar o bloco de agregação em vez de refatorar pra uma
+função compartilhada: o agrupamento por tipo já teve 3 bugs sutis
+corrigidos historicamente (§8.26/8.27/8.28) e alimenta o CSV/Ativos
+encerrados — mexer nele pra generalizar arriscaria regressão num cálculo
+sensível, por um ganho de DRY que não compensa aqui. A ordem dos grupos por
+Alocação reaproveita a coluna `ordem` persistida na Alocação fase 5
+(§8.54), pra aparecer na Posição na MESMA ordem em que aparece lá.
+`PosicaoView.tsx` ganhou um toggle "Por tipo de ativo" / "Por Alocação"
+acima da lista de grupos; os mapas de estado (colapsado/ordenação/página)
+generalizaram a chave de `GrupoPosicao` (enum fixo) pra `string` (aceita
+tanto o enum quanto a chave composta da Alocação) — chaves dos dois modos
+nunca colidem, então não precisa resetar nada ao trocar de modo. CSV
+continua exportando só pela visão "por tipo" (não segue o toggle) —
+simplificação deliberada, não pedida explicitamente.
+
+**Verificação:** `tsc --noEmit` sem erros. Suíte Vitest completa (58
+testes, 10 arquivos — motores fiscais do IR) rodada e passando, sem
+nenhuma quebrada por esta mudança. Arquivos conferidos via `wc -l -c` +
+contagem de bytes nulos (0 em todos): `supabase/schema.sql` (1788 linhas),
+`lib/ativos/actions.ts` (1153), `lib/ativos/schema.ts` (152),
+`lib/ativos/empresas.ts` (128, novo), `lib/carteira/posicao.ts` (716),
+`PosicaoView.tsx` (757), `AtivoDetalheView.tsx` (1972).
+
+**Pendência real antes de usar de verdade:** o Guilherme ainda precisa (a)
+rodar `supabase/schema.sql` inteiro no SQL Editor do Supabase (tabela
+`empresas` + coluna `empresa_id`) e (b) criar a conta gratuita em
+brapi.dev/dashboard e me passar o token, que eu adiciono como variável de
+ambiente `BRAPI_TOKEN` na Vercel — sem isso, a busca automática de
+Ações/FIIs/ETF Brasil só funciona pra 4 tickers de teste (PETR4/MGLU3/
+VALE3/ITUB4); a busca internacional (Yahoo) já funciona sem nenhum
+cadastro. Testes manuais recomendados depois disso: buscar automaticamente
+um ativo nacional e um internacional, editar manualmente um campo, conferir
+que PETR3 e PETR4 (se ambos existirem na carteira) compartilham a mesma
+empresa depois de buscar os dois, e alternar o toggle da Posição.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

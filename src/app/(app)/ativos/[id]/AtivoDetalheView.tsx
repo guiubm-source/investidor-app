@@ -8,6 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import {
   ativoSchema,
   classificacaoSchema,
+  empresaSchema,
   EXCHANGES_CRIPTO,
   precoAtualSchema,
   resultadoTrimestralSchema,
@@ -18,6 +19,7 @@ import {
   TIPOS_ATIVO,
   type AtivoForm,
   type ClassificacaoForm,
+  type EmpresaForm,
   type PrecoAtualForm,
   type ResultadoTrimestralForm,
   type SaldoAcionistasForm,
@@ -25,8 +27,10 @@ import {
 } from "@/lib/ativos/schema";
 import {
   atualizarCotacaoAgora,
+  atualizarEmpresaManual,
   atualizarPrecoAtual,
   atualizarSimboloTradingview,
+  buscarDadosCadastraisAtivo,
   classificarAtivo,
   editarAtivo,
   excluirAtivo,
@@ -39,9 +43,12 @@ import {
   type AtivoDetalhe,
   type ChecklistAtivoView,
   type ClasseOpcao,
+  type EmpresaView,
   type ResultadoTrimestralItem,
+  type TipoAtivo,
   type TransacaoItem,
 } from "@/lib/ativos/actions";
+import { TIPOS_CARTAO_EMPRESA } from "@/lib/ativos/empresas";
 import { transacaoSchema, TIPOS_TRANSACAO, type TransacaoForm } from "@/lib/carteira/schema";
 import { TIPOS_PROVENTO } from "@/lib/proventos/schema";
 import { criarTransacao, excluirTransacao, type Corretora } from "@/lib/carteira/actions";
@@ -295,6 +302,10 @@ export default function AtivoDetalheView({
           />
         )}
       </div>
+
+      {TIPOS_CARTAO_EMPRESA.includes(ativo.tipo) && (
+        <CartaoEmpresa ativoId={ativo.id} tipo={ativo.tipo} empresa={ativo.empresa} onAtualizado={atualizar} />
+      )}
 
       {temChecklist && (
         <div className="flex gap-1 border-b border-border overflow-x-auto">
@@ -1279,6 +1290,188 @@ function FormResultadoTrimestral({
 
 
       <div className="col-span-2 md:col-span-3 flex gap-2">
+        <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
+          Cancelar
+        </button>
+        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
+          {isSubmitting ? "Salvando..." : "Salvar"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cartão de visita da empresa (CNPJ/nome/logo/segmento) — ver
+// docs/MAPA-DE-DADOS.md §8.56. Só renderizado pra tipos elegíveis
+// (TIPOS_CARTAO_EMPRESA: Ações/FIIs/ETF Brasil + Internacional). Fica
+// separado do card "Classificação" (Macro/Classe/Setor) logo abaixo: este
+// aqui é identidade da EMPRESA por trás do ticker, aquele é a meta de
+// alocação — coisas diferentes, cada uma com sua fonte única.
+// ---------------------------------------------------------------------------
+function CartaoEmpresa({
+  ativoId,
+  tipo,
+  empresa,
+  onAtualizado,
+}: {
+  ativoId: string;
+  tipo: TipoAtivo;
+  empresa: EmpresaView | null;
+  onAtualizado: () => Promise<void>;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [buscando, setBuscando] = useState(false);
+  const [logoComErro, setLogoComErro] = useState(false);
+  const toast = useToast();
+
+  const nomeExibicao = empresa?.nomeFantasia || empresa?.razaoSocial;
+  const origemLabel =
+    empresa?.origemDados === "brapi" ? "brapi.dev" : empresa?.origemDados === "yahoo" ? "Yahoo Finance" : "manual";
+
+  const buscar = async () => {
+    setBuscando(true);
+    const resultado = await buscarDadosCadastraisAtivo(ativoId);
+    setBuscando(false);
+    if (resultado.error) {
+      toast.error(resultado.error);
+      return;
+    }
+    setLogoComErro(false);
+    await onAtualizado();
+    toast.success("Dados cadastrais atualizados.");
+  };
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-medium text-ink">Empresa</h2>
+        {!editando && (
+          <div className="flex gap-3">
+            <button disabled={buscando} onClick={buscar} className="text-xs text-accent hover:underline disabled:opacity-50">
+              {buscando ? "Buscando..." : empresa ? "Atualizar dados cadastrais" : "Buscar automaticamente"}
+            </button>
+            <button onClick={() => setEditando(true)} className="text-xs text-faint hover:text-ink">
+              {empresa ? "Editar" : "Preencher manualmente"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {editando ? (
+        <FormEmpresa
+          valoresIniciais={empresa}
+          onCancelar={() => setEditando(false)}
+          onSalvo={async (dados) => {
+            const resultado = await atualizarEmpresaManual(ativoId, dados);
+            if (resultado.error) throw new Error(resultado.error);
+            setLogoComErro(false);
+            await onAtualizado();
+            setEditando(false);
+            toast.success("Dados da empresa salvos.");
+          }}
+        />
+      ) : empresa ? (
+        <div className="flex items-start gap-3">
+          {empresa.logoUrl && !logoComErro ? (
+            // eslint-disable-next-line @next/next/no-img-element -- logo vem de domínio externo variável (brapi.dev/Clearbit), sem otimização do next/image.
+            <img
+              src={empresa.logoUrl}
+              alt={`Logo de ${nomeExibicao ?? "empresa"}`}
+              className="w-12 h-12 rounded-md object-contain bg-surface-2 border border-border shrink-0"
+              onError={() => setLogoComErro(true)}
+            />
+          ) : (
+            <div className="w-12 h-12 rounded-md bg-surface-2 border border-border shrink-0 flex items-center justify-center text-faint text-lg">
+              {(nomeExibicao ?? "?").charAt(0).toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="text-sm text-ink font-medium truncate">{nomeExibicao || "Nome não informado"}</p>
+            {empresa.razaoSocial && empresa.nomeFantasia && empresa.razaoSocial !== empresa.nomeFantasia && (
+              <p className="text-xs text-muted truncate">{empresa.razaoSocial}</p>
+            )}
+            <p className="text-xs text-faint mt-0.5">
+              {empresa.cnpj ? `CNPJ ${empresa.cnpj}` : tipo === "internacional" ? "Empresa estrangeira (sem CNPJ)" : "CNPJ não informado"}
+              {empresa.segmento && ` · ${empresa.segmento}`}
+            </p>
+            {empresa.descricao && <p className="text-xs text-muted mt-2 line-clamp-3">{empresa.descricao}</p>}
+            <p className="text-[10px] text-faint mt-2">
+              {formatarTempoRelativo(empresa.atualizadoEm)} · fonte: {origemLabel}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-faint">
+          Nenhum dado cadastral ainda — busque automaticamente ou preencha à mão.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FormEmpresa({
+  valoresIniciais,
+  onSalvo,
+  onCancelar,
+}: {
+  valoresIniciais: EmpresaView | null;
+  onSalvo: (dados: EmpresaForm) => void | Promise<void>;
+  onCancelar: () => void;
+}) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(empresaSchema),
+    defaultValues: {
+      cnpj: valoresIniciais?.cnpj ?? "",
+      razao_social: valoresIniciais?.razaoSocial ?? "",
+      nome_fantasia: valoresIniciais?.nomeFantasia ?? "",
+      logo_url: valoresIniciais?.logoUrl ?? "",
+      segmento: valoresIniciais?.segmento ?? "",
+      descricao: valoresIniciais?.descricao ?? "",
+    },
+  });
+
+  const toast = useToast();
+  const onSubmit = handleSubmit(async (data) => {
+    try {
+      await onSalvo(data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao salvar.");
+    }
+  });
+
+  return (
+    <form onSubmit={onSubmit} className="grid grid-cols-2 gap-3">
+      <div>
+        <label className="label">Razão social</label>
+        <input {...register("razao_social")} className="input" />
+      </div>
+      <div>
+        <label className="label">Nome fantasia</label>
+        <input {...register("nome_fantasia")} className="input" />
+      </div>
+      <div>
+        <label className="label">CNPJ</label>
+        <input {...register("cnpj")} className="input" placeholder="00.000.000/0000-00" />
+      </div>
+      <div>
+        <label className="label">Segmento</label>
+        <input {...register("segmento")} className="input" placeholder="Ex.: Financeiro" />
+      </div>
+      <div className="col-span-2">
+        <label className="label">URL do logo</label>
+        <input {...register("logo_url")} className="input" placeholder="https://..." />
+        {errors.logo_url?.message && <p className="field-error">{errors.logo_url.message}</p>}
+      </div>
+      <div className="col-span-2">
+        <label className="label">Descrição</label>
+        <textarea {...register("descricao")} className="input" rows={3} />
+      </div>
+      <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
         </button>

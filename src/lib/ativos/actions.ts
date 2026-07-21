@@ -5,6 +5,12 @@ import { createClient } from "@/lib/supabase/server";
 import { buscarCotacaoYahoo, deriveYahooSymbol, TIPOS_COTACAO_AUTOMATICA } from "./yahoo-finance";
 import { atualizarTodasCotacoes, type ResultadoAtualizacaoCotacoes } from "./atualizar-cotacoes";
 import {
+  buscarDadosEmpresaBrapi,
+  buscarDadosEmpresaYahoo,
+  deriveChaveExternaEmpresa,
+  TIPOS_CARTAO_EMPRESA,
+} from "./empresas";
+import {
   calcularChecklistAcao,
   calcularChecklistFii,
   type ChecklistAcao,
@@ -15,6 +21,7 @@ import {
 import type {
   AtivoForm,
   ClassificacaoForm,
+  EmpresaForm,
   PrecoAtualForm,
   ResultadoTrimestralForm,
   SaldoAcionistasForm,
@@ -54,6 +61,23 @@ export type ProventoItem = {
   valorTotal: number;
 };
 
+/**
+ * "Cartão de visita" da empresa/fundo por trás do ativo — ver
+ * docs/MAPA-DE-DADOS.md §8.56. `null` quando o ativo ainda não tem
+ * `empresa_id` (tipo não elegível, ou elegível mas nunca buscado/vinculado).
+ */
+export type EmpresaView = {
+  id: string;
+  cnpj: string | null;
+  razaoSocial: string | null;
+  nomeFantasia: string | null;
+  logoUrl: string | null;
+  segmento: string | null;
+  descricao: string | null;
+  origemDados: "manual" | "brapi" | "yahoo";
+  atualizadoEm: string | null;
+};
+
 export type AtivoResumo = {
   id: string;
   ticker: string;
@@ -74,6 +98,7 @@ export type AtivoResumo = {
   setorId: string | null;
   setorNome: string | null;
   pesoAlvo: number | null;
+  empresa: EmpresaView | null;
   quantidade: number;
   precoMedio: number;
   valorAplicado: number;
@@ -151,7 +176,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     supabase
       .from("ativos")
       .select(
-        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, subtipo_internacional, preco_atual, preco_atualizado_em, preco_fonte, cotacao_automatica, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome))"
+        "id, ticker, nome, tipo, subtipo_renda_fixa, cripto_exchange, subtipo_internacional, preco_atual, preco_atualizado_em, preco_fonte, cotacao_automatica, simbolo_tradingview, setor_id, peso_alvo, setor:alocacao_setores(id, nome, classe:alocacao_classes(id, nome)), empresa:empresas(id, cnpj, razao_social, nome_fantasia, logo_url, segmento, descricao, origem_dados, atualizado_em)"
       )
       .eq("profile_id", user.id)
       .order("ticker"),
@@ -184,6 +209,20 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
   return ativos.map((ativo) => {
     const setor = Array.isArray(ativo.setor) ? ativo.setor[0] : ativo.setor;
     const classe = setor ? (Array.isArray(setor.classe) ? setor.classe[0] : setor.classe) : null;
+    const empresaRaw = Array.isArray(ativo.empresa) ? ativo.empresa[0] : ativo.empresa;
+    const empresa: EmpresaView | null = empresaRaw
+      ? {
+          id: empresaRaw.id,
+          cnpj: empresaRaw.cnpj,
+          razaoSocial: empresaRaw.razao_social,
+          nomeFantasia: empresaRaw.nome_fantasia,
+          logoUrl: empresaRaw.logo_url,
+          segmento: empresaRaw.segmento,
+          descricao: empresaRaw.descricao,
+          origemDados: empresaRaw.origem_dados as EmpresaView["origemDados"],
+          atualizadoEm: empresaRaw.atualizado_em,
+        }
+      : null;
 
     // Ver docs/MAPA-DE-DADOS.md §8.22: `fator_proporcao`/`valor_capitalizado`
     // precisam vir junto pra `aplicarTransacaoNaPosicao` (posicao-calculo.ts)
@@ -256,6 +295,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       setorId: setor?.id ?? null,
       setorNome: setor?.nome ?? null,
       pesoAlvo: ativo.peso_alvo,
+      empresa,
       quantidade,
       precoMedio,
       valorAplicado,
@@ -680,6 +720,148 @@ export async function removerClassificacao(id: string): Promise<AcaoResultado> {
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível remover a classificação." };
+  return {};
+}
+
+// ---------------------------------------------------------------------------
+// Empresa (cartão de visita) — CNPJ/nome/logo/segmento (ver
+// docs/MAPA-DE-DADOS.md §8.56). Tabela `empresas` é a fonte única desse dado
+// cadastral (nunca duplicado em `ativos`); as duas actions abaixo são as
+// ÚNICAS que escrevem nela — busca automática (brapi/Yahoo) e edição
+// manual, ambas fazendo upsert por (profile_id, chave_externa) pra dois
+// ativos da mesma empresa (ex. PETR3/PETR4) compartilharem o registro.
+// ---------------------------------------------------------------------------
+
+/**
+ * Botão "Atualizar dados cadastrais" da página do ativo — busca CNPJ/nome/
+ * logo/segmento via brapi.dev (nacional) ou Yahoo Finance (internacional),
+ * faz upsert em `empresas` e vincula `ativos.empresa_id`. Mesmo espírito de
+ * `atualizarCotacaoAgora`: nunca lança, sempre devolve `{ error }` amigável
+ * em caso de falha (API fora do ar, token ausente, ticker não encontrado).
+ */
+export async function buscarDadosCadastraisAtivo(id: string): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { data: ativo, error: erroConsulta } = await supabase
+    .from("ativos")
+    .select("tipo, ticker, subtipo_internacional")
+    .eq("id", id)
+    .eq("profile_id", user.id)
+    .single();
+
+  if (erroConsulta || !ativo) return { error: "Ativo não encontrado." };
+
+  const tipo = ativo.tipo as TipoAtivo;
+  if (!TIPOS_CARTAO_EMPRESA.includes(tipo)) {
+    return { error: "Este tipo de ativo não tem cartão de empresa disponível." };
+  }
+
+  const resultado =
+    tipo === "internacional"
+      ? await buscarDadosEmpresaYahoo(ativo.ticker)
+      : await buscarDadosEmpresaBrapi(ativo.ticker);
+
+  if ("erro" in resultado) return { error: resultado.erro };
+
+  const chaveExterna = deriveChaveExternaEmpresa(ativo.ticker, resultado.cnpj);
+
+  const { data: empresa, error: erroUpsert } = await supabase
+    .from("empresas")
+    .upsert(
+      {
+        profile_id: user.id,
+        chave_externa: chaveExterna,
+        cnpj: resultado.cnpj,
+        razao_social: resultado.razaoSocial,
+        nome_fantasia: resultado.nomeFantasia,
+        logo_url: resultado.logoUrl,
+        segmento: resultado.segmento,
+        descricao: resultado.descricao,
+        origem_dados: tipo === "internacional" ? "yahoo" : "brapi",
+        atualizado_em: new Date().toISOString(),
+      },
+      { onConflict: "profile_id,chave_externa" }
+    )
+    .select("id")
+    .single();
+
+  if (erroUpsert || !empresa) return { error: "Dados buscados, mas não foi possível salvar o cadastro da empresa." };
+
+  const { error: erroVinculo } = await supabase
+    .from("ativos")
+    .update({ empresa_id: empresa.id })
+    .eq("id", id)
+    .eq("profile_id", user.id);
+
+  if (erroVinculo) return { error: "Empresa cadastrada, mas não foi possível vincular ao ativo." };
+  return {};
+}
+
+/**
+ * Edição manual do cartão de visita — sobrepõe (ou preenche do zero) o que
+ * a busca automática trouxe. Se o ativo ainda não tem `empresa_id` (nunca
+ * buscou automaticamente antes), cria um registro novo em `empresas` com
+ * `chave_externa` derivada do ticker (sem CNPJ ainda, já que a busca
+ * automática não rodou) — o usuário pode preencher o CNPJ manualmente aqui
+ * mesmo, o que já ajuda a próxima dedupe.
+ */
+export async function atualizarEmpresaManual(ativoId: string, input: EmpresaForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { data: ativo, error: erroConsulta } = await supabase
+    .from("ativos")
+    .select("ticker, empresa_id")
+    .eq("id", ativoId)
+    .eq("profile_id", user.id)
+    .single();
+
+  if (erroConsulta || !ativo) return { error: "Ativo não encontrado." };
+
+  const dados = {
+    cnpj: input.cnpj || null,
+    razao_social: input.razao_social || null,
+    nome_fantasia: input.nome_fantasia || null,
+    logo_url: input.logo_url || null,
+    segmento: input.segmento || null,
+    descricao: input.descricao || null,
+    origem_dados: "manual" as const,
+    atualizado_em: new Date().toISOString(),
+  };
+
+  if (ativo.empresa_id) {
+    const { error } = await supabase
+      .from("empresas")
+      .update(dados)
+      .eq("id", ativo.empresa_id)
+      .eq("profile_id", user.id);
+    if (error) return { error: "Não foi possível salvar os dados da empresa." };
+    return {};
+  }
+
+  const chaveExterna = deriveChaveExternaEmpresa(ativo.ticker, input.cnpj || null);
+  const { data: empresa, error: erroUpsert } = await supabase
+    .from("empresas")
+    .upsert({ profile_id: user.id, chave_externa: chaveExterna, ...dados }, { onConflict: "profile_id,chave_externa" })
+    .select("id")
+    .single();
+
+  if (erroUpsert || !empresa) return { error: "Não foi possível salvar os dados da empresa." };
+
+  const { error: erroVinculo } = await supabase
+    .from("ativos")
+    .update({ empresa_id: empresa.id })
+    .eq("id", ativoId)
+    .eq("profile_id", user.id);
+
+  if (erroVinculo) return { error: "Empresa salva, mas não foi possível vincular ao ativo." };
   return {};
 }
 
