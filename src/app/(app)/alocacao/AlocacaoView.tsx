@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   criarClasse,
   criarMacro,
@@ -32,12 +32,43 @@ export default function AlocacaoView({
   const [adicionandoMacro, setAdicionandoMacro] = useState(false);
   const [aplicandoSugestao, setAplicandoSugestao] = useState(false);
   const [selecao, setSelecao] = useState<Selecao>(RAIZ);
+  const [atualizando, setAtualizando] = useState(false);
   const toast = useToast();
+  const arvoreRef = useRef<HTMLDivElement>(null);
+  const painelRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Fase 6 (§16.2.16, "estados da interface"): `obterEstruturaAlocacao` é uma
+   * server action que normalmente não lança (retorna os dados direto), mas
+   * pode falhar por queda de rede/sessão expirada — nesse caso preferimos
+   * avisar por toast e manter a última estrutura válida na tela, em vez de
+   * deixar a página num estado inconsistente ou quebrada.
+   */
   const atualizar = async () => {
-    const nova = await obterEstruturaAlocacao();
-    setEstrutura(nova);
+    setAtualizando(true);
+    try {
+      const nova = await obterEstruturaAlocacao();
+      setEstrutura(nova);
+    } catch {
+      toast.error("Não foi possível atualizar a alocação. Tente novamente.");
+    } finally {
+      setAtualizando(false);
+    }
   };
+
+  /**
+   * Fase 6 (§16.2.16, responsividade): em telas pequenas/médias (< lg) a
+   * árvore e o painel ficam empilhados — ao trocar de seleção, rolamos o
+   * painel pra dentro da viewport pra deixar claro que a ação abriu o
+   * editor daquele nó, sem precisar redesenhar o layout em 3 colunas
+   * descrito no spec original (que esconderia a árvore, quebrando o acesso
+   * ao "+Adicionar Macro" da raiz no celular).
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!window.matchMedia("(max-width: 1023px)").matches) return;
+    painelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selecao]);
 
   const sugestao = perfilSugestao ? SUGESTAO_ALOCACAO_POR_PERFIL[perfilSugestao] : undefined;
   const somaPesoMacros = estrutura.macros.reduce((s, m) => s + m.pesoAlvo, 0);
@@ -159,10 +190,17 @@ export default function AlocacaoView({
         vazar estado de edição de um nó pro outro.
       */}
       <div className="flex flex-col lg:flex-row gap-4 items-start">
-        <div className="w-full lg:w-[60%]">
+        <div ref={arvoreRef} className="w-full lg:w-[60%] scroll-mt-4">
           <ArvoreAlocacao estrutura={estrutura} selecao={selecao} onSelecionar={setSelecao} onChange={atualizar} />
         </div>
-        <div className="w-full lg:w-[40%]">
+        <div ref={painelRef} className="w-full lg:w-[40%] scroll-mt-4">
+          <button
+            type="button"
+            onClick={() => arvoreRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            className="lg:hidden text-xs text-accent hover:underline mb-2"
+          >
+            ← Voltar para árvore
+          </button>
           <PainelContextual
             key={`${selecao.tipo}:${selecao.id}`}
             estrutura={estrutura}
@@ -172,6 +210,12 @@ export default function AlocacaoView({
           />
         </div>
       </div>
+
+      {atualizando && (
+        <p role="status" aria-live="polite" className="text-xs text-faint mt-3">
+          Atualizando...
+        </p>
+      )}
     </div>
   );
 }

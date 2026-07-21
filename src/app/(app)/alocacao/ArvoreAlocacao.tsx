@@ -56,6 +56,43 @@ export default function ArvoreAlocacao({
             />
           ))
         )}
+        {/* Bucket "Não classificado" (fase 6, §8.55/§16.2.14) — visualmente
+            distinto dos Macros (itálico, borda tracejada), sem chevron (não
+            expande na árvore — a lista de Ativos afetados aparece só no
+            painel). Escondido quando não há nenhum Ativo não classificado. */}
+        {estrutura.naoClassificado.valorAtual > 0 && (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-current={selecao.tipo === "naoClassificado"}
+            onClick={() => onSelecionar({ tipo: "naoClassificado", id: null })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelecionar({ tipo: "naoClassificado", id: null });
+              }
+            }}
+            className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 border-dashed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
+              selecao.tipo === "naoClassificado"
+                ? "bg-accent/10 border-l-accent"
+                : "border-l-border hover:bg-surface-2"
+            }`}
+            style={{ paddingLeft: "12px" }}
+          >
+            <span className="w-2.5 shrink-0" />
+            <span className="flex-1 truncate italic text-faint">Não classificado</span>
+            <span className="text-faint text-xs w-14 text-right shrink-0">
+              {estrutura.naoClassificado.ativos.length} ativo(s)
+            </span>
+            <span className="text-faint text-[10px] w-16 text-right shrink-0" title="Peso na carteira (global)">
+              {(estrutura.patrimonioTotalInvestido > 0
+                ? (estrutura.naoClassificado.valorAtual / estrutura.patrimonioTotalInvestido) * 100
+                : 0
+              ).toFixed(1)}
+              % cart.
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -152,14 +189,25 @@ function LinhaNo({
   const temReordenar = onSubir !== undefined && onDescer !== undefined;
   return (
     <div
-      className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors ${
+      role="button"
+      tabIndex={0}
+      aria-current={ativo}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
         ativo ? "bg-accent/10 border-l-accent" : "border-l-transparent hover:bg-surface-2"
       }`}
       style={{ paddingLeft: `${12 + nivel * 16}px` }}
-      onClick={onClick}
     >
       {temFilhos ? (
         <button
+          aria-expanded={expandido}
+          aria-label={`${expandido ? "Recolher" : "Expandir"} ${nome}`}
           onClick={(e) => {
             e.stopPropagation();
             onToggleExpand();
@@ -368,13 +416,22 @@ function NoSetor({
         setor.ativos.map((ativo) => (
           <div
             key={ativo.id}
-            className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors ${
+            role="button"
+            tabIndex={0}
+            aria-current={selecao.tipo === "ativo" && selecao.id === ativo.id}
+            className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
               selecao.tipo === "ativo" && selecao.id === ativo.id
                 ? "bg-accent/10 border-l-accent"
                 : "border-l-transparent hover:bg-surface-2"
             }`}
             style={{ paddingLeft: `${12 + 3 * 16}px` }}
             onClick={() => onSelecionar({ tipo: "ativo", id: ativo.id })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelecionar({ tipo: "ativo", id: ativo.id });
+              }
+            }}
           >
             <span className="w-2.5 shrink-0" />
             <span className="flex-1 truncate text-ink">{ativo.ticker}</span>

@@ -9,7 +9,15 @@ import type { EstruturaAlocacao, MacroNode, ClasseNode, SetorNode, AtivoNode } f
  * roda inteiramente no client, a cada clique de seleção.
  */
 
-export type TipoNo = "raiz" | "macro" | "classe" | "setor" | "ativo";
+/**
+ * `naoClassificado` (fase 6, §8.55/§16.2.14): pseudo-tipo pro bucket runtime
+ * de Ativos sem `setor_id` — nunca é uma linha real em `alocacao_macros`,
+ * não tem formulário de edição/exclusão, e por isso fica de fora dos
+ * `Record<Exclude<TipoNo, "raiz" | "ativo">, ...>` usados pro CRUD normal
+ * (ver `PainelContextual.tsx`) — todo lugar que monta esses Records precisa
+ * também excluir `"naoClassificado"`.
+ */
+export type TipoNo = "raiz" | "macro" | "classe" | "setor" | "ativo" | "naoClassificado";
 
 export type Selecao = { tipo: TipoNo; id: string | null };
 
@@ -69,6 +77,14 @@ export type NoResolvido = {
    * rejeitar). `null` só pra raiz (não tem pai/irmãos).
    */
   somaIrmaos: number | null;
+  /**
+   * Bucket "Não classificado" (fase 6, §8.55/§16.2.14) — só preenchido pra
+   * raiz (`null` em todo o resto), representando os Ativos sem `setor_id`
+   * como um item extra e visualmente distinto ao lado dos Macros, sem
+   * poluir `filhos` (que fica só com Macros de verdade, evitando ter que
+   * tratar esse pseudo-item em todo lugar que já itera `filhos`).
+   */
+  naoClassificado: FilhoResolvido | null;
 };
 
 function paraFilhoClasse(c: ClasseNode): FilhoResolvido {
@@ -129,6 +145,23 @@ function paraFilhoMacro(m: MacroNode): FilhoResolvido {
   };
 }
 
+/** Representa o bucket "Não classificado" como um item de lista — só usado na raiz (§16.2.14). */
+function paraFilhoNaoClassificado(estrutura: EstruturaAlocacao): FilhoResolvido {
+  const valor = estrutura.naoClassificado.valorAtual;
+  return {
+    tipo: "naoClassificado",
+    id: "nao-classificado",
+    nome: "Não classificado",
+    pesoAlvo: 0,
+    pesoReal: 0,
+    desvio: 0,
+    pesoAlvoGlobal: 0,
+    pesoRealGlobal: estrutura.patrimonioTotalInvestido > 0 ? (valor / estrutura.patrimonioTotalInvestido) * 100 : 0,
+    valorAtual: valor,
+    qtdFilhosDiretos: estrutura.naoClassificado.ativos.length,
+  };
+}
+
 /**
  * Resolve o nó selecionado (por tipo+id) dentro da árvore já carregada,
  * devolvendo seus dados, o breadcrumb até ele e a lista de filhos prontos
@@ -154,6 +187,31 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
       ehFolha: false,
       filhosEditaveisAqui: true,
       somaIrmaos: null,
+      naoClassificado: estrutura.naoClassificado.valorAtual > 0 ? paraFilhoNaoClassificado(estrutura) : null,
+    };
+  }
+
+  if (selecao.tipo === "naoClassificado") {
+    return {
+      tipo: "naoClassificado",
+      id: null,
+      nome: "Não classificado",
+      pesoAlvo: null,
+      pesoReal: null,
+      desvio: null,
+      pesoAlvoGlobal: 0,
+      pesoRealGlobal:
+        estrutura.patrimonioTotalInvestido > 0
+          ? (estrutura.naoClassificado.valorAtual / estrutura.patrimonioTotalInvestido) * 100
+          : 0,
+      valorAtual: estrutura.naoClassificado.valorAtual,
+      caminho: [],
+      filhos: estrutura.naoClassificado.ativos.map(paraFilhoAtivo),
+      rotuloFilhos: "Ativos",
+      ehFolha: false,
+      filhosEditaveisAqui: false,
+      somaIrmaos: null,
+      naoClassificado: null,
     };
   }
 
@@ -177,6 +235,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
         ehFolha: false,
         filhosEditaveisAqui: true,
         somaIrmaos: somaPesoAlvo(estrutura.macros) - macro.pesoAlvo,
+        naoClassificado: null,
       };
     }
 
@@ -200,6 +259,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
           ehFolha: false,
           filhosEditaveisAqui: true,
           somaIrmaos: somaPesoAlvo(macro.classes) - classe.pesoAlvo,
+          naoClassificado: null,
         };
       }
 
@@ -226,6 +286,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
             ehFolha: false,
             filhosEditaveisAqui: false, // Ativos são geridos na aba Ativos, não aqui (§16.2.13)
             somaIrmaos: somaPesoAlvo(classe.setores) - setor.pesoAlvo,
+            naoClassificado: null,
           };
         }
 
@@ -252,6 +313,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
               ehFolha: true,
               filhosEditaveisAqui: false,
               somaIrmaos: somaPesoAlvo(setor.ativos) - ativo.pesoAlvo,
+              naoClassificado: null,
             };
           }
         }

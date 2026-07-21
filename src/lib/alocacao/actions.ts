@@ -56,7 +56,21 @@ export type MacroNode = PesosNode & {
 
 export type EstruturaAlocacao = {
   macros: MacroNode[];
+  /**
+   * Patrimônio total investido (fase 6, §8.55/§16.2.14): desde esta fase
+   * inclui TODOS os ativos com posição, classificados ou não — antes só
+   * somava os classificados (a árvore de desvio nunca soube que ativos não
+   * classificados existiam). Com o bucket "Não classificado" virando
+   * primeira classe na árvore, o total precisa cobrir 100% da carteira de
+   * verdade, senão Macros e "Não classificado" juntos não fechariam 100%.
+   * Isso desloca ligeiramente pra baixo o peso real (global) de Macros/
+   * Classes/Setores quando existem ativos não classificados — é o
+   * comportamento correto (antes o percentual era inflado por ignorar essa
+   * fatia da carteira).
+   */
   patrimonioTotalInvestido: number;
+  /** Bucket runtime (nunca persistido) de ativos sem `setor_id` — §16.2.14. */
+  naoClassificado: { valorAtual: number; ativos: AtivoNode[] };
 };
 
 /**
@@ -76,9 +90,14 @@ export async function obterEstruturaAlocacao(): Promise<EstruturaAlocacao> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return { macros: [], patrimonioTotalInvestido: 0 };
+  if (!user) return { macros: [], patrimonioTotalInvestido: 0, naoClassificado: { valorAtual: 0, ativos: [] } };
 
-  const [{ data: macrosRaw }, { data: classesRaw }, { data: setoresRaw }, ativosComPosicao] = await Promise.all([
+  const [
+    { data: macrosRaw, error: macrosErro },
+    { data: classesRaw, error: classesErro },
+    { data: setoresRaw, error: setoresErro },
+    ativosComPosicao,
+  ] = await Promise.all([
     supabase
       .from("alocacao_macros")
       .select("id, nome, peso_alvo, ordem")
@@ -97,12 +116,24 @@ export async function obterEstruturaAlocacao(): Promise<EstruturaAlocacao> {
     obterAtivosComPosicao(),
   ]);
 
+  // Fase 6 (§16.2.16, "estados da interface"): não mudamos o contrato de
+  // retorno desta função (o front trata falha via try/catch no `atualizar`
+  // de AlocacaoView.tsx), mas logamos aqui pra não silenciar um erro real de
+  // query — sem isso, um RLS mal configurado ou uma coluna renomeada
+  // apareceria só como "estrutura vazia", sem pista nenhuma no servidor.
+  if (macrosErro) console.error("[alocacao] erro ao buscar alocacao_macros:", macrosErro);
+  if (classesErro) console.error("[alocacao] erro ao buscar alocacao_classes:", classesErro);
+  if (setoresErro) console.error("[alocacao] erro ao buscar alocacao_setores:", setoresErro);
+
   const macros = macrosRaw ?? [];
   const classes = classesRaw ?? [];
   const setores = setoresRaw ?? [];
   const ativosClassificados = ativosComPosicao.filter((a) => a.setorId);
+  const ativosNaoClassificados = ativosComPosicao.filter((a) => !a.setorId);
 
-  const patrimonioTotalInvestido = ativosClassificados.reduce((s, a) => s + a.valorAtual, 0);
+  // Fase 6 (§8.55/§16.2.14): o total agora é de TODOS os ativos com posição,
+  // não só dos classificados — ver comentário em `EstruturaAlocacao`.
+  const patrimonioTotalInvestido = ativosComPosicao.reduce((s, a) => s + a.valorAtual, 0);
 
   const arvore: MacroNode[] = macros.map((macro) => {
     const classesDoMacro = classes.filter((c) => c.macro_id === macro.id);
@@ -208,7 +239,28 @@ export async function obterEstruturaAlocacao(): Promise<EstruturaAlocacao> {
     });
   });
 
-  return { macros: arvore, patrimonioTotalInvestido };
+  // Bucket "Não classificado" (fase 6, §8.55/§16.2.14) — ativos sem
+  // `setor_id`, nunca têm peso-alvo (nem local nem global, sempre 0) e o
+  // peso real local é relativo ao próprio bucket (não a um pai de verdade).
+  const valorNaoClassificado = ativosNaoClassificados.reduce((s, a) => s + a.valorAtual, 0);
+  const ativosNaoClassificadosNode: AtivoNode[] = ativosNaoClassificados.map((a) => ({
+    id: a.id,
+    ticker: a.ticker,
+    nome: a.nome,
+    tipo: a.tipo,
+    valorAtual: a.valorAtual,
+    pesoAlvo: 0,
+    pesoReal: valorNaoClassificado > 0 ? (a.valorAtual / valorNaoClassificado) * 100 : 0,
+    desvio: 0,
+    pesoAlvoGlobal: 0,
+    pesoRealGlobal: patrimonioTotalInvestido > 0 ? (a.valorAtual / patrimonioTotalInvestido) * 100 : 0,
+  }));
+
+  return {
+    macros: arvore,
+    patrimonioTotalInvestido,
+    naoClassificado: { valorAtual: valorNaoClassificado, ativos: ativosNaoClassificadosNode },
+  };
 }
 
 // ---------------------------------------------------------------------------

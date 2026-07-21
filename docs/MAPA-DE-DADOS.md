@@ -6871,6 +6871,106 @@ administrativas das fases anteriores: apagar `MacroRow.tsx`/`ClasseRow.tsx`/
 `SetorRow.tsx` manualmente e rodar `supabase/schema.sql` inteiro (agora
 incluindo a seção 26, coluna `ordem`) no SQL Editor do Supabase.
 
+### 8.55 Alocação — fase 6 (final) da reformulação "Metas e estrutura": bucket "Não classificado", estados da interface, responsividade e acessibilidade (2026-07-21)
+
+Fase 6 do plano de 6 fases (§8.50/§8.51) — a última. Escopo aprovado pelo
+Guilherme como "tudo de uma vez" (sem quebrar em sub-fases com pergunta
+individual, diferente das fases 4/5). Cobre 4 frentes:
+
+**1. Ativos somente leitura na árvore.** Já estava pronto desde a fase 3
+(linha de Ativo dentro de Setor é só um `<Link>` pra `/ativos/[id]`, sem
+nenhuma ação de editar/excluir/mover — essas ações continuam existindo
+apenas na aba Ativos). Nada novo aqui, só confirmado nesta fase.
+
+**2. Bucket "Não classificado" como nó de primeira classe.** Ativos com
+`setor_id IS NULL` (existem desde o início — nada obriga um Ativo a ter
+Setor) agora aparecem como uma linha própria na raiz da árvore, abaixo dos
+Macros, com borda tracejada e itálico pra diferenciar visualmente de um
+Macro de verdade. Decisão de implementação (não fazia parte das perguntas
+já feitas ao Guilherme, mas é uma escolha técnica direta, não ambígua):
+esse bucket fica **fora** do array `filhos`/`classes`/`setores` normal —
+é um campo separado `naoClassificado: FilhoResolvido | null` em
+`NoResolvido` (`arvore.ts`) e `naoClassificado: { valorAtual, ativos }` em
+`EstruturaAlocacao` (`actions.ts`). Motivo: evita ter que tratar esse caso
+especial em cada `filhos.map()` já existente (linha editável, "usar
+restante aqui", validação de soma, etc.) — ele não tem meta (`pesoAlvo`),
+não participa de nenhuma validação de soma-100%, e não tem formulário de
+edição (só um texto explicativo + link pra aba Ativos, já que a
+classificação de um Ativo é feita lá, não na Alocação).
+
+**Mudança de denominador (importante).** `patrimonioTotalInvestido` agora
+soma **todos** os Ativos com posição (classificados + não classificados) —
+antes somava só os classificados. Isso é uma correção, não um ajuste
+cosmético: com o bucket "Não classificado" virando visível, os pesos
+globais (`pesoRealGlobal`) de Macro/Classe/Setor precisam ser % do
+patrimônio *total* de verdade, senão a soma de "Macros + Não classificado"
+nunca bateria 100% da carteira. Efeito colateral esperado: se o Guilherme
+tiver Ativos não classificados, o peso real global de cada Macro cai
+ligeiramente em relação ao que aparecia antes desta fase (porque o
+denominador cresceu) — isso é o comportamento correto, não uma regressão.
+
+**3. Estados da interface (loading/erro).** `AlocacaoView.tsx`: a função
+`atualizar()` (chamada após toda mutação bem-sucedida pra recarregar a
+árvore) ganhou `try/catch` + estado `atualizando` — em caso de falha (rede
+caiu, sessão expirou), mostra toast de erro e **mantém a última estrutura
+válida na tela** em vez de deixar a UI quebrada ou vazia; enquanto a
+chamada está em voo, aparece um texto discreto "Atualizando..." (`role=
+"status" aria-live="polite"`, sem spinner/skeleton — decisão deliberada de
+manter simples, já que a operação é rápida e o conteúdo antigo continua
+visível e correto durante a espera). `lib/alocacao/actions.ts`:
+`obterEstruturaAlocacao()` passou a capturar o `error` de cada uma das 3
+queries Supabase (macros/classes/setores) e logar via `console.error` no
+servidor — sem mudar o contrato de retorno da função (continua sempre
+devolvendo uma `EstruturaAlocacao` válida, mesmo que vazia) — só pra não
+silenciar um erro real de RLS/coluna renomeada/etc. atrás de um "não tem
+nada cadastrado ainda" falso.
+
+**4. Responsividade e acessibilidade.** Decisão deliberada de **não**
+implementar o layout de 3 colunas com esconde/mostra descrito literalmente
+no spec original — naquele desenho, a árvore ficaria escondida em telas
+pequenas quando um nó está selecionado, o que quebraria o acesso ao botão
+"+Adicionar Macro" (que só existe na visão de raiz do painel) pra quem usa
+o app no celular. Implementado em vez disso, em `AlocacaoView.tsx`: árvore
+e painel continuam empilhados em telas < `lg` (como já era desde a fase 3);
+ao trocar de seleção, o painel rola suavemente pra dentro da viewport
+(`scrollIntoView`, só disparado se `matchMedia("(max-width: 1023px)")`);
+um link "← Voltar para árvore" (`lg:hidden`) no topo do painel rola de
+volta pra árvore. Acessibilidade por teclado, em `ArvoreAlocacao.tsx`:
+linhas da árvore (Macro/Classe/Setor/Ativo/Não classificado) e a linha de
+Ativo dentro de Setor viraram `role="button" tabIndex={0}` com
+`onKeyDown` tratando Enter/Espaço, mais `focus-visible:outline` usando a
+cor `--color-accent` já existente no tema; os chevrons de
+expandir/colapsar ganharam `aria-expanded` + `aria-label`. Os botões de
+reordenar (▲/▼, fase 5) já eram `<button>` reais — escolha deliberada
+desde a fase 5 de favorecer acessibilidade por teclado a um drag-and-drop
+mais sofisticado, mantida aqui.
+
+**Verificação:** `tsc --noEmit` sem erros. Arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos): `supabase/schema.sql`
+(1731 linhas, inalterado nesta fase), `lib/alocacao/actions.ts` (891),
+`arvore.ts` (377), `ArvoreAlocacao.tsx` (446), `PainelContextual.tsx`
+(932), `AlocacaoView.tsx` (221). Sem suíte automatizada ainda (mesma
+situação das fases 2-5); eslint não rodou nesta fase (timeout no sandbox
+usado pra desenvolvimento — não é um requisito do CLAUDE.md, que só exige
+`tsc` + checagem de integridade de arquivo). Testes manuais recomendados
+antes de considerar a fase "fechada" na prática: conferir que o bucket
+"Não classificado" só aparece quando existe Ativo sem Setor, que o peso
+global dos Macros mudou (leve queda) se houver Ativos não classificados, e
+testar a rolagem automática + botão "Voltar para árvore" em uma tela
+estreita (ou DevTools em modo responsivo).
+
+**Arquivos tocados.** Editados: `lib/alocacao/actions.ts`, `arvore.ts`,
+`ArvoreAlocacao.tsx`, `PainelContextual.tsx`, `AlocacaoView.tsx`. Nenhum
+arquivo novo, nenhuma migração SQL nesta fase.
+
+**Com isso, o plano de 6 fases de §8.50/§8.51 está completo.** Recomendação
+de testes manuais end-to-end antes de considerar o redesenho da Alocação
+"Metas e estrutura" fechado de vez: fluxo completo de criar Macro → Classe
+→ Setor → mover Ativo entre Setores (via aba Ativos) → conferir que ele
+some do "Não classificado" → reordenar → mover Classe entre Macros →
+excluir com "mover filhos" → usar/distribuir saldo restante — tudo isso em
+telas desktop e mobile.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

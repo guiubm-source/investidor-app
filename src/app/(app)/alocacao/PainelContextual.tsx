@@ -37,7 +37,7 @@ import {
 
 const formatarMoeda = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-const ROTULO_TIPO: Record<Exclude<TipoNo, "raiz" | "ativo">, string> = {
+const ROTULO_TIPO: Record<Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">, string> = {
   macro: "Macro",
   classe: "Classe",
   setor: "Setor",
@@ -90,7 +90,7 @@ async function moverNoParaOutroPai(tipo: TipoNo, id: string, novoPaiId: string):
 }
 
 /** Tipo do FILHO direto de cada tipo de nó pai — usado pro rótulo/formulário de "+ Adicionar". */
-const FILHO_DE: Partial<Record<TipoNo, Exclude<TipoNo, "raiz" | "ativo">>> = {
+const FILHO_DE: Partial<Record<TipoNo, Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">>> = {
   raiz: "macro",
   macro: "classe",
   classe: "setor",
@@ -175,12 +175,15 @@ export default function PainelContextual({
           ? `Distribuir Setores de ${no.nome}`
           : no.tipo === "setor"
             ? `Ativos de ${no.nome}`
-            : `Ativo ${no.nome}`;
+            : no.tipo === "naoClassificado"
+              ? "Ativos não classificados"
+              : `Ativo ${no.nome}`;
 
   const status = statusSomaFilhos(no.filhos);
   const rotuloFilhoNovo = FILHO_DE[no.tipo];
   const FormFilho = rotuloFilhoNovo ? FORM_POR_TIPO[rotuloFilhoNovo] : null;
-  const FormNo = no.tipo !== "raiz" && no.tipo !== "ativo" ? FORM_POR_TIPO[no.tipo] : null;
+  const FormNo =
+    no.tipo !== "raiz" && no.tipo !== "ativo" && no.tipo !== "naoClassificado" ? FORM_POR_TIPO[no.tipo] : null;
 
   return (
     <div className="card p-5">
@@ -241,12 +244,26 @@ export default function PainelContextual({
           aba Ativos.
         </p>
       )}
+      {no.tipo === "naoClassificado" && (
+        <div className="mb-4">
+          <p className="text-xs text-muted mb-2">
+            Estes Ativos ainda não têm um Setor definido, por isso ficam de fora da árvore de
+            Macros/Classes/Setores acima — mas continuam contando no patrimônio total e na Carteira
+            normalmente. Não é possível definir uma meta pra este grupo, nem transformá-lo num Macro
+            automaticamente, nem distribuí-lo entre os Macros existentes: classifique cada Ativo
+            individualmente na aba Ativos.
+          </p>
+          <Link href="/ativos" className="inline-block text-xs text-accent hover:underline">
+            Ver Ativos na aba Ativos →
+          </Link>
+        </div>
+      )}
 
       {/* Editar/mover/excluir o PRÓPRIO nó selecionado (não seus filhos) */}
       {FormNo && no.id && !editandoNo && !movendoNo && (
         <div className="flex items-center gap-3 mb-4 pb-4 border-b border-border flex-wrap">
           <button onClick={() => setEditandoNo(true)} className="text-xs text-faint hover:text-ink">
-            Editar {ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo">]}
+            Editar {ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]}
           </button>
           {(no.tipo === "classe" || no.tipo === "setor") && (
             <button onClick={() => setMovendoNo(true)} className="text-xs text-faint hover:text-ink">
@@ -254,7 +271,7 @@ export default function PainelContextual({
             </button>
           )}
           <button onClick={() => setExcluindoNo(true)} className="text-xs text-faint hover:text-danger">
-            Excluir {ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo">]}
+            Excluir {ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]}
           </button>
         </div>
       )}
@@ -269,7 +286,7 @@ export default function PainelContextual({
               if (resultado.error) throw new Error(resultado.error);
               await onChange();
               setEditandoNo(false);
-              toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo">]} atualizado.`);
+              toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} atualizado.`);
             }}
           />
         </div>
@@ -305,7 +322,7 @@ export default function PainelContextual({
             setMovendoNo(false);
             setDestinoMoverNo("");
             await onChange();
-            toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo">]} movido(a).`);
+            toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} movido(a).`);
           }}
         />
       )}
@@ -350,7 +367,7 @@ export default function PainelContextual({
                 : RAIZ
             );
             await onChange();
-            toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo">]} excluído(a).`);
+            toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} excluído(a).`);
           }}
         />
       ) : (
@@ -380,7 +397,7 @@ export default function PainelContextual({
                   : RAIZ
               );
               await onChange();
-              toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo">]} excluído.`);
+              toast.success(`${ROTULO_TIPO[no.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} excluído.`);
             }}
           />
         )
@@ -412,7 +429,7 @@ export default function PainelContextual({
       {/* Lista de distribuição dos filhos diretos (§16.2.6) */}
       {no.tipo !== "ativo" && (
         <div>
-          {no.filhos.length > 0 && (
+          {no.filhos.length > 0 && no.tipo !== "naoClassificado" && (
             <p className={`text-xs mb-1 ${status.status === "excedido" ? "text-danger" : "text-faint"}`}>
               Soma dos pesos-alvo: {status.soma.toFixed(1)}%
               {status.status === "excedido"
@@ -517,7 +534,7 @@ export default function PainelContextual({
                     if (resultado.error) throw new Error(resultado.error);
                     await onChange();
                     setEditandoFilhoId(null);
-                    toast.success(`${ROTULO_TIPO[filho.tipo as Exclude<TipoNo, "raiz" | "ativo">]} atualizado.`);
+                    toast.success(`${ROTULO_TIPO[filho.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} atualizado.`);
                   }}
                 />
               ) : (
@@ -566,7 +583,7 @@ export default function PainelContextual({
                 setExclusaoFilhoOpcao(null);
                 setDestinoExclusaoFilho("");
                 await onChange();
-                toast.success(`${ROTULO_TIPO[excluindoFilho.tipo as Exclude<TipoNo, "raiz" | "ativo">]} excluído(a).`);
+                toast.success(`${ROTULO_TIPO[excluindoFilho.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} excluído(a).`);
               }}
             />
           ) : (
@@ -590,7 +607,7 @@ export default function PainelContextual({
                   }
                   setExcluindoFilho(null);
                   await onChange();
-                  toast.success(`${ROTULO_TIPO[excluindoFilho.tipo as Exclude<TipoNo, "raiz" | "ativo">]} excluído.`);
+                  toast.success(`${ROTULO_TIPO[excluindoFilho.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">]} excluído.`);
                 }}
               />
             )
@@ -650,7 +667,7 @@ function LinhaFilhoEditavel({
   onSalvarEdicao: (dados: DadosForm) => Promise<void>;
 }) {
   if (editando) {
-    const Form = FORM_POR_TIPO[filho.tipo as Exclude<TipoNo, "raiz" | "ativo">];
+    const Form = FORM_POR_TIPO[filho.tipo as Exclude<TipoNo, "raiz" | "ativo" | "naoClassificado">];
     return (
       <div className="bg-surface-2 rounded-md p-3">
         <Form
