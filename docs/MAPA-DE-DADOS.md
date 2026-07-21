@@ -5516,6 +5516,170 @@ seção de comandos abaixo).
 **Arquivos tocados.** `lib/ir/motores/exterior-lei-14754.ts`,
 `lib/ir/consultas/exterior.ts` (novos).
 
+### 8.43 Fase 8 (cripto e derivativos) — pulada permanentemente por decisão do Guilherme (2026-07-21)
+
+Ao concluir a fase 7, o Guilherme pediu explicitamente pra pular a fase 8
+(cripto e derivativos, §8.32.17.6/§8.32.17.7) e seguir direto pra fase 9:
+"pode pular, nao iremos trabalhar com crpito e derivatios, fase 9 executar".
+
+Isso é diferente de "não iniciada ainda" (como fica o resto do backlog não
+priorizado) — é uma decisão explícita de ESCOPO PERMANENTE: o app não vai
+cobrir criptoativos nem derivativos (opções, futuros, termo) em nenhuma fase
+futura, a menos que o Guilherme peça o contrário depois. Nenhuma tabela,
+motor ou tela relacionada a cripto/derivativos será construída daqui em
+diante — o que já existia do app antigo (`categoriaDoAtivo` tratando
+`cripto_nacional`/`cripto_estrangeira`, `aliquotaCripto` em
+`lib/ir/actions.ts`) continua no lugar, sem migração pro motor novo, e
+`ativos.tipo = 'cripto'` segue sendo tratado apenas pela aproximação antiga
+(sem ledger fiscal fase-3, sem day trade, sem qualquer motor novo) —
+consistente com o que já estava documentado como fora do escopo das fases
+6/7 (§8.41/§8.42).
+
+Sem mudança de código nesta entrada — só registro da decisão de escopo, pra
+não ser reaberta por engano numa sessão futura achando que é só "próxima da
+fila".
+
+### 8.44 Imposto de Renda — fase 9 (Bens e Direitos: itens manuais + auto-população de investimentos) implementada (2026-07-21)
+
+Continuação — "fase 9 executar" (pulando a fase 8 por decisão registrada em
+§8.43). Fase 9 do §8.32.37 cobre 10 módulos manuais diferentes da
+declaração anual (§8.32.20.1 a §8.32.20.11) — perguntado ao Guilherme por
+onde começar; escolhido **Bens e Direitos** (§8.32.20.7), por combinar dado
+que o app já calcula (posições de investimento) com itens genuinamente
+manuais. Perguntado em seguida COMO fatiar (já que, diferente das fases de
+cálculo de imposto, aqui o resultado só é útil com uma tela pra revisar) —
+escolhido fazer tudo de uma vez: schema + motor + tela.
+
+**Implementado nesta fase:**
+
+- **`supabase/schema.sql` seção 24** — tabela `ir_bens_direitos_manuais`
+  (RLS `auth.uid() = profile_id`, índice `(profile_id, declaracao_id)`,
+  trigger `updated_at`) pra itens que o app genuinamente NÃO deriva de
+  nenhum dado existente: imóveis, veículos, contas (corrente/poupança),
+  participações societárias não listadas. **Posições de investimento
+  (ações/FIIs/renda fixa/exterior) NUNCA são gravadas nesta tabela** — são
+  recalculadas a partir do ledger fiscal toda vez que a tela é aberta
+  (fonte única de verdade, §3). Também seedado o parâmetro
+  `bens_direitos.tabela_grupos_codigos` (`valor_json`, em
+  `ir_parametros_regra`) com o subconjunto da Tabela de Bens e Direitos da
+  Receita Federal relevante pra esses 4 tipos (grupos 01/02/03/04/06,
+  pesquisado em fonte pública em 2026-07-21 — status `rascunho`, mesma
+  dívida técnica de §8.32.40 dos demais parâmetros: ainda não confirmado
+  contra a Instrução Normativa do exercício 2027). Usa `insert ... on
+  conflict do update` em vez do bloco `do $$ if not exists $$` da seção
+  21.7, porque a versão de regra 2027 pode já existir de uma rodada
+  anterior do script — o padrão anterior só roda o bloco inteiro se a
+  versão ainda não existe, o que impediria adicionar um parâmetro novo
+  isoladamente numa sessão posterior.
+- **`lib/ir/motores/bens-direitos.ts`** (novo, motor puro, Decimal, sem
+  `"use server"`): `resolverGrupoCodigoAtivo(tipo, subtipoRendaFixa)` —
+  mapeia os 4 tipos de investimento cobertos nesta fase pro grupo/código
+  oficial: `acao`/`internacional` → Grupo 03 Código 01 ("Ações, inclusive
+  as listadas em bolsa" — o mesmo código serve pra doméstico e exterior,
+  porque no padrão oficial é o campo "Localização" que diferencia, não um
+  código separado); `fii` → Grupo 07 Código 03; `renda_fixa` → Grupo 04
+  Código 03 (isenta: LCI/LCA/CRI/CRA, via `subtipo_renda_fixa`) ou Código
+  02 (tributável: Tesouro/CDB/Debênture e demais). `fundo` genérico,
+  `cripto` (fora de escopo por §8.43) e `outro` devolvem `null` —
+  explicitamente não cobertos ainda. `custoTotalNaData(linhasLedger,
+  dataCorte)` — pega o `custoTotalDepois` da última linha do ledger fiscal
+  com `data <= dataCorte`; `0` se nenhuma. Reaproveita o ledger fiscal de
+  custo médio (fase 3) tal como está — Bens e Direitos declara pelo CUSTO
+  DE AQUISIÇÃO acumulado, nunca valor de mercado (mesmo princípio de
+  §8.32.18.3, aqui generalizado pra qualquer investimento, não só
+  exterior). `montarItemInvestimento` compara a situação em 31/12 do ano
+  anterior com a do ano da declaração — se AMBAS forem zero, o ativo não
+  aparece (nunca existiu no período); se só a atual for zero, o item
+  aparece mesmo assim (§8.32.20.7: "ativo vendido e zerado no ano pode
+  continuar aparecendo com situação atual zero"). `montarBensDireitos` junta
+  itens manuais (já prontos, vindos do banco) com os itens de investimento
+  derivados, ordenando por grupo/código.
+- **`lib/ir/consultas/bens-direitos.ts`** (novo, sem `"use server"`):
+  `obterTabelaGruposCodigosVigente()` (mesmo padrão de bloqueio gracioso das
+  fases 4-7) e `obterBensDireitos(declaracaoId, anoCalendario)` — lê itens
+  manuais da declaração, monta ledgers fiscais dos ativos nacionais
+  (`acao`/`fii`/`renda_fixa`, sem conversão de câmbio — moeda sempre BRL) e
+  dos ativos internacionais reaproveitando `buscarTransacoesExterior` e
+  `converterEventosParaReais` (exportadas de `consultas/exterior.ts`, fase
+  7) — nunca duplicando a lógica de conversão cambial numa segunda cópia.
+  Ativos internacionais com câmbio faltando em algum evento são excluídos
+  inteiros (mesma regra de exclusão da fase 7), listados em
+  `ativosComPendencia` pra transparência na tela.
+- **`lib/ir/consultas/ledger.ts`** e **`lib/ir/consultas/exterior.ts`**:
+  nenhuma mudança de lógica — só 2 identificadores (`SupabaseServerClient`,
+  `TransacaoExteriorRaw`) e 2 funções (`buscarTransacoesExterior`,
+  `converterEventosParaReais`) que já existiam em `exterior.ts` ganharam
+  `export` pra serem reaproveitadas aqui.
+- **`lib/ir/schema.ts`**: novo `bemManualSchema` (Zod) — valida os campos do
+  formulário de item manual (grupo/código obrigatórios, nome obrigatório,
+  demais campos opcionais, situações numéricas `>= 0`).
+- **`lib/ir/actions.ts`** (Server Actions novas): `obterBensDireitosIR`
+  (wrapper da consulta + conversão Decimal→number na fronteira, mesmo
+  padrão de `converterLinhaRendaVariavelNova`), `obterTabelaGruposCodigosIR`,
+  `criarBemManualIR`/`atualizarBemManualIR`/`excluirBemManualIR` (CRUD
+  simples, mesmo padrão de `criarCorretora`/`excluirCorretora`,
+  `revalidatePath("/imposto-renda")` em toda mutação).
+- **UI nova**: `ImpostoRendaView.tsx` virou aba-mãe com 2 sub-abas
+  ("Relatório" — conteúdo que já existia — e "Bens e Direitos" — nova),
+  mesmo padrão de sub-abas já usado em Carteira (Posição/Livro-razão) e
+  Configurações. `BensDireitosView.tsx` (novo): tabela única com itens
+  manuais e de investimento juntos (ordenados por grupo/código), selo
+  "auto" nos itens derivados (com tooltip explicando que vêm da Carteira),
+  formulário de criar/editar item manual (seletor de grupo/código a partir
+  da tabela versionada, `ConfirmModal` na exclusão, `useToast` nas
+  mutações — mesmos componentes/convenções já usados em toda a Carteira),
+  aviso quando algum ativo internacional foi excluído por falta de câmbio.
+  `page.tsx` passa a buscar `obterBensDireitosIR`/`obterTabelaGruposCodigosIR`
+  em paralelo com o relatório existente.
+- **Testado manualmente com 12 cenários** (script `tsx` temporário, não
+  commitado): resolução de grupo/código pros 5 casos cobertos (ação, FII,
+  internacional, renda fixa isenta, renda fixa tributável); snapshot de
+  custo total em 3 datas de corte diferentes (antes de qualquer compra, após
+  a 1ª compra, após a 2ª); ativo vendido/zerado no ano ainda aparecendo
+  (baixa) com situação anterior > 0 e atual = 0; ativo sem posição em
+  nenhuma das duas datas não aparecendo; junção de item manual + item de
+  investimento ordenados corretamente por grupo. Todos bateram com o
+  esperado calculado à mão.
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Fundos de investimento (`ativos.tipo = 'fundo'` genérico, sem subtipo
+   distintivo) e criptoativos (fora de escopo permanente, §8.43) — não
+   entram na auto-população; só apareceriam se o Guilherme cadastrar como
+   item manual.
+2. Os outros 9 módulos de §8.32.20 (identificação do contribuinte,
+   rendimentos PJ/PF, isentos, tributação exclusiva, pagamentos/deduções,
+   dívidas e ônus reais, ganho de capital fora de bolsa, atividade rural,
+   resumo/simulação completa vs. simplificada) — não iniciados.
+3. Upload de comprovante — mesma dívida técnica já registrada desde a fase
+   2 (documentos explicitamente deferidos); o campo "comprovante" do padrão
+   oficial (§8.32.20.7) não tem coluna nesta tabela ainda.
+4. Nenhuma validação de CPF/CNPJ (formato/dígito verificador) no formulário
+   de item manual — campo é texto livre por ora.
+5. A tabela de grupos/códigos seedada cobre só os 4 tipos desta fase
+   (imóveis, veículos, contas, participações) — fundos/criptoativos/créditos/
+   outros bens da tabela oficial completa da Receita ficam de fora até
+   algum motor futuro precisar deles.
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos criados/estendidos
+conferidos via `wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Nota operacional:** o arquivo de teste manual temporário
+`src/lib/ir/motores/_teste_bens_direitos_temp.ts` ficou parado no disco pelo
+mesmo motivo intermitente já registrado em §8.36-§8.42 (o
+`_teste_exterior_temp.ts` da fase anterior sumiu sozinho antes desta fase
+começar, mas este não) — apagar manualmente antes do `git add` (comando na
+seção de comandos abaixo).
+
+**Arquivos tocados.** `supabase/schema.sql` (seção 24, nova);
+`lib/ir/motores/bens-direitos.ts`, `lib/ir/consultas/bens-direitos.ts`
+(novos); `lib/ir/consultas/exterior.ts` (2 identificadores/2 funções
+exportadas, sem mudança de lógica); `lib/ir/schema.ts` (novo
+`bemManualSchema`); `lib/ir/actions.ts` (novas Server Actions);
+`app/(app)/imposto-renda/ImpostoRendaView.tsx` (sub-abas),
+`app/(app)/imposto-renda/BensDireitosView.tsx` (novo),
+`app/(app)/imposto-renda/page.tsx` (busca os novos dados iniciais).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

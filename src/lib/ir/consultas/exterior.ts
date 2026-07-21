@@ -42,9 +42,9 @@ export async function obterParametrosExteriorVigente(): Promise<ParametrosExteri
   return { aliquotaPadrao: new Decimal(aliquota) };
 }
 
-type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+export type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
-type TransacaoExteriorRaw = {
+export type TransacaoExteriorRaw = {
   id: string;
   ativo_id: string;
   tipo: EventoLedgerFiscal["tipo"];
@@ -63,8 +63,14 @@ type TransacaoExteriorRaw = {
  * Busca transações de uma lista de ativos internacionais, paginando em
  * lotes de 1000 (mesmo padrão de `buscarTodasTransacoesParaLedger`,
  * consultas/ledger.ts) e já agrupando por `ativo_id`.
+ *
+ * Exportada (não só usada internamente) porque a fase 9 (Bens e Direitos,
+ * `consultas/bens-direitos.ts`) precisa da MESMA leitura + conversão
+ * cambial pra montar a situação patrimonial de ativos internacionais —
+ * nunca duplicar a lógica de câmbio (já corrigiu um bug de ponto flutuante
+ * uma vez, ver §8.42).
  */
-async function buscarTransacoesExterior(
+export async function buscarTransacoesExterior(
   supabase: SupabaseServerClient,
   profileId: string,
   ativoIds: string[]
@@ -115,8 +121,11 @@ async function buscarTransacoesExterior(
  *
  * `fator_proporcao` (desdobramento/grupamento) não precisa de conversão —
  * é uma razão adimensional, não um valor monetário.
+ *
+ * Exportada pelo mesmo motivo de `buscarTransacoesExterior` acima —
+ * reaproveitada por `consultas/bens-direitos.ts` (fase 9).
  */
-function converterEventosParaReais(
+export function converterEventosParaReais(
   transacoes: TransacaoExteriorRaw[]
 ): { eventos: EventoLedgerFiscal[]; pendente: boolean; motivos: string[] } {
   const motivos: string[] = [];

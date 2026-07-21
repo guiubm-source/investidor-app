@@ -28,3 +28,26 @@ export const perfilFiscalSchema = z.object({
 export type PerfilFiscalForm = z.infer<typeof perfilFiscalSchema>;
 /** Forma RAW do formulário (antes do `.transform()`) — usada pelo `useForm` no client, mesmo padrão de `ProventoFormInput` em ProventosView.tsx. */
 export type PerfilFiscalFormInput = z.input<typeof perfilFiscalSchema>;
+
+/**
+ * Item MANUAL de Bens e Direitos (fase 9, §8.32.20.7 — ver
+ * docs/MAPA-DE-DADOS.md §8.43). Só cobre o que o app não deriva sozinho
+ * (imóveis, veículos, contas, participações societárias não listadas);
+ * posições de investimento nunca passam por este formulário — são
+ * montadas automaticamente a partir do ledger fiscal.
+ */
+export const bemManualSchema = z.object({
+  grupo: z.string().trim().min(1, "Selecione um grupo"),
+  codigo: z.string().trim().min(1, "Selecione um código"),
+  nome: z.string().trim().min(1, "Informe um nome/descrição"),
+  localizacao: z.union([z.string(), z.literal("")]).transform((v) => (v ? v : null)),
+  cpf_cnpj: z.union([z.string(), z.literal("")]).transform((v) => (v ? v : null)),
+  discriminacao: z.union([z.string(), z.literal("")]).transform((v) => (v ? v : null)),
+  situacao_anterior: z.union([z.number().min(0), z.nan()]).transform((v) => (typeof v === "number" && !Number.isNaN(v) ? v : 0)),
+  situacao_atual: z.union([z.number().min(0), z.nan()]).transform((v) => (typeof v === "number" && !Number.isNaN(v) ? v : 0)),
+  observacoes: z.union([z.string(), z.literal("")]).transform((v) => (v ? v : null)),
+  status_revisao: z.enum(["pendente", "revisado"]).default("pendente"),
+});
+export type BemManualForm = z.infer<typeof bemManualSchema>;
+/** Forma RAW do formulário (antes do `.transform()`) — mesmo padrão de `PerfilFiscalFormInput` acima. */
+export type BemManualFormInput = z.input<typeof bemManualSchema>;

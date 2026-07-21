@@ -1509,3 +1509,104 @@ create index if not exists ir_retencoes_profile_ativo_idx on public.ir_retencoes
 -- Sem trigger set_updated_at: tabela não tem coluna updated_at (registro de
 -- retenção é um fato pontual, não algo editado in-place — mesma razão de
 -- ir_parametros_regra na seção 21).
+
+-- =====================================================================
+-- 24. IR fase 9 (§8.32.37) — Bens e Direitos: itens manuais + tabela de
+--     grupos/códigos versionada
+-- =====================================================================
+-- Ver docs/MAPA-DE-DADOS.md §8.43. Escopo decidido com o Guilherme: só
+-- imóveis, veículos, contas (corrente/poupança) e participações societárias
+-- como itens MANUAIS — posições de investimento (ações/FIIs/renda
+-- fixa/exterior) NUNCA são gravadas aqui, são recalculadas a partir do
+-- ledger fiscal (fase 3) toda vez que a tela é aberta (fonte única de
+-- verdade, mesmo princípio de todo o app — ver docs/MAPA-DE-DADOS.md §3).
+-- Esta tabela existe só pro que o app genuinamente NÃO consegue derivar
+-- sozinho.
+create table if not exists public.ir_bens_direitos_manuais (
+  id                uuid primary key default gen_random_uuid(),
+  profile_id        uuid not null references public.profiles (id) on delete cascade,
+  declaracao_id     uuid not null references public.ir_declaracoes (id) on delete cascade,
+  -- Grupo/código do padrão oficial da Receita (Tabela de Bens e Direitos) —
+  -- texto livre em vez de enum/FK: o CONJUNTO válido de combinações muda de
+  -- exercício pra exercício (§8.32.20, "sem copiar códigos fixos para todos
+  -- os anos"), então a validação/sugestão na UI vem do parâmetro
+  -- `bens_direitos.tabela_grupos_codigos` (versionado, ver seção de seed
+  -- abaixo), nunca de uma constraint fixa no banco.
+  grupo             text not null,
+  codigo            text not null,
+  nome              text not null,
+  localizacao       text null,
+  cpf_cnpj          text null,
+  discriminacao     text null,
+  situacao_anterior numeric(16,2) not null default 0 check (situacao_anterior >= 0),
+  situacao_atual    numeric(16,2) not null default 0 check (situacao_atual >= 0),
+  observacoes       text null,
+  status_revisao    text not null default 'pendente' check (status_revisao in ('pendente','revisado')),
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+comment on table public.ir_bens_direitos_manuais is
+  'Itens de Bens e Direitos que o app não deriva de nenhum dado já existente (imóveis, veículos, contas, participações societárias não listadas). Investimentos (ações/FIIs/renda fixa/exterior) nunca entram aqui — são montados em tempo de leitura a partir do ledger fiscal, ver lib/ir/consultas/bens-direitos.ts.';
+comment on column public.ir_bens_direitos_manuais.situacao_anterior is 'Situação em 31/12 do ano-calendário ANTERIOR — custo/valor declarado, nunca valor de mercado (mesmo princípio de §8.32.18.3 pro exterior, aqui aplicado a bens em geral).';
+comment on column public.ir_bens_direitos_manuais.situacao_atual is 'Situação em 31/12 do ano-calendário da declaração. Pode ser 0 com situacao_anterior > 0 quando o bem foi baixado/vendido no ano (§8.32.20.7: "ativo vendido e zerado no ano pode continuar aparecendo com situação atual zero").';
+
+alter table public.ir_bens_direitos_manuais enable row level security;
+
+drop policy if exists "ir_bens_direitos_manuais_all_own" on public.ir_bens_direitos_manuais;
+create policy "ir_bens_direitos_manuais_all_own" on public.ir_bens_direitos_manuais
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+create index if not exists ir_bens_direitos_manuais_declaracao_idx
+  on public.ir_bens_direitos_manuais (profile_id, declaracao_id);
+
+drop trigger if exists set_updated_at on public.ir_bens_direitos_manuais;
+create trigger set_updated_at before update on public.ir_bens_direitos_manuais
+  for each row execute function public.set_updated_at();
+
+-- 24.1 Seed do parâmetro `bens_direitos.tabela_grupos_codigos` — só o
+--      subconjunto da tabela oficial (Receita Federal, Bens e Direitos)
+--      relevante pro escopo desta fase (imóveis, veículos, contas,
+--      participações societárias). Fundos/criptoativos/créditos/outros bens
+--      ficam de fora por ora (nenhum motor de auto-preenchimento os cobre
+--      ainda). Pesquisado em fonte pública (tabela vigente pra declaração
+--      2026/ano-calendário 2025) em 2026-07-21 — AINDA NÃO confirmado se a
+--      Receita alterou algo pro exercício 2027 (mesma dívida técnica de
+--      §8.32.40 dos demais parâmetros seedados como 'rascunho'). Usa
+--      `insert ... on conflict do update` (não o bloco `do $$ if not
+--      exists $$` da seção 21.7) porque a versão de regra 2027 já pode
+--      existir de uma rodada anterior deste script — precisa ser possível
+--      adicionar/atualizar UM parâmetro novo sem depender da versão inteira
+--      ainda não existir.
+do $$
+declare
+  v_versao_id uuid;
+begin
+  select id into v_versao_id from public.ir_versoes_regra where jurisdicao = 'brasil' and exercicio = 2027;
+
+  if v_versao_id is not null then
+    insert into public.ir_parametros_regra (versao_regra_id, chave, valor_json, observacao)
+    values (
+      v_versao_id,
+      'bens_direitos.tabela_grupos_codigos',
+      '[
+        {"grupo": "01", "codigo": "11", "label": "Apartamento"},
+        {"grupo": "01", "codigo": "12", "label": "Casa"},
+        {"grupo": "01", "codigo": "13", "label": "Terreno"},
+        {"grupo": "01", "codigo": "01", "label": "Prédio residencial"},
+        {"grupo": "01", "codigo": "02", "label": "Prédio comercial"},
+        {"grupo": "01", "codigo": "99", "label": "Outros bens imóveis"},
+        {"grupo": "02", "codigo": "01", "label": "Veículo automotor terrestre (carro, moto, caminhão)"},
+        {"grupo": "02", "codigo": "99", "label": "Outros bens móveis"},
+        {"grupo": "03", "codigo": "01", "label": "Ações (inclusive listadas em bolsa)"},
+        {"grupo": "03", "codigo": "02", "label": "Quotas ou quinhões de capital"},
+        {"grupo": "03", "codigo": "99", "label": "Outras participações societárias"},
+        {"grupo": "04", "codigo": "01", "label": "Depósito em conta poupança"},
+        {"grupo": "06", "codigo": "01", "label": "Depósito em conta-corrente ou conta pagamento"},
+        {"grupo": "06", "codigo": "99", "label": "Outros depósitos à vista"}
+      ]'::jsonb,
+      'Subconjunto da Tabela de Bens e Direitos da Receita Federal (imóveis, veículos, contas, participações) — AINDA NÃO validado contra a Instrução Normativa do exercício 2027, ver §8.32.40.'
+    )
+    on conflict (versao_regra_id, chave) do update
+      set valor_json = excluded.valor_json, observacao = excluded.observacao;
+  end if;
+end $$;

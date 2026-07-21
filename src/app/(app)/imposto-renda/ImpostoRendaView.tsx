@@ -1,10 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { obterRelatorioIR, obterDeclaracaoAtualIR, avisosEscopoIR, type RelatorioIR } from "@/lib/ir/actions";
+import {
+  obterRelatorioIR,
+  obterDeclaracaoAtualIR,
+  avisosEscopoIR,
+  type RelatorioIR,
+  type BensDireitosUI,
+} from "@/lib/ir/actions";
 import type { DeclaracaoComPerfil } from "@/lib/ir/consultas/declaracao";
 import type { AvisoEscopoIR } from "@/lib/ir/tipos";
+import type { GrupoCodigoBensDireitos } from "@/lib/ir/motores/bens-direitos";
 import QuestionarioIR from "./QuestionarioIR";
+import BensDireitosView from "./BensDireitosView";
+
+const ABAS = [
+  { id: "relatorio", label: "Relatório" },
+  { id: "bens_direitos", label: "Bens e Direitos" },
+] as const;
+type AbaId = (typeof ABAS)[number]["id"];
 
 const formatarMoeda = (valor: number) => valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -71,10 +85,15 @@ function CardPerfilFiscal({
 export default function ImpostoRendaView({
   relatorioInicial,
   declaracaoComPerfilInicial,
+  bensInicial,
+  tabelaGrupos,
 }: {
   relatorioInicial: RelatorioIR;
   declaracaoComPerfilInicial: DeclaracaoComPerfil | null;
+  bensInicial: BensDireitosUI;
+  tabelaGrupos: GrupoCodigoBensDireitos[] | null;
 }) {
+  const [aba, setAba] = useState<AbaId>("relatorio");
   const [relatorio, setRelatorio] = useState(relatorioInicial);
   const [carregando, setCarregando] = useState(false);
   const [declaracaoComPerfil, setDeclaracaoComPerfil] = useState(declaracaoComPerfilInicial);
@@ -130,6 +149,31 @@ export default function ImpostoRendaView({
     <div className="space-y-6">
       <CardPerfilFiscal declaracaoComPerfil={declaracaoComPerfil} onRefazer={() => setMostrarQuestionario(true)} />
 
+      <div className="flex gap-1 border-b border-border overflow-x-auto">
+        {ABAS.map((a) => (
+          <button
+            key={a.id}
+            onClick={() => setAba(a.id)}
+            className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
+              aba === a.id ? "border-accent text-ink" : "border-transparent text-muted hover:text-ink"
+            }`}
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+
+      {aba === "bens_direitos" && (
+        <BensDireitosView
+          bensInicial={bensInicial}
+          tabelaGrupos={tabelaGrupos}
+          declaracaoId={declaracaoComPerfil.declaracao.id}
+          anoCalendario={declaracaoComPerfil.declaracao.anoCalendario}
+        />
+      )}
+
+      {aba === "relatorio" && (
+      <>
       <div className="flex items-center gap-2">
         <label className="label mb-0">Ano</label>
         <select
@@ -261,6 +305,8 @@ export default function ImpostoRendaView({
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }

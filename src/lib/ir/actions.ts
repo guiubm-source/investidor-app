@@ -2,11 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { perfilFiscalSchema, type PerfilFiscalForm } from "./schema";
+import { perfilFiscalSchema, bemManualSchema, type PerfilFiscalForm, type BemManualForm } from "./schema";
 import { obterDeclaracaoAtual as _obterDeclaracaoAtual, type DeclaracaoComPerfil } from "./consultas/declaracao";
 import type { AvisoEscopoIR, PerfilFiscalIR } from "./tipos";
 import { apurarRendaVariavelBrasilDoUsuario } from "./consultas/renda-variavel";
 import type { LinhaMensalRendaVariavel } from "./motores/renda-variavel-brasil";
+import {
+  obterBensDireitos,
+  obterTabelaGruposCodigosVigente,
+  type ResultadoBensDireitos,
+} from "./consultas/bens-direitos";
+import type { GrupoCodigoBensDireitos } from "./motores/bens-direitos";
 
 export type AcaoResultado = { error?: string };
 
@@ -804,6 +810,141 @@ export async function salvarPerfilFiscalIR(declaracaoId: string, input: PerfilFi
     .eq("status", "em_configuracao");
 
   if (erroStatus) return { error: "Perfil salvo, mas não foi possível atualizar o status da declaração." };
+
+  revalidatePath("/imposto-renda");
+  return {};
+}
+
+// ============================================================================
+// Fase 9 (§8.32.37) — Bens e Direitos: itens manuais + auto-população de
+// investimentos a partir do ledger fiscal. Ver docs/MAPA-DE-DADOS.md §8.43.
+// ============================================================================
+
+/** Forma pra UI (`number`, não `Decimal`) — conversão só nesta fronteira, mesmo padrão de `converterLinhaRendaVariavelNova`. */
+export type ItemBensDireitosUI = {
+  origem: "manual" | "investimento";
+  grupo: string;
+  codigo: string;
+  nome: string;
+  localizacao: string | null;
+  cpfCnpj: string | null;
+  discriminacao: string | null;
+  situacaoAnterior: number;
+  situacaoAtual: number;
+  observacoes: string | null;
+  statusRevisao: "pendente" | "revisado" | null;
+  ativoId: string | null;
+  manualId: string | null;
+};
+
+export type BensDireitosUI = {
+  itens: ItemBensDireitosUI[];
+  ativosComPendencia: { ativoId: string; ativoTicker: string; motivos: string[] }[];
+};
+
+function converterBensDireitos(r: ResultadoBensDireitos): BensDireitosUI {
+  return {
+    itens: r.itens.map((i) => ({
+      origem: i.origem,
+      grupo: i.grupo,
+      codigo: i.codigo,
+      nome: i.nome,
+      localizacao: i.localizacao,
+      cpfCnpj: i.cpfCnpj,
+      discriminacao: i.discriminacao,
+      situacaoAnterior: i.situacaoAnterior.toNumber(),
+      situacaoAtual: i.situacaoAtual.toNumber(),
+      observacoes: i.observacoes,
+      statusRevisao: i.statusRevisao,
+      ativoId: i.ativoId,
+      manualId: i.manualId,
+    })),
+    ativosComPendencia: r.ativosComPendencia,
+  };
+}
+
+/** Bens e Direitos completo (manuais + investimentos) pra uma declaração/ano-calendário. */
+export async function obterBensDireitosIR(declaracaoId: string, anoCalendario: number): Promise<BensDireitosUI> {
+  const resultado = await obterBensDireitos(declaracaoId, anoCalendario);
+  return converterBensDireitos(resultado);
+}
+
+/** Tabela de grupos/códigos vigente — alimenta o seletor do formulário de item manual. `null` se a fundação de regras não estiver pronta pro exercício corrente. */
+export async function obterTabelaGruposCodigosIR(): Promise<GrupoCodigoBensDireitos[] | null> {
+  return obterTabelaGruposCodigosVigente();
+}
+
+export async function criarBemManualIR(declaracaoId: string, input: BemManualForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const dados = bemManualSchema.safeParse(input);
+  if (!dados.success) return { error: "Dados do item inválidos." };
+
+  const { error } = await supabase.from("ir_bens_direitos_manuais").insert({
+    profile_id: user.id,
+    declaracao_id: declaracaoId,
+    grupo: dados.data.grupo,
+    codigo: dados.data.codigo,
+    nome: dados.data.nome,
+    localizacao: dados.data.localizacao,
+    cpf_cnpj: dados.data.cpf_cnpj,
+    discriminacao: dados.data.discriminacao,
+    situacao_anterior: dados.data.situacao_anterior,
+    situacao_atual: dados.data.situacao_atual,
+    observacoes: dados.data.observacoes,
+    status_revisao: dados.data.status_revisao,
+  });
+  if (error) return { error: "Não foi possível salvar o item." };
+
+  revalidatePath("/imposto-renda");
+  return {};
+}
+
+export async function atualizarBemManualIR(id: string, input: BemManualForm): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const dados = bemManualSchema.safeParse(input);
+  if (!dados.success) return { error: "Dados do item inválidos." };
+
+  const { error } = await supabase
+    .from("ir_bens_direitos_manuais")
+    .update({
+      grupo: dados.data.grupo,
+      codigo: dados.data.codigo,
+      nome: dados.data.nome,
+      localizacao: dados.data.localizacao,
+      cpf_cnpj: dados.data.cpf_cnpj,
+      discriminacao: dados.data.discriminacao,
+      situacao_anterior: dados.data.situacao_anterior,
+      situacao_atual: dados.data.situacao_atual,
+      observacoes: dados.data.observacoes,
+      status_revisao: dados.data.status_revisao,
+    })
+    .eq("id", id)
+    .eq("profile_id", user.id);
+  if (error) return { error: "Não foi possível atualizar o item." };
+
+  revalidatePath("/imposto-renda");
+  return {};
+}
+
+export async function excluirBemManualIR(id: string): Promise<AcaoResultado> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Sessão expirada. Faça login novamente." };
+
+  const { error } = await supabase.from("ir_bens_direitos_manuais").delete().eq("id", id).eq("profile_id", user.id);
+  if (error) return { error: "Não foi possível excluir o item." };
 
   revalidatePath("/imposto-renda");
   return {};

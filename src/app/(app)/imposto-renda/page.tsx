@@ -1,6 +1,11 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { obterRelatorioIR, obterDeclaracaoAtualIR } from "@/lib/ir/actions";
+import {
+  obterRelatorioIR,
+  obterDeclaracaoAtualIR,
+  obterBensDireitosIR,
+  obterTabelaGruposCodigosIR,
+} from "@/lib/ir/actions";
 import ImpostoRendaView from "./ImpostoRendaView";
 
 export default async function ImpostoRendaPage() {
@@ -13,6 +18,13 @@ export default async function ImpostoRendaPage() {
 
   const anoAtual = new Date().getFullYear();
   const [relatorio, declaracaoComPerfil] = await Promise.all([obterRelatorioIR(anoAtual), obterDeclaracaoAtualIR()]);
+
+  const [bensInicial, tabelaGrupos] = await Promise.all([
+    declaracaoComPerfil
+      ? obterBensDireitosIR(declaracaoComPerfil.declaracao.id, declaracaoComPerfil.declaracao.anoCalendario)
+      : Promise.resolve({ itens: [], ativosComPendencia: [] }),
+    obterTabelaGruposCodigosIR(),
+  ]);
 
   return (
     <div className="px-6 py-10">
@@ -34,7 +46,12 @@ export default async function ImpostoRendaPage() {
           por aproximação (compra e venda do mesmo ativo no mesmo dia), não por casamento real de
           ordens. Confira os números antes de declarar.
         </div>
-        <ImpostoRendaView relatorioInicial={relatorio} declaracaoComPerfilInicial={declaracaoComPerfil} />
+        <ImpostoRendaView
+          relatorioInicial={relatorio}
+          declaracaoComPerfilInicial={declaracaoComPerfil}
+          bensInicial={bensInicial}
+          tabelaGrupos={tabelaGrupos}
+        />
       </div>
     </div>
   );
