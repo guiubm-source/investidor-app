@@ -5193,6 +5193,87 @@ próximo carregamento do relatório.
 `obterRelatorioIR`, tipos estendidos); `app/(app)/imposto-renda/ImpostoRendaView.tsx`
 (selo "em validação" + linhas pendentes).
 
+### 8.40 Imposto de Renda — fase 5 (consolidação DARF: código de receita + mínimo R$10) implementada (2026-07-21)
+
+Continuação de §8.39 — "proxima fase", com uma pergunta antes de codar (fase
+5 tem 3 partes bem diferentes: cálculo consolidado, multa/juros de atraso,
+PDF+pagamento — escolhido começar só pelo cálculo consolidado + mínimo
+R$10, mesmo padrão "motor sem tela" das fases anteriores).
+
+**Implementado nesta fase:**
+
+- **`lib/ir/motores/darf.ts`** (novo, motor puro, Decimal, sem
+  `"use server"`): `consolidarDarf(parcelas, valorMinimo)` — agrupa débitos
+  por código de receita E competência (§8.32.24.2 item 1: parcelas de
+  grupos diferentes — ex. `acao_swing` e `acao_day` — no mesmo código e mês
+  são somadas antes de entrar no acumulador), depois percorre as
+  competências em ordem cronológica por código de receita acumulando o
+  valor: enquanto o total acumulado ficar abaixo do mínimo (R$10, vindo de
+  `darf.valor_minimo_recolhimento`, já seedado na fase 1), NENHUMA guia é
+  emitida — a parcela só entra na memória do acumulador; assim que o total
+  atinge o mínimo, uma guia consolidada é emitida com TODAS as parcelas
+  acumuladas na memória (podendo vir de competências/grupos diferentes,
+  §8.32.24.3), e o acumulador zera. O que sobrar sem atingir o mínimo até a
+  última competência disponível fica em `saldosPendentes` (não é uma guia,
+  só um valor "aguardando a próxima competência compatível").
+- **Testado manualmente com 5 cenários** (script `tsx` temporário, não
+  commitado): valor já acima do mínimo todo mês (guia por mês, sem
+  acumular); valores pequenos acumulando 3 meses até atingir o mínimo numa
+  única guia; 2 grupos fiscais diferentes no mesmo código/mês consolidados
+  numa guia só; saldo que nunca atinge o mínimo (fica pendente, sem guia);
+  códigos de receita diferentes isolados um do outro (nunca se misturam).
+  Todos bateram com o esperado calculado à mão.
+- **`lib/ir/consultas/darf.ts`** (novo, sem `"use server"`):
+  `consolidarDarfRendaVariavelDoUsuario()` — lê a apuração de renda
+  variável já pronta (fase 4b, `apurarRendaVariavelBrasilDoUsuario`),
+  filtra só linhas com `impostoDevido` conhecido e não-pendentes (fato
+  pendente não entra no cálculo, §8.32.31 item 8 — mesma regra já aplicada
+  na apuração em si), resolve o código de receita de cada grupo fiscal e
+  chama o motor. Devolve `null` com o mesmo padrão de bloqueio gracioso das
+  demais consultas (sem versão de regra vigente/parâmetro completo, nunca
+  aproxima).
+- **Código de receita por grupo fiscal:** hoje os 3 grupos (`acao_swing`,
+  `acao_day`, `fii`) resolvem pro mesmo código consolidado
+  (`darf.codigo_receita_renda_variavel_comum`, seed atual `'6015'` — o
+  mesmo já documentado em §8.1 pro app antigo). A função verifica primeiro
+  uma chave específica por grupo (`darf.codigo_receita_acao_swing`, etc.) —
+  nenhuma está seedada ainda, então todos caem no fallback comum; isso
+  deixa o motor pronto pra diferenciar sem mudar código, caso uma pesquisa
+  futura confirme que algum desses grupos usa um código diferente na
+  prática (dívida técnica explícita, não confirmada nem descartada).
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Multa/juros de atraso (§8.32.24.4) — precisa de Selic histórica com
+   metodologia Sicalc; a aba Indicadores já tem uma série de Selic, mas o
+   próprio doc adverte pra não usar o indicador manual como fonte fiscal
+   "se houver qualquer lacuna ou diferença de granularidade" — decidir isso
+   é trabalho de uma fase futura, não assumido aqui.
+2. Geração de PDF da guia (§8.32.24.1) e fluxo de pagamento/status
+   (`calculado → DARF gerado → aguardando pagamento → pago`, §8.32.24.5) —
+   nenhuma tabela nova, nenhum formulário, nenhuma tela.
+3. `hash_calculo` (§8.32.24.1) — só faz sentido quando existir uma guia de
+   verdade sendo persistida (fase de PDF/pagamento); o motor atual é
+   recalculado on-the-fly, não precisa de hash de integridade ainda.
+4. Créditos (IRRF retido, §8.32.24.2 item 2) — mesma dívida técnica já
+   registrada em §8.38: `ir_retencoes` ainda não tem nenhum motor
+   populando ela, não há crédito nenhum pra abater do valor consolidado.
+5. Renda fixa, exterior e cripto não entram na consolidação — só o que a
+   fase 4b já apura (ações/fundos/FII).
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Nota operacional:** mais um arquivo de teste manual temporário
+(`src/lib/ir/motores/_teste_darf_temp.ts`) ficou parado no disco pelo mesmo
+motivo dos outros já registrados em §8.36-§8.38 (às vezes esse travamento
+se resolve sozinho entre uma sessão e outra — os 3 arquivos de teste
+anteriores já sumiram sozinhos; se este continuar aparecendo, apagar
+manualmente antes do `git add`).
+
+**Arquivos tocados.** `lib/ir/motores/darf.ts`, `lib/ir/consultas/darf.ts`
+(novos).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
