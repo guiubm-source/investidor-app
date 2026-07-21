@@ -12,19 +12,28 @@ import { useToast } from "@/components/ToastProvider";
  * tinha o card empilhado expansível — esse card foi substituído pela
  * árvore + editor contextual, então o arquivo foi renomeado pra refletir
  * que só resta o formulário aqui.
+ *
+ * `somaOutros` (fase 4, §8.53/§16.2.7) é a soma do peso-alvo dos OUTROS
+ * irmãos (mesmo Macro pai), sem contar o valor sendo digitado agora — o
+ * form calcula ao vivo se o valor digitado deixaria a soma acima de 100% e
+ * BLOQUEIA o botão Salvar antes mesmo de tentar (o servidor também recusa,
+ * mas isso dá o feedback na hora, sem round-trip).
  */
 export function FormClasse({
   valoresIniciais,
   onSalvo,
   onCancelar,
+  somaOutros = 0,
 }: {
   valoresIniciais?: Partial<ClasseForm>;
   onSalvo: (dados: ClasseForm) => void | Promise<void>;
   onCancelar: () => void;
+  somaOutros?: number;
 }) {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<ClasseForm>({
     resolver: zodResolver(classeSchema),
@@ -43,6 +52,10 @@ export function FormClasse({
     }
   });
 
+  const pesoDigitado = watch("peso_alvo");
+  const previsto = somaOutros + (Number.isFinite(pesoDigitado) ? pesoDigitado : 0);
+  const excede = previsto > 100.01;
+
   return (
     <form onSubmit={onSubmit} className="grid grid-cols-2 gap-3">
       <div>
@@ -60,11 +73,17 @@ export function FormClasse({
         />
         {errors.peso_alvo?.message && <p className="field-error">{errors.peso_alvo.message}</p>}
       </div>
+      {excede && (
+        <p className="col-span-2 text-xs text-danger">
+          Isso deixaria a soma das Classes deste Macro em {previsto.toFixed(1)}% — {(previsto - 100).toFixed(1)}pp
+          acima de 100%. Reduza este valor ou ajuste as outras classes primeiro.
+        </p>
+      )}
       <div className="col-span-2 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">
           Cancelar
         </button>
-        <button type="submit" disabled={isSubmitting} className="btn btn-primary flex-1">
+        <button type="submit" disabled={isSubmitting || excede} className="btn btn-primary flex-1">
           {isSubmitting ? "Salvando..." : "Salvar"}
         </button>
       </div>

@@ -195,6 +195,7 @@ export default function PainelContextual({
         <div className="mb-4 pb-4 border-b border-border">
           <FormNo
             valoresIniciais={{ nome: no.nome, peso_alvo: no.pesoAlvo ?? 0 }}
+            somaOutros={no.somaIrmaos ?? 0}
             onCancelar={() => setEditandoNo(false)}
             onSalvo={async (dados) => {
               const resultado = await editarNo(no.tipo, no.id as string, dados);
@@ -279,6 +280,7 @@ export default function PainelContextual({
                 <LinhaFilhoEditavel
                   key={filho.id}
                   filho={filho}
+                  somaOutros={status.soma - filho.pesoAlvo}
                   editando={editandoFilhoId === filho.id}
                   onSelecionar={() => onSelecionar({ tipo: filho.tipo, id: filho.id })}
                   onEditar={() => setEditandoFilhoId(filho.id)}
@@ -324,6 +326,7 @@ export default function PainelContextual({
               {adicionandoFilho ? (
                 <div className="bg-surface-2 rounded-md p-3">
                   <FormFilho
+                    somaOutros={status.soma}
                     onCancelar={() => setAdicionandoFilho(false)}
                     onSalvo={async (dados) => {
                       const resultado = await criarFilho(no.tipo, no.id, rotuloFilhoNovo, dados);
@@ -349,6 +352,7 @@ export default function PainelContextual({
 
 function LinhaFilhoEditavel({
   filho,
+  somaOutros,
   editando,
   onSelecionar,
   onEditar,
@@ -357,6 +361,7 @@ function LinhaFilhoEditavel({
   onSalvarEdicao,
 }: {
   filho: FilhoResolvido;
+  somaOutros: number;
   editando: boolean;
   onSelecionar: () => void;
   onEditar: () => void;
@@ -370,6 +375,7 @@ function LinhaFilhoEditavel({
       <div className="bg-surface-2 rounded-md p-3">
         <Form
           valoresIniciais={{ nome: filho.nome, peso_alvo: filho.pesoAlvo }}
+          somaOutros={somaOutros}
           onCancelar={onCancelarEdicao}
           onSalvo={onSalvarEdicao}
         />

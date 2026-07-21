@@ -55,6 +55,13 @@ export type NoResolvido = {
   ehFolha: boolean;
   /** false só pra Ativo e Setor (Setor tem filhos, mas eles não são um grupo com meta editável aqui — são Ativos, geridos na aba Ativos). */
   filhosEditaveisAqui: boolean;
+  /**
+   * Soma do peso-alvo dos IRMÃOS do próprio nó (mesmo pai, excluindo o nó
+   * em si) — usado na fase 4 (§8.53) pra bloquear o salvamento ao EDITAR o
+   * próprio nó selecionado, de forma preventiva (sem esperar o servidor
+   * rejeitar). `null` só pra raiz (não tem pai/irmãos).
+   */
+  somaIrmaos: number | null;
 };
 
 function paraFilhoClasse(c: ClasseNode): FilhoResolvido {
@@ -135,8 +142,11 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
       rotuloFilhos: "Macros",
       ehFolha: false,
       filhosEditaveisAqui: true,
+      somaIrmaos: null,
     };
   }
+
+  const somaPesoAlvo = (itens: { pesoAlvo: number }[]) => itens.reduce((s, i) => s + i.pesoAlvo, 0);
 
   for (const macro of estrutura.macros) {
     if (selecao.tipo === "macro" && selecao.id === macro.id) {
@@ -155,6 +165,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
         rotuloFilhos: "Classes",
         ehFolha: false,
         filhosEditaveisAqui: true,
+        somaIrmaos: somaPesoAlvo(estrutura.macros) - macro.pesoAlvo,
       };
     }
 
@@ -177,6 +188,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
           rotuloFilhos: "Setores",
           ehFolha: false,
           filhosEditaveisAqui: true,
+          somaIrmaos: somaPesoAlvo(macro.classes) - classe.pesoAlvo,
         };
       }
 
@@ -202,6 +214,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
             rotuloFilhos: "Ativos",
             ehFolha: false,
             filhosEditaveisAqui: false, // Ativos são geridos na aba Ativos, não aqui (§16.2.13)
+            somaIrmaos: somaPesoAlvo(classe.setores) - setor.pesoAlvo,
           };
         }
 
@@ -227,6 +240,7 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
               rotuloFilhos: "",
               ehFolha: true,
               filhosEditaveisAqui: false,
+              somaIrmaos: somaPesoAlvo(setor.ativos) - ativo.pesoAlvo,
             };
           }
         }
@@ -237,7 +251,16 @@ export function resolverNo(estrutura: EstruturaAlocacao, selecao: Selecao): NoRe
   return null;
 }
 
-/** Soma dos pesos-alvo dos filhos + status textual (completo/incompleto/excedido) — versão simples, refinada na fase 4. */
+/**
+ * Soma dos pesos-alvo dos filhos + status textual (completo/incompleto/
+ * excedido/vazio) — usado tanto pelo badge da árvore quanto pelo indicador
+ * permanente de distribuição do painel contextual (fase 4, §8.53/§16.2.7).
+ * "Incompleto" nunca bloqueia salvamento (é condição intermediária válida);
+ * "Excedido" é o único status que bloqueia — o bloqueio de verdade acontece
+ * nos formulários (`somaOutros` prop de FormMacro/FormClasse/FormSetor),
+ * que fazem essa mesma conta de forma preventiva enquanto o usuário digita,
+ * antes mesmo de tentar salvar.
+ */
 export function statusSomaFilhos(filhos: { pesoAlvo: number }[]): {
   soma: number;
   status: "completo" | "incompleto" | "excedido" | "vazio";

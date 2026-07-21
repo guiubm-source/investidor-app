@@ -6691,6 +6691,72 @@ subárvore, reordenar) e 6 (Não classificado como bucket de primeira classe
 na árvore, estados vazio/erro, responsividade completa, acessibilidade por
 teclado) do plano em §8.50/§8.51.
 
+### 8.53 Alocação — fase 4 da reformulação "Metas e estrutura": indicador de distribuição + bloqueio preventivo de salvamento (2026-07-21)
+
+Implementa o indicador de distribuição (completo/incompleto/excedido) e o
+bloqueio de salvamento do plano aprovado em §8.51. Nenhuma pergunta nova
+nesta fase (escopo já fechado) — mas uma decisão de design ficou explícita
+durante a implementação, ver "Decisão de design" abaixo.
+
+**`app/(app)/alocacao/arvore.ts`:**
+- `NoResolvido` ganhou o campo `somaIrmaos: number | null` — soma do
+  peso-alvo dos IRMÃOS do próprio nó selecionado (mesmo pai, excluindo o nó
+  em si), calculada em todos os 5 ramos de `resolverNo` (raiz sempre
+  `null`, já que raiz não tem pai/irmãos).
+- `statusSomaFilhos` (já existente desde a fase 3) permanece a fonte única
+  do status textual (completo/incompleto/excedido/vazio) usado tanto pelo
+  badge da árvore (`ArvoreAlocacao.tsx`, sem mudança) quanto pelo texto de
+  soma no painel contextual.
+
+**`FormMacro.tsx`, `FormClasse.tsx`, `FormSetor.tsx`** — todos ganharam uma
+prop opcional `somaOutros?: number` (default `0`). Cada form usa
+`watch("peso_alvo")` do react-hook-form pra recalcular ao vivo
+`previsto = somaOutros + pesoDigitado` a cada tecla digitada; se
+`previsto > 100.01` (mesma tolerância de ponto flutuante já usada em
+`statusSomaFilhos`), o botão Salvar fica `disabled` e aparece um aviso
+inline em vermelho com o excesso exato em pontos percentuais. Isso é uma
+camada preventiva no cliente — a rejeição no servidor (`somaPesoAlvoClasses`
+e equivalentes em `lib/alocacao/actions.ts`, já existente desde a fase 2)
+continua ativa como segunda linha de defesa, sem mudança.
+
+**`PainelContextual.tsx`** — passou a alimentar `somaOutros` nos 3 pontos
+onde os formulários aparecem:
+- Editar o PRÓPRIO nó selecionado (`FormNo`): `somaOutros={no.somaIrmaos ?? 0}`.
+- Editar um filho já existente na lista (`LinhaFilhoEditavel`, que ganhou
+  uma nova prop obrigatória `somaOutros: number`): `somaOutros={status.soma - filho.pesoAlvo}`
+  (soma de todos os filhos menos o próprio, calculado no componente pai a
+  partir do `status` já existente).
+- Criar um novo filho ("+ Adicionar..."): `somaOutros={status.soma}` (soma
+  de todos os filhos atuais, já que o novo ainda não existe pra subtrair).
+
+**Decisão de design (não foi feita pergunta nova, mas registrando o
+raciocínio):** o bloqueio é sempre relativo ao **peso local** (dentro do
+pai imediato), nunca ao peso global — consistente com a decisão da fase 2
+de que a árvore edita peso local e só informa peso global calculado
+(§8.51, pergunta 4). Um Macro pequeno (ex. 5% da carteira) ainda deve poder
+ter suas Classes somando exatamente 100% *dele*, mesmo que isso represente
+só 5% do patrimônio total — o bloqueio nunca olha pro `pesoAlvoGlobal`.
+
+**Verificação:** `tsc --noEmit` sem erros. Arquivos tocados nesta fase
+conferidos via `wc -l -c` + contagem de bytes nulos (0 em todos):
+`arvore.ts` (273 linhas), `FormClasse.tsx` (92), `FormSetor.tsx` (90),
+`FormMacro.tsx` (90), `PainelContextual.tsx` (424). Sem suíte automatizada
+ainda (mesma situação das fases 2-3).
+
+**Arquivos tocados.** Editados: `arvore.ts`, `FormMacro.tsx`,
+`FormClasse.tsx`, `FormSetor.tsx`, `PainelContextual.tsx`. Nenhum arquivo
+novo nesta fase.
+
+**Pendências pra próxima sessão:** fases 5 (ações principais/avançadas —
+usar saldo restante, distribuir igualmente, mover entre pais, excluir
+subárvore, reordenar) e 6 (Ativos somente leitura + Não classificado como
+bucket de primeira classe na árvore, estados vazio/erro, responsividade
+completa, acessibilidade por teclado) do plano em §8.50/§8.51. Também
+seguem pendentes as tarefas administrativas já registradas na fase 3: o
+Guilherme apagar manualmente `MacroRow.tsx`/`ClasseRow.tsx`/`SetorRow.tsx`
+e rodar `supabase/schema.sql` inteiro no SQL Editor do Supabase (migração
+do Macro da fase 1 ainda não confirmada como aplicada em produção).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
