@@ -3,11 +3,12 @@
 import { useState } from "react";
 import {
   criarClasse,
+  criarMacro,
   obterEstruturaAlocacao,
   type EstruturaAlocacao,
 } from "@/lib/alocacao/actions";
 import { SUGESTAO_ALOCACAO_POR_PERFIL, TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
-import ClasseRow, { FormClasse } from "./ClasseRow";
+import MacroRow, { FormMacro } from "./MacroRow";
 import DesvioBar from "@/components/DesvioBar";
 import { useToast } from "@/components/ToastProvider";
 
@@ -25,7 +26,7 @@ export default function AlocacaoView({
   perfilSugestao: string | null;
 }) {
   const [estrutura, setEstrutura] = useState(estruturaInicial);
-  const [adicionandoClasse, setAdicionandoClasse] = useState(false);
+  const [adicionandoMacro, setAdicionandoMacro] = useState(false);
   const [aplicandoSugestao, setAplicandoSugestao] = useState(false);
   const toast = useToast();
 
@@ -35,26 +36,37 @@ export default function AlocacaoView({
   };
 
   const sugestao = perfilSugestao ? SUGESTAO_ALOCACAO_POR_PERFIL[perfilSugestao] : undefined;
-  const somaPesoClasses = estrutura.classes.reduce((s, c) => s + c.pesoAlvo, 0);
+  const somaPesoMacros = estrutura.macros.reduce((s, m) => s + m.pesoAlvo, 0);
 
+  /**
+   * Sugestão de template aplica tudo dentro de um único Macro "Geral" (100%)
+   * criado na hora — mesmo Macro-guarda-chuva usado pela migração de dado
+   * existente (§8.51). O usuário pode depois dividir em mais Macros pela UI.
+   */
   const usarSugestao = async () => {
     if (!sugestao) return;
     setAplicandoSugestao(true);
+    const resultadoMacro = await criarMacro({ nome: "Geral", peso_alvo: 100 });
+    if (resultadoMacro.error || !resultadoMacro.id) {
+      toast.error(resultadoMacro.error ?? "Não foi possível criar o Macro inicial.");
+      setAplicandoSugestao(false);
+      return;
+    }
     for (const item of sugestao) {
-      await criarClasse({ nome: item.nome, peso_alvo: item.peso_alvo });
+      await criarClasse(resultadoMacro.id, { nome: item.nome, peso_alvo: item.peso_alvo });
     }
     await atualizar();
     setAplicandoSugestao(false);
     toast.success("Sugestão de alocação aplicada.");
   };
 
-  if (estrutura.classes.length === 0 && !adicionandoClasse) {
+  if (estrutura.macros.length === 0 && !adicionandoMacro) {
     return (
       <div className="card p-6">
         <h2 className="text-lg font-medium text-ink mb-1">Comece sua alocação-alvo</h2>
         <p className="text-sm text-muted mb-5">
-          Defina classes de ativo (renda fixa, ações, fundos imobiliários...) e o peso que cada
-          uma deve ter no seu patrimônio.
+          Defina Macros (ex. Brasil, Exterior), as classes de ativo dentro de cada um (renda fixa,
+          ações, fundos imobiliários...) e o peso que cada nível deve ter.
         </p>
 
         {sugestao && (
@@ -76,28 +88,43 @@ export default function AlocacaoView({
           </div>
         )}
 
-        <button onClick={() => setAdicionandoClasse(true)} className="btn btn-secondary">
+        <button onClick={() => setAdicionandoMacro(true)} className="btn btn-secondary">
           Começar do zero
         </button>
+
+        {adicionandoMacro && (
+          <div className="card p-4 mt-4">
+            <FormMacro
+              onCancelar={() => setAdicionandoMacro(false)}
+              onSalvo={async (dados) => {
+                const resultado = await criarMacro(dados);
+                if (resultado.error) throw new Error(resultado.error);
+                await atualizar();
+                setAdicionandoMacro(false);
+                toast.success("Macro criado.");
+              }}
+            />
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div>
-      {estrutura.classes.length > 0 && (
+      {estrutura.macros.length > 0 && (
         <div className="card p-5 mb-6 space-y-3">
           <p className="text-xs text-faint mb-1">
-            Resumo por classe — banda de tolerância de {TOLERANCIA_REBALANCEAMENTO_PP} pontos
+            Resumo por Macro — banda de tolerância de {TOLERANCIA_REBALANCEAMENTO_PP} pontos
             percentuais
           </p>
-          {estrutura.classes.map((classe) => (
+          {estrutura.macros.map((macro) => (
             <DesvioBar
-              key={classe.id}
-              label={classe.nome}
-              pesoAlvo={classe.pesoAlvo}
-              pesoReal={classe.pesoReal}
-              desvio={classe.desvio}
+              key={macro.id}
+              label={macro.nome}
+              pesoAlvo={macro.pesoAlvo}
+              pesoReal={macro.pesoReal}
+              desvio={macro.desvio}
               tolerancia={TOLERANCIA_REBALANCEAMENTO_PP}
             />
           ))}
@@ -110,37 +137,37 @@ export default function AlocacaoView({
         </div>
       )}
 
-      {estrutura.classes.length > 0 && (
-        <p className={`text-xs mb-2 ${somaPesoClasses > 100.01 ? "text-danger" : "text-faint"}`}>
-          Soma dos pesos-alvo das classes: {somaPesoClasses.toFixed(1)}%
-          {somaPesoClasses > 100.01
-            ? ` — excede 100% em ${(somaPesoClasses - 100).toFixed(1)}pp`
-            : somaPesoClasses < 99.99
-              ? ` — faltam ${(100 - somaPesoClasses).toFixed(1)}pp pra fechar 100%`
+      {estrutura.macros.length > 0 && (
+        <p className={`text-xs mb-2 ${somaPesoMacros > 100.01 ? "text-danger" : "text-faint"}`}>
+          Soma dos pesos-alvo dos Macros: {somaPesoMacros.toFixed(1)}%
+          {somaPesoMacros > 100.01
+            ? ` — excede 100% em ${(somaPesoMacros - 100).toFixed(1)}pp`
+            : somaPesoMacros < 99.99
+              ? ` — faltam ${(100 - somaPesoMacros).toFixed(1)}pp pra fechar 100%`
               : " ✓"}
         </p>
       )}
 
-      {estrutura.classes.map((classe) => (
-        <ClasseRow key={classe.id} classe={classe} onChange={atualizar} />
+      {estrutura.macros.map((macro) => (
+        <MacroRow key={macro.id} macro={macro} onChange={atualizar} />
       ))}
 
-      {adicionandoClasse ? (
+      {adicionandoMacro ? (
         <div className="card p-4">
-          <FormClasse
-            onCancelar={() => setAdicionandoClasse(false)}
+          <FormMacro
+            onCancelar={() => setAdicionandoMacro(false)}
             onSalvo={async (dados) => {
-              const resultado = await criarClasse(dados);
+              const resultado = await criarMacro(dados);
               if (resultado.error) throw new Error(resultado.error);
               await atualizar();
-              setAdicionandoClasse(false);
-              toast.success("Classe criada.");
+              setAdicionandoMacro(false);
+              toast.success("Macro criado.");
             }}
           />
         </div>
       ) : (
-        <button onClick={() => setAdicionandoClasse(true)} className="btn btn-secondary mt-2">
-          + Adicionar classe
+        <button onClick={() => setAdicionandoMacro(true)} className="btn btn-secondary mt-2">
+          + Adicionar Macro
         </button>
       )}
     </div>

@@ -21,8 +21,9 @@ auth.users (Supabase Auth)
   └─ profiles (1:1)                    dados pessoais + cadastro_completo
        ├─ investor_suitability (1:N)   histórico imutável do questionário
        │    └─ current_investor_suitability (view: última linha por perfil)
-       ├─ alocacao_classes (1:N)       nível 1 da estrutura-alvo (ex. Ações)
-       │    └─ alocacao_setores (1:N)  nível 2 (ex. Financeiro), FK classe_id
+       ├─ alocacao_macros (1:N)        nível 1 da estrutura-alvo (ex. Brasil) — desde §8.50/8.51
+       │    └─ alocacao_classes (1:N)  nível 2 (ex. Ações), FK macro_id
+       │         └─ alocacao_setores (1:N)  nível 3 (ex. Financeiro), FK classe_id
        ├─ ativos (1:N)                 registro mestre de cada investimento
        │    └─ setor_id → alocacao_setores (opcional; null = não classificado)
        │    (peso_alvo mora AQUI, não em uma tabela de "alocação de ativos")
@@ -43,7 +44,7 @@ funcionalidade nova:
 | Informação | Mora em | Quem só lê (nunca escreve) |
 |---|---|---|
 | Classificação do ativo (setor + peso-alvo) | `ativos.setor_id`, `ativos.peso_alvo` | Alocação |
-| Estrutura-alvo (classes/setores e seus pesos) | `alocacao_classes`, `alocacao_setores` | Ativos (só para popular o seletor) |
+| Estrutura-alvo (Macros/classes/setores e seus pesos) | `alocacao_macros`, `alocacao_classes`, `alocacao_setores` | Ativos (só para popular o seletor) |
 | Quantidade, preço médio, lucro realizado | Calculado em runtime a partir de `transacoes` (`lib/ativos/actions.ts#calcularPosicao`) | Carteira, Alocação |
 | Valor atual de cada ativo | `quantidade × ativos.preco_atual` (mesmo cálculo acima) | Alocação, Configurações |
 | Perfil de suitability vigente | `current_investor_suitability` (view) | Alocação (sugestão de template), Configurações (exibição) |
@@ -64,7 +65,7 @@ o cálculo.
 
 ```
 Carteira (compra/venda)             Alocação (estrutura-alvo)
-  transacoes                          alocacao_classes + alocacao_setores
+  transacoes                          alocacao_macros + alocacao_classes + alocacao_setores
         │                                       │
         ▼                                       │
 lib/ativos/actions.ts                            │
@@ -74,12 +75,13 @@ lib/ativos/actions.ts                            │
         ▼                                       │
   obterAtivosComPosicao()  ── valorAtual ──▶  lib/alocacao/actions.ts
   (posição + valorAtual de cada ativo)          obterEstruturaAlocacao()
-        │                                       monta árvore classe→setor→ativo
-        │                                       calcula pesoReal e desvio em
-        │                                       cada nível vs. o peso-alvo do
-        ▼                                       nível pai imediato
-   Aba Ativos (lista + detalhe)                       │
-   Aba Carteira (livro-razão + nomes)                  ▼
+        │                                       monta árvore macro→classe→setor→ativo
+        │                                       (§8.50/8.51) — calcula pesoReal e
+        │                                       desvio LOCAIS em cada nível vs. o
+        ▼                                       peso-alvo do nível pai imediato, +
+   Aba Ativos (lista + detalhe)                 pesoAlvoGlobal/pesoRealGlobal informativos
+   Aba Carteira (livro-razão + nomes)                  │
+                                                        ▼
                                               Aba Alocação (barras de desvio)
 
 Proventos (dividendo/JCP/rendimento)
@@ -118,15 +120,34 @@ sobre renda variável):
   só a data efetiva.
 
 ### 5.2 Desvio de alocação
-Cada nível compara peso real com peso-alvo **relativo ao pai imediato**
-(mesma lógica usada ao cadastrar as metas — cada nível soma 100% do nível
-acima):
+Desde a fase 1 da reformulação "Metas e estrutura" (§8.50/§8.51, 2026-07-21)
+a hierarquia é **Macro > Classe > Setor > Ativo** (antes era só Classe >
+Setor > Ativo). Cada nível compara peso real com peso-alvo **relativo ao
+pai imediato** (mesma lógica usada ao cadastrar as metas — cada nível soma
+100% do nível acima):
 - Ativo: `% do valor do setor` vs. `ativos.peso_alvo`.
 - Setor: `% do valor da classe` vs. `alocacao_setores.peso_alvo`.
-- Classe: `% do patrimônio total investido` vs. `alocacao_classes.peso_alvo`.
-- `desvio = pesoReal − pesoAlvo` (positivo = acima da meta, negativo = abaixo).
+- Classe: `% do valor do Macro` vs. `alocacao_classes.peso_alvo` — **mudou**
+  na fase 1: antes comparava contra o patrimônio total direto, agora contra
+  o Macro pai (`macro_id`).
+- Macro: `% do patrimônio total investido` vs. `alocacao_macros.peso_alvo` —
+  único nível cujo "pai" é o patrimônio total, então peso local e peso
+  global coincidem sempre.
+- `desvio = pesoReal − pesoAlvo` em cada nível (positivo = acima da meta,
+  negativo = abaixo) — esses 3 campos (`pesoAlvo`/`pesoReal`/`desvio`) são
+  sempre LOCAIS (relativos ao pai imediato).
+- Além disso, `lib/alocacao/actions.ts#obterEstruturaAlocacao` calcula
+  `pesoAlvoGlobal`/`pesoRealGlobal` em cada nó — só informativo, nunca
+  editável nem persistido, representando o peso do nó dentro do
+  **patrimônio total** (produto dos pesos locais/reais de toda a cadeia de
+  ancestrais). Existem porque o spec de redesenho pediu explicitamente que
+  a árvore mostre tanto o peso local quanto o peso global lado a lado (ver
+  §8.50, §16.2.5) — decisão confirmada com o Guilherme via `AskUserQuestion`
+  antes da fase 2 (a princípio o spec parecia falar só de estrutura-alvo,
+  sem desvio; ele pediu que a árvore mostrasse peso real/desvio também).
 - Ativos sem `setor_id` (não classificados) ficam de fora da árvore de
-  desvio, mas continuam contando na lista de Ativos e na Carteira.
+  desvio, mas continuam contando na lista de Ativos e na Carteira — vira
+  bucket "Não classificado" de primeira classe na árvore na fase 6.
 
 ### 5.3 Suitability (perfil de investidor)
 `lib/suitability/score.ts`. Questionário gera um **score de 10 a 37** somando
@@ -6215,6 +6236,380 @@ não existe indicador visual de "cotação desatualizada há X dias" por ativo
 ficar desatualizado, mas se o Yahoo falhar repetidamente pra um ticker
 específico (não só uma falha pontual), o usuário só descobre pelo toast de
 falhas do clique manual, não olhando a tabela.
+
+### 8.50 Alocação — spec de redesenho "Metas e estrutura": árvore operacional + editor contextual (2026-07-21)
+
+Conteúdo enviado pelo Guilherme (documento de especificação externo,
+numeração original §16.2.x/22.x/23.x preservada abaixo pra rastreabilidade)
+como base de conhecimento para uma reformulação futura da aba Alocação.
+**Nada disto está implementado ainda** — é spec, mesmo padrão usado em
+§8.32 para o Imposto de Renda (documentar a fundo antes de construir).
+Antes de qualquer implementação a partir daqui, passar pelo protocolo
+normal do CLAUDE.md (§1): levantar ambiguidades, perguntar 1 a 1, só então
+codar.
+
+A área "Metas e estrutura" (redesenho da atual sub-aba de estrutura-alvo em
+`AlocacaoView.tsx`/`ClasseRow.tsx`/`SetorRow.tsx`) deve usar um modelo
+híbrido entre **árvore operacional** (visualizar/navegar toda a estrutura)
+e **edição contextual guiada** (um painel que orienta a edição do nível
+selecionado, deixando claro qual conjunto de 100% está sendo distribuído).
+Ponto central do spec: a hierarquia é uma estrutura navegável, não um
+formulário sequencial — o usuário pode selecionar qualquer nó, a qualquer
+momento, sem seguir um fluxo obrigatório Macro → Classe → Setor → Ativo
+como se fossem etapas.
+
+Nota de arquitetura: o spec introduz um nível novo, **Macro**, acima de
+Classe — hoje a árvore real do app é só `alocacao_classes` → `alocacao_setores`
+→ `ativos` (ver §2 e §5.2 deste mapa). Incorporar esse nível exigiria nova
+tabela (`alocacao_macros`, provavelmente com FK `classe_id` ganhando um pai
+a mais) — decisão de schema a ser tomada quando este spec for de fato
+implementado, não decidida agora.
+
+#### 16.2.1 Estrutura geral da página
+
+Em telas largas, duas áreas lado a lado: árvore da estrutura à esquerda
+(~60% da largura) e editor contextual à direita (~40%), proporção ajustável
+conforme densidade de informação/tamanho de tela.
+
+```
+┌─────────────────────────────────────┬──────────────────────────────┐
+│ Árvore da estrutura                 │ Editor contextual            │
+│                                      │                              │
+│ Macro                                │ Contexto do nó selecionado   │
+│ └── Classe                          │ Distribuição dos filhos      │
+│     └── Setor                       │ Peso local e peso global     │
+│         └── Ativo                   │ Status e ações               │
+└─────────────────────────────────────┴──────────────────────────────┘
+```
+
+#### 16.2.2 Árvore operacional
+
+Cada linha representa um único nó (Macro/Classe/Setor/Ativo), com colunas:
+nome, peso dentro do pai, peso na carteira, soma dos filhos, status, ações.
+Exemplo do spec:
+
+```
+Brasil
+Peso dentro da carteira: 70%
+Peso na carteira: 70%
+Soma das Classes: 100%
+Status: Completo
+
+└── Renda fixa
+    Peso dentro de Brasil: 60%
+    Peso na carteira: 42%
+    Soma dos Setores: 90%
+    Status: Incompleto
+```
+
+A árvore deve permitir expandir/recolher, selecionar, adicionar filhos,
+reordenar, acessar ações avançadas, e identificar rapidamente estruturas
+completas/incompletas/excedidas. A linha selecionada precisa de destaque
+visual perceptível sem depender só de cor (ver 16.2.18, acessibilidade).
+
+#### 16.2.3 Seleção e navegação
+
+Selecionar um nó atualiza o painel contextual sem sair da página. O
+caminho até o nó aparece como breadcrumb (ex. "Brasil › Renda fixa"),
+representando **localização**, não um stepper de etapas obrigatórias. O
+título do painel descreve a tarefa atual de forma específica — "Distribuir
+Classes de Brasil", "Distribuir Setores de Renda fixa", "Distribuir Ativos
+de Pós-fixado", "Editar Macro Brasil" — nunca títulos genéricos como
+"Editar item" ou "Configuração".
+
+#### 16.2.4 Editor contextual guiado
+
+O painel explica qual distribuição está sendo editada, sempre relembrando
+o peso dos ancestrais em vez de exigir que o usuário memorize. Exemplo ao
+selecionar a Classe Renda fixa:
+
+```
+Você está definindo como os 100% internos de Renda fixa
+serão distribuídos entre seus Setores.
+
+Caminho:
+Brasil 70% → Renda fixa 60%
+
+Renda fixa representa 42% da carteira.
+Os Setores abaixo devem somar 100%.
+```
+
+#### 16.2.5 Peso local e peso global
+
+Cada item editável mostra dois percentuais: **peso dentro do pai**
+(editável) e **peso na carteira** (calculado, derivado multiplicando a
+cadeia de pesos locais dos ancestrais — ex. "Brasil 70% × Renda fixa 60% =
+42% da carteira"). O peso global é só informativo/exibição — nunca editável
+nem persistido diretamente (evita duas fontes de verdade pro mesmo número,
+consistente com a regra do §3 deste mapa).
+
+#### 16.2.6 Distribuição dos filhos
+
+O painel lista os filhos diretos do nó selecionado (nome, peso local
+editável, peso global calculado, ações específicas) — ex. "Setores de
+Renda fixa: Pós-fixado 50%, Inflação 30%, Prefixado 10%". Os percentuais
+são sempre editados no contexto do pai imediato; a UI não pode deixar o
+usuário interpretar peso local como se fosse percentual direto da
+carteira.
+
+#### 16.2.7 Indicador permanente da distribuição
+
+O estado da distribuição (distribuído/restante/excesso) fica visível
+durante toda a edição, com 3 estados: completo (100%, salvamento liberado),
+incompleto (ex. 90%, restante 10% visível, **salvamento ainda permitido** —
+não é tratado como erro, é uma condição intermediária válida) e excedido
+(ex. 105%, excesso de 5pp, **salvamento bloqueado**, com indicação clara de
+quais campos precisam ajuste).
+
+#### 16.2.8 Ações principais
+
+Ficam visíveis no painel: adicionar filho, usar saldo restante, distribuir
+restante igualmente, reordenar. Nenhuma pode alterar pesos silenciosamente
+— antes de executar, a UI mostra o resultado esperado (ex. "O restante de
+10% será atribuído a Pós-fixado: 50% → 60%") e pede confirmação quando a
+ação afeta múltiplos itens de uma vez.
+
+#### 16.2.9 Ações avançadas
+
+Agrupadas numa área secundária, fora do fluxo principal de edição: mover
+para outro pai, copiar estrutura, excluir nó, excluir subárvore, transferir
+filhos, redefinir distribuição.
+
+#### 16.2.10 Alteração do peso do pai
+
+Ao editar o peso local de um nó com descendentes, a UI informa que os
+pesos locais dos descendentes são preservados — só os pesos globais
+(derivados) são recalculados. Sempre que possível, mostrar prévia do
+impacto antes de confirmar (ex. "Brasil: 70% → 60%" → "Renda fixa: peso
+local 60% [inalterado], peso global atual 42% → novo peso global 36%").
+
+#### 16.2.11 Mudança de pai
+
+Mover uma Classe para outro Macro (ou Setor para outra Classe) mostra
+origem, destino, peso local preservado, peso global atual e novo peso
+global antes de confirmar — a mudança só ocorre após confirmação explícita
+(ação irreversível sem aviso é sempre proibida, ver `<ask_user_question>`/
+regras de ação deste ambiente também).
+
+#### 16.2.12 Exclusão
+
+Nunca destrutiva-silenciosa. Excluir um nó com filhos oferece: cancelar,
+mover os filhos, ou excluir toda a subárvore — esta última informando
+quantidade de descendentes afetados, consequência sobre a distribuição do
+pai, e a necessidade de redistribuir o percentual que sobra.
+
+#### 16.2.13 Tratamento dos Ativos
+
+Ativos aparecem na árvore só para leitura/análise — a edição de
+`ativos.setor_id`/`ativos.peso_alvo` continua exclusiva da aba Ativos
+(reafirma a regra já documentada no §4 deste mapa: "Alocação nunca cria nem
+edita ativo"). Selecionar um Ativo no painel mostra modo somente leitura,
+com ações: abrir na aba Ativos, ver caminho completo, ver peso
+local/global/valor atual — a aba Alocação nunca grava no vínculo ou peso-
+alvo do Ativo.
+
+#### 16.2.14 Não classificado
+
+Bucket **runtime** (não persistido — não é uma linha real em
+`alocacao_classes`) no nível raiz da árvore, visualmente distinto dos
+Macros de verdade, agregando ativos sem `setor_id` (mesmo conceito que já
+existe hoje como "ativos não classificados", ver §5.2 deste mapa — o spec
+propõe dar a ele um espaço de primeira classe na árvore em vez de só
+excluir da árvore de desvio). Exemplo: "Não classificado — 2,1% da
+carteira, R$182.400, 12 Ativos, Meta: 0%". Ao selecionar, o painel explica
+que os Ativos não têm caminho completo, lista os Ativos afetados, mostra
+valor/percentual, e dá CTA pra aba Ativos. Nunca permite: editar peso-alvo
+do bucket, virar Macro automaticamente, inferir classificação sozinho, ou
+distribuir o bucket entre Macros.
+
+#### 16.2.15 Feedback de salvamento
+
+O botão de salvar fica perto dos campos editados (ex. barra fixa no
+rodapé do painel contextual: "Alterações não salvas — os pesos globais
+serão recalculados — [Descartar] [Salvar alterações]"). Evitar um botão
+único "Salvar toda a estrutura" quando não há uma transação real cobrindo
+a árvore inteira — o salvamento deve dizer exatamente qual nó/distribuição
+está sendo atualizado (ex. "Salvar distribuição dos Setores de Renda
+fixa").
+
+#### 16.2.16 Estados da interface
+
+Previstos: carregando, vazio, sem filhos, completo, incompleto, excedido,
+erro de salvamento, sem patrimônio, denominador zero, somente leitura,
+alterações não salvas. Estado vazio de Macro: "Nenhum Macro foi criado —
+crie o primeiro Macro para começar a distribuir o patrimônio entre os
+blocos estratégicos." Estado sem filhos: "Brasil ainda não possui Classes
+— adicione uma Classe para distribuir os 100% internos deste Macro."
+
+#### 16.2.17 Responsividade
+
+Telas grandes: árvore e editor lado a lado. Telas intermediárias: árvore
+principal + editor em painel lateral sobreposto. Telas pequenas: lista
+hierárquica → seleção do nó → tela contextual de edição. Mobile pode
+adotar fluxo guiado (Macro → Classes do Macro → Setores da Classe → Ativos
+do Setor), mas sempre preservando breadcrumb, nome do pai, percentual do
+pai, peso global do nó, distribuído, restante, status, e ações de
+salvar/descartar.
+
+#### 16.2.18 Acessibilidade
+
+Navegação por teclado, foco visível, botões reais (não `div` clicável) pra
+expandir/recolher, estado expandido comunicado por atributos semânticos
+(`aria-expanded` etc.), nunca depender só de cor, mensagens de erro
+associadas ao campo correspondente, rótulos contextualizados, áreas
+clicáveis adequadas, texto alternativo pra indicadores visuais/gráficos.
+Estados sempre com texto (Completo/Incompleto/Excedido/Somente leitura),
+nunca só verde/amarelo/vermelho.
+
+#### 16.2.19 Hierarquia visual
+
+Perceptível por indentação, conectores/linhas discretas, ícones de
+expansão, tipografia, espaçamento, breadcrumbs e contexto textual — nunca
+só por tamanho de fonte ou cor. Macro tem mais destaque estrutural que
+Classe/Setor/Ativo, sem virar todos os níveis em cards independentes
+(evitar o problema oposto: uma tela toda em cards soltos perde a leitura de
+hierarquia).
+
+#### 16.2.20 Princípios de experiência adotados
+
+Mostrar a estrutura inteira sem forçar edição simultânea de tudo; revelar
+detalhe conforme o nó selecionado; mostrar contexto do pai durante a
+edição; diferenciar claramente peso local vs. global; reduzir cálculo
+mental do usuário; tratar estados intermediários (incompleto) sem punição
+visual; prevenir alterações destrutivas; manter ações avançadas fora do
+fluxo principal; preservar previsibilidade dos cálculos; **priorizar
+planejamento e disciplina, evitando estímulos de compra ou venda** — o
+objetivo da tela não é recomendar movimentação financeira, é permitir que o
+usuário defina a estrutura, compreenda a distribuição, identifique desvios
+e entenda as causas.
+
+#### 22.x Casos de teste de interface (do spec, a formalizar quando implementado)
+
+Seleção de nó (Classe selecionada mostra Macro pai + peso local + peso
+global + distribuição dos Setores + status da soma); breadcrumb (Setor
+selecionado mostra "Macro › Classe › Setor", nunca como stepper
+obrigatório); soma incompleta (filhos somando 90%: salvamento permitido,
+status incompleto, restante de 10% visível); soma excedida (filhos somando
+105%: salvamento bloqueado, status excedido, excesso de 5pp visível, campos
+responsáveis identificáveis); recalcular peso global (Brasil 70%→60%: prévia
+mostrando que os pesos locais dos descendentes ficam iguais e os pesos
+globais são recalculados); mover nó (mostrar peso global anterior e novo
+antes de mover uma Classe de Macro); Ativo somente leitura (nenhum controle
+de `setor_id`/`peso_alvo`, só CTA pra aba Ativos); Não classificado (lista
+Ativos sem caminho completo, mostra cobertura e valor, sem campo de meta,
+com CTA de classificação); navegação por teclado (expandir/recolher,
+selecionar linha, acessar painel, editar campos, salvar, descartar, menus
+de ações avançadas).
+
+#### 23.x Critérios de aceite do layout (do spec, referência para quando implementado)
+
+20 critérios do documento original: usa árvore + editor contextual; árvore
+visível durante a edição; seleção atualiza o painel; breadcrumb é
+localização, não etapas; painel informa quais 100% estão sendo
+distribuídos; peso local ≠ peso global visualmente; só peso local é
+editável; status da distribuição sempre visível; incompleto permite salvar;
+excedido bloqueia salvar; salvar fica perto do contexto editado; mudança no
+pai mostra impacto nos descendentes; mudança de pai exige confirmação;
+exclusão com filhos nunca é silenciosa; Ativos somente leitura na Alocação;
+Não classificado aparece como bucket runtime; funciona por teclado; estados
+não dependem só de cor; layout adapta pra telas pequenas; a interface nunca
+recomenda compra/venda.
+
+### 8.51 Alocação — fases 1 e 2 da reformulação "Metas e estrutura": decisões de escopo + nível Macro implementado (2026-07-21)
+
+Início da implementação a partir do spec em §8.50. Como sempre nesse
+projeto, protocolo de 1 pergunta por vez (CLAUDE.md §1) antes de codar:
+
+1. **Nível Macro**: o spec introduz um nível acima de Classe (ex. Brasil >
+   Renda fixa > Pós-fixado) que não existia no schema real (só Classe >
+   Setor > Ativo). Perguntado se incluíamos agora (exige tabela nova +
+   migração) ou adiávamos. **Decisão: incluir agora.**
+2. **Abordagem de entrega**: dado o tamanho do spec, perguntado se
+   quebrávamos em fases incrementais (padrão já usado nas 12 fases do IR)
+   ou se eu desenhava um plano e implementava tudo de uma vez. **Decisão:
+   fases incrementais**, plano de 6 fases aprovado como proposto:
+   1) schema Macro + migração; 2) motor de dados; 3) layout árvore + editor
+   contextual; 4) indicador de distribuição; 5) ações principais/avançadas;
+   6) Ativos somente leitura + Não classificado + estados + responsividade/
+   acessibilidade.
+3. **Peso real vs. peso-alvo na árvore nova** — a mais importante das 3:
+   relendo o spec com calma, todo exemplo de "peso dentro do pai"/"peso na
+   carteira" descreve o peso-ALVO acumulado (produto dos pesos-alvo dos
+   ancestrais) — nenhum exemplo do documento mostra peso REAL (baseado no
+   valor de mercado atual) nem desvio. Perguntado se a área "Metas e
+   estrutura" é só pra DEFINIR a estrutura-alvo (desvio real continua só
+   nas barras de resumo já existentes) ou se a árvore/painel novos também
+   devem mostrar peso real e desvio em cada nó. **Decisão: mostrar peso
+   real e desvio também**, em todo nível (inclusive Macro) — mais trabalho
+   de motor (peso real e peso-alvo agora coexistem em 2 "escalas": local,
+   relativa ao pai imediato, e global, relativa ao patrimônio total).
+
+**Fase 1 — schema (seção 25 do `supabase/schema.sql`):** nova tabela
+`alocacao_macros` (mesmo shape de `alocacao_classes`: `profile_id`, `nome`,
+`peso_alvo`, RLS própria). `alocacao_classes` ganha `macro_id` (FK, NOT
+NULL após backfill) — migração cria 1 Macro "Geral" (100%) por usuário que
+já tinha classes cadastradas e associa as classes existentes a ele, sem
+perder nenhum dado nem alterar o peso global de nada (Geral = 100%, então
+o `peso_alvo` de cada classe continua valendo exatamente o mesmo número de
+antes). A constraint de unicidade de nome de Classe migrou de
+`unique(profile_id, nome)` pra `unique(macro_id, nome)` (mesmo padrão que
+Setor já usa com `classe_id`) — permite duas classes com o mesmo nome em
+Macros diferentes (ex. "Renda fixa" em Brasil e em Exterior).
+
+**Fase 2 — motor de dados (`lib/alocacao/actions.ts`):** `obterEstruturaAlocacao`
+agora monta a árvore `MacroNode > ClasseNode > SetorNode > AtivoNode`. Todo
+nó carrega um conjunto comum de campos (`PesosNode`): `pesoAlvo`/`pesoReal`/
+`desvio` (sempre LOCAIS, relativos ao pai imediato — mesmo significado de
+antes da fase 1, só que agora Classe também tem um pai imediato, o Macro,
+em vez do patrimônio total direto) e `pesoAlvoGlobal`/`pesoRealGlobal`
+(novos, só informativos — nunca editáveis nem persistidos — representando
+o peso do nó dentro do patrimônio total, calculado multiplicando a cadeia
+de pesos da raiz até o nó). CRUD de Macro (`criarMacro`/`editarMacro`/
+`excluirMacro`) espelha exatamente o padrão já usado por Classe/Setor,
+incluindo a validação redundante de soma ≤100% (agora também por Macro,
+com `somaPesoAlvoMacros`); `criarClasse` passou a exigir `macroId` como
+primeiro argumento (mesmo padrão que `criarSetor` já usa com `classeId`), e
+a validação de soma de Classes passou a ser escopada por Macro (antes era
+por profile inteiro).
+
+Pra manter a aplicação funcionando e compilando ao final desta fase (regra
+de evitar bugs do CLAUDE.md §1 item 4), a UI recebeu o mínimo indispensável
+de ajuste — um novo `MacroRow.tsx` (mesmo padrão visual de `ClasseRow.tsx`,
+um nível acima), com `AlocacaoView.tsx` agora iterando `estrutura.macros`
+em vez de `estrutura.classes`. Este continua sendo o layout "de cards
+empilhados" antigo — a árvore + editor contextual do spec (com breadcrumb,
+seleção de nó, peso local/global lado a lado) é o que a fase 3 constrói de
+verdade. A sugestão de template por perfil de suitability
+(`SUGESTAO_ALOCACAO_POR_PERFIL`) também foi ajustada: agora cria um Macro
+"Geral" (100%) na hora e aplica as classes sugeridas dentro dele, mesmo
+Macro-guarda-chuva usado pela migração de dado existente.
+
+**Verificação:** `tsc --noEmit` sem erros. Arquivos conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos): `supabase/schema.sql`,
+`lib/alocacao/actions.ts`, `lib/alocacao/schema.ts`, `AlocacaoView.tsx`,
+`MacroRow.tsx`. Sem suíte automatizada pra Alocação ainda (motor não usa
+Decimal/Vitest como o de IR) — verificação nesta fase foi tsc + revisão de
+código; considerar testes manuais end-to-end (criar Macro → Classe → Setor
+→ classificar Ativo → conferir pesoReal/desvio/pesoRealGlobal) antes de
+considerar a fase 2 "fechada" na prática, já que a migração de dado real
+só roda de fato quando o Guilherme aplicar o `schema.sql` no Supabase.
+
+**Seções vivas atualizadas** (não só o changelog): §2 (diagrama de
+entidades), §3 (tabela fonte única de verdade), §4 (fluxo entre abas) e
+§5.2 (regras de desvio) — todas agora descrevem Macro > Classe > Setor >
+Ativo e a distinção peso local vs. global, em vez do modelo de 2 níveis
+antigo.
+
+**Arquivos tocados.** `supabase/schema.sql` (seção 25), `lib/alocacao/schema.ts`
+(`macroSchema`), `lib/alocacao/actions.ts` (reescrito), novo
+`app/(app)/alocacao/MacroRow.tsx`, `app/(app)/alocacao/AlocacaoView.tsx`
+(adaptado).
+
+**Pendências pra próxima sessão:** fases 3 a 6 do plano (§8.50), começando
+pela fase 3 (layout árvore + editor contextual) — só então o app passa a
+ter a experiência de fato descrita no spec; até lá, o que existe é
+funcionalmente equivalente a antes (cards empilhados), só que com um nível
+extra (Macro) por cima.
 
 ## 9. Convenções a preservar
 

@@ -1610,3 +1610,83 @@ begin
       set valor_json = excluded.valor_json, observacao = excluded.observacao;
   end if;
 end $$;
+
+-- ============================================================================
+-- 25. Alocação — nível Macro acima de Classe (fase 1 de 6 da reformulação
+--     "Metas e estrutura", spec em docs/MAPA-DE-DADOS.md §8.50, decisões de
+--     fase em §8.51). Hierarquia passa de Classe > Setor > Ativo para
+--     Macro > Classe > Setor > Ativo. Classe deixa de somar 100% do
+--     patrimônio total direto e passa a somar 100% DENTRO do seu Macro —
+--     mesmo modelo que Setor já usa dentro de Classe (peso local vs. peso
+--     global calculado, nunca persistido — ver §5.2 do mapa de dados).
+-- ============================================================================
+
+-- 25.1 Macros — novo nível 1 da estrutura-alvo (ex. Brasil, Exterior). Peso-
+--      alvo soma 100% do patrimônio total do usuário, igual Classe fazia
+--      antes desta migração.
+create table if not exists public.alocacao_macros (
+  id          uuid primary key default gen_random_uuid(),
+  profile_id  uuid not null references public.profiles (id) on delete cascade,
+  nome        text not null,
+  peso_alvo   numeric(5,2) not null check (peso_alvo between 0 and 100),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  unique (profile_id, nome)
+);
+
+comment on table public.alocacao_macros is 'Nível 1 da estrutura-alvo (fase 1 da reformulação "Metas e estrutura", §8.50/§8.51): agrupamento acima de Classe (ex. Brasil, Exterior). Peso-alvo soma 100% do patrimônio total do usuário.';
+
+drop trigger if exists trg_alocacao_macros_updated_at on public.alocacao_macros;
+create trigger trg_alocacao_macros_updated_at
+  before update on public.alocacao_macros
+  for each row execute function public.set_updated_at();
+
+alter table public.alocacao_macros enable row level security;
+
+drop policy if exists "alocacao_macros_all_own" on public.alocacao_macros;
+create policy "alocacao_macros_all_own" on public.alocacao_macros
+  for all using (auth.uid() = profile_id) with check (auth.uid() = profile_id);
+
+-- 25.2 alocacao_classes ganha macro_id — nullable por enquanto, só pra
+--      permitir o backfill (25.3) rodar antes do NOT NULL (25.4) entrar em
+--      vigor num banco que já tinha classes cadastradas.
+alter table public.alocacao_classes add column if not exists macro_id uuid references public.alocacao_macros (id) on delete cascade;
+
+create index if not exists idx_alocacao_classes_macro_id on public.alocacao_classes (macro_id);
+
+-- 25.3 Backfill: toda classe existente sem macro_id ganha um Macro "Geral"
+--      (100%, criado 1x por usuário que já tinha classe) — não perde nenhum
+--      dado nem muda peso global de nada (Geral = 100%, então peso_alvo da
+--      classe continua significando exatamente o mesmo valor de antes).
+--      Guilherme pode renomear "Geral" ou dividir em mais Macros depois,
+--      pela UI nova (fase 3).
+do $$
+declare
+  r record;
+  v_macro_id uuid;
+begin
+  for r in select distinct profile_id from public.alocacao_classes where macro_id is null loop
+    select id into v_macro_id from public.alocacao_macros where profile_id = r.profile_id and nome = 'Geral';
+    if v_macro_id is null then
+      insert into public.alocacao_macros (profile_id, nome, peso_alvo)
+      values (r.profile_id, 'Geral', 100)
+      returning id into v_macro_id;
+    end if;
+    update public.alocacao_classes set macro_id = v_macro_id where profile_id = r.profile_id and macro_id is null;
+  end loop;
+end $$;
+
+-- 25.4 Depois do backfill, macro_id é obrigatório (toda classe pertence a
+--      um Macro) — seguro de rodar de novo (SET NOT NULL numa coluna já
+--      NOT NULL não dá erro no Postgres).
+alter table public.alocacao_classes alter column macro_id set not null;
+
+-- 25.5 unique(profile_id, nome) fazia sentido quando Classe era o nível 1;
+--      agora o nome só precisa ser único DENTRO do Macro (mesmo padrão que
+--      alocacao_setores já usa com classe_id) — permite, por exemplo,
+--      "Renda fixa" existir tanto em Brasil quanto em Exterior.
+alter table public.alocacao_classes drop constraint if exists alocacao_classes_profile_id_nome_key;
+alter table public.alocacao_classes drop constraint if exists alocacao_classes_macro_id_nome_key;
+alter table public.alocacao_classes add constraint alocacao_classes_macro_id_nome_key unique (macro_id, nome);
+
+comment on table public.alocacao_classes is 'Nível 2 da estrutura-alvo (antes do §8.50/8.51 era o nível 1): classes de ativo (ex. Renda Fixa, Ações, FIIs) dentro de um Macro. Peso-alvo soma 100% DENTRO do Macro pai (macro_id), não mais do patrimônio total direto.';
