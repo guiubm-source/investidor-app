@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { perfilFiscalSchema, type PerfilFiscalForm } from "./schema";
 import { obterDeclaracaoAtual as _obterDeclaracaoAtual, type DeclaracaoComPerfil } from "./consultas/declaracao";
 import type { AvisoEscopoIR, PerfilFiscalIR } from "./tipos";
+import { apurarRendaVariavelBrasilDoUsuario } from "./consultas/renda-variavel";
+import type { LinhaMensalRendaVariavel } from "./motores/renda-variavel-brasil";
 
 export type AcaoResultado = { error?: string };
 
@@ -290,6 +292,24 @@ export type LinhaMensal = {
    * renda variável não prescreve, então isso pode vir de qualquer ano
    * anterior, não só do mês anterior dentro do mesmo ano. */
   prejuizoAnteriorAplicado: number;
+  /**
+   * Ver docs/MAPA-DE-DADOS.md §8.39 (fase 4b): `acao_swing`/`acao_day`/`fii`
+   * passaram a vir do motor novo (lib/ir/motores/renda-variavel-brasil.ts,
+   * ledger fiscal + classificação de day trade reais), marcado "em
+   * validação" na UI — as demais categorias continuam vindo da aproximação
+   * antiga (`legado`) até as fases 6-8 cobrirem renda fixa/exterior/cripto.
+   * Fallback: se a versão de regra vigente não existir/faltar parâmetro, a
+   * categoria volta a `legado` automaticamente (ver `obterRelatorioIR`).
+   */
+  origemMotor: "novo_fase4" | "legado";
+  /**
+   * true quando pelo menos uma venda deste mês/categoria não pôde ser
+   * classificada com segurança pelo motor novo (day trade pendente,
+   * §8.32.31 item 8) — o valor dela fica de fora do cálculo, não é
+   * aproximado. Sempre `false` em linhas `origemMotor: "legado"`.
+   */
+  pendente: boolean;
+  motivosPendencia: string[];
 };
 
 export type ResumoAnualCategoria = {
@@ -299,6 +319,8 @@ export type ResumoAnualCategoria = {
   lucroLiquido: number;
   impostoDevido: number;
   apuracaoAnual: boolean;
+  /** Ver `LinhaMensal.origemMotor` — herdado das linhas mensais que compõem este resumo. */
+  origemMotor: "novo_fase4" | "legado";
 };
 
 export type RelatorioIR = {
@@ -307,6 +329,35 @@ export type RelatorioIR = {
   mensal: LinhaMensal[];
   resumoAnual: ResumoAnualCategoria[];
 };
+
+/**
+ * Converte uma linha do motor novo (fase 4, Decimal, ver
+ * docs/MAPA-DE-DADOS.md §8.38/§8.39) pro formato antigo `LinhaMensal`
+ * (number) que a UI já sabe renderizar. Arredondamento pra `number` só
+ * acontece nesta fronteira de saída — o cálculo em si (`apurarRendaVariavelBrasil`)
+ * continua inteiramente em Decimal (§8.32.32).
+ */
+function converterLinhaRendaVariavelNova(l: LinhaMensalRendaVariavel): LinhaMensal {
+  const categoria = l.grupo as CategoriaIR;
+  return {
+    anoMes: l.anoMes,
+    categoria,
+    categoriaLabel: LABEL_CATEGORIA[categoria],
+    vendaTotal: l.vendaTotalBruta.toNumber(),
+    lucroBruto: l.lucroBruto.toNumber(),
+    isento: l.isento,
+    motivoIsencao: l.motivoIsencao,
+    baseCalculo: l.baseCalculo.toNumber(),
+    aliquota: l.aliquota ? l.aliquota.toNumber() : null,
+    impostoDevido: l.impostoDevido ? l.impostoDevido.toNumber() : null,
+    apuracaoAnual: false,
+    diasMediosRetencao: null,
+    prejuizoAnteriorAplicado: l.prejuizoAnteriorAplicado.toNumber(),
+    origemMotor: "novo_fase4",
+    pendente: l.pendente,
+    motivosPendencia: l.motivosPendencia,
+  };
+}
 
 export async function obterAnosDisponiveis(): Promise<number[]> {
   const supabase = await createClient();
@@ -413,6 +464,9 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
             apuracaoAnual: false,
             diasMediosRetencao,
             prejuizoAnteriorAplicado: 0,
+            origemMotor: "legado",
+            pendente: false,
+            motivosPendencia: [],
           });
         }
         continue;
@@ -435,6 +489,9 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
             apuracaoAnual: false,
             diasMediosRetencao,
             prejuizoAnteriorAplicado: 0,
+            origemMotor: "legado",
+            pendente: false,
+            motivosPendencia: [],
           });
         }
         continue;
@@ -459,6 +516,9 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
             apuracaoAnual: true,
             diasMediosRetencao: null,
             prejuizoAnteriorAplicado: 0,
+            origemMotor: "legado",
+            pendente: false,
+            motivosPendencia: [],
           });
         }
         continue;
@@ -518,8 +578,33 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
           apuracaoAnual: false,
           diasMediosRetencao: null,
           prejuizoAnteriorAplicado: -Math.min(0, prejuizoAnterior),
+          origemMotor: "legado",
+          pendente: false,
+          motivosPendencia: [],
         });
       }
+    }
+  }
+
+  // ---- Fase 4b (§8.39): substitui acao_swing/acao_day/fii pelo motor novo -
+  // ledger fiscal + classificação de day trade reais (fases 3/4), em vez da
+  // aproximação acima (min(comprada,vendida) por dia, sem considerar
+  // corretora/sequência de ordens). Fallback gracioso: se a versão de regra
+  // vigente do exercício corrente não existir ou faltar algum parâmetro,
+  // `apurarRendaVariavelBrasilDoUsuario` devolve `null` e as 3 categorias
+  // acima (calculadas pela aproximação antiga) permanecem como estavam —
+  // nunca perdemos dado por causa de uma fundação incompleta.
+  const resultadoRendaVariavelNovo = await apurarRendaVariavelBrasilDoUsuario();
+  if (resultadoRendaVariavelNovo) {
+    const categoriasSubstituidas: CategoriaIR[] = ["acao_swing", "acao_day", "fii"];
+    const mensalSemAntigas = mensal.filter((l) => !categoriasSubstituidas.includes(l.categoria));
+    mensal.length = 0;
+    mensal.push(...mensalSemAntigas, ...resultadoRendaVariavelNovo.mensal.filter((l) => l.anoMes.startsWith(String(ano))).map(converterLinhaRendaVariavelNova));
+
+    for (const categoria of categoriasSubstituidas) {
+      const temLinhaNoAno = mensal.some((l) => l.categoria === categoria);
+      if (temLinhaNoAno) categoriasComVendaNoAno.add(categoria);
+      else categoriasComVendaNoAno.delete(categoria);
     }
   }
 
@@ -570,6 +655,7 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
         lucroLiquido: lucroBrutoAnoAlvo,
         impostoDevido,
         apuracaoAnual: true,
+        origemMotor: "legado",
       });
       continue;
     }
@@ -585,6 +671,7 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
       lucroLiquido,
       impostoDevido,
       apuracaoAnual: false,
+      origemMotor: linhasCategoria.some((l) => l.origemMotor === "novo_fase4") ? "novo_fase4" : "legado",
     });
   }
 

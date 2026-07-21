@@ -155,7 +155,17 @@ export default function ImpostoRendaView({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {relatorio.resumoAnual.map((r) => (
               <div key={r.categoria} className="card p-3">
-                <p className="text-xs text-faint mb-1">{r.categoriaLabel}</p>
+                <p className="text-xs text-faint mb-1">
+                  {r.categoriaLabel}
+                  {r.origemMotor === "novo_fase4" && (
+                    <span
+                      className="ml-2 inline-block rounded-full bg-accent/10 text-accent px-2 py-0.5 text-[10px] align-middle"
+                      title="Calculado pelo motor novo (ledger fiscal + classificação de day trade reais) — ainda em validação, confira com um contador."
+                    >
+                      em validação
+                    </span>
+                  )}
+                </p>
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <div>
                     <p className="text-faint">Vendas</p>
@@ -199,26 +209,55 @@ export default function ImpostoRendaView({
         {relatorio.mensal.map((l, i) => (
           <div
             key={`${l.anoMes}-${l.categoria}-${i}`}
-            className="grid grid-cols-[70px_1fr_90px_90px_90px_60px_90px_1fr] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
+            className={`grid grid-cols-[70px_1fr_90px_90px_90px_60px_90px_1fr] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0 ${
+              l.pendente ? "bg-danger-soft" : ""
+            }`}
           >
             <span className="text-ink">{formatarMes(l.anoMes)}</span>
-            <span className="text-muted truncate">{l.categoriaLabel}</span>
-            <span className="text-right text-ink">{formatarMoeda(l.vendaTotal)}</span>
-            <span className={`text-right ${l.lucroBruto >= 0 ? "text-success" : "text-danger"}`}>
-              {formatarMoeda(l.lucroBruto)}
+            <span className="text-muted truncate">
+              {l.categoriaLabel}
+              {l.origemMotor === "novo_fase4" && (
+                <span
+                  className="ml-1 inline-block rounded-full bg-accent/10 text-accent px-1.5 py-0.5 text-[9px] align-middle"
+                  title="Calculado pelo motor novo — ainda em validação, confira com um contador."
+                >
+                  em validação
+                </span>
+              )}
             </span>
-            <span className="text-right text-ink">{formatarMoeda(l.baseCalculo)}</span>
-            <span className="text-right text-muted">{l.aliquota !== null ? `${(l.aliquota * 100).toFixed(1)}%` : "—"}</span>
-            <span className="text-right text-ink">
-              {l.impostoDevido !== null ? formatarMoeda(l.impostoDevido) : "—"}
-            </span>
-            <span className="text-faint truncate">
-              {l.isento && l.motivoIsencao}
-              {l.apuracaoAnual && "Apuração anual — ver resumo"}
-              {l.categoria === "renda_fixa_tributavel" && "Retido na fonte, sem DARF"}
-              {l.categoria === "renda_fixa_isenta" && l.motivoIsencao}
-              {l.diasMediosRetencao !== null && ` (${Math.round(l.diasMediosRetencao)}d aplicado)`}
-            </span>
+            {l.pendente ? (
+              <>
+                <span className="text-right text-faint">—</span>
+                <span className="text-right text-faint">—</span>
+                <span className="text-right text-faint">—</span>
+                <span className="text-right text-faint">—</span>
+                <span className="text-right text-faint">—</span>
+                <span className="text-danger truncate" title={l.motivosPendencia.join(" ")}>
+                  Pendente: day trade não classificado (dados insuficientes)
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-right text-ink">{formatarMoeda(l.vendaTotal)}</span>
+                <span className={`text-right ${l.lucroBruto >= 0 ? "text-success" : "text-danger"}`}>
+                  {formatarMoeda(l.lucroBruto)}
+                </span>
+                <span className="text-right text-ink">{formatarMoeda(l.baseCalculo)}</span>
+                <span className="text-right text-muted">
+                  {l.aliquota !== null ? `${(l.aliquota * 100).toFixed(1)}%` : "—"}
+                </span>
+                <span className="text-right text-ink">
+                  {l.impostoDevido !== null ? formatarMoeda(l.impostoDevido) : "—"}
+                </span>
+                <span className="text-faint truncate">
+                  {l.isento && l.motivoIsencao}
+                  {l.apuracaoAnual && "Apuração anual — ver resumo"}
+                  {l.categoria === "renda_fixa_tributavel" && "Retido na fonte, sem DARF"}
+                  {l.categoria === "renda_fixa_isenta" && l.motivoIsencao}
+                  {l.diasMediosRetencao !== null && ` (${Math.round(l.diasMediosRetencao)}d aplicado)`}
+                </span>
+              </>
+            )}
           </div>
         ))}
       </div>

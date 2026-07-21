@@ -5124,6 +5124,75 @@ demais.
 `valorVendaBruto`); `lib/ir/motores/renda-variavel-brasil.ts`,
 `lib/ir/consultas/renda-variavel.ts` (novos).
 
+### 8.39 Imposto de Renda — fase 4b (motor novo conectado na tela real) implementada (2026-07-21)
+
+Continuação de §8.38 — "seguimos, segue proxima fase", com duas perguntas
+antes de codar: (1) fase 5 (DARF) só faz sentido com uma tela mostrando o
+imposto devido — escolhido conectar a renda variável na tela agora, DARF
+depois; (2) como mesclar visualmente o motor novo (só ação/FII) com o motor
+antigo (que ainda cobre renda fixa/cripto/internacional) — escolhido manter
+a MESMA tabela, só essas 3 categorias trocam de motor por baixo.
+
+**Implementado nesta fase:**
+
+- **`LinhaMensal`/`ResumoAnualCategoria`** (`lib/ir/actions.ts`) ganharam
+  `origemMotor: "novo_fase4" | "legado"` (todo push site antigo marcado
+  `"legado"`) e `LinhaMensal` também ganhou `pendente`/`motivosPendencia`
+  (sempre `false`/`[]` em linhas legado).
+- **`obterRelatorioIR` agora chama `apurarRendaVariavelBrasilDoUsuario()`**
+  (fase 4) depois de montar o `mensal` do jeito antigo (que continua rodando
+  para TODOS os ativos, sem filtro — nada foi removido do caminho antigo).
+  Se o motor novo devolver resultado (versão de regra vigente + parâmetros
+  completos existem): remove do `mensal` as linhas `acao_swing`/`acao_day`/
+  `fii` calculadas pela aproximação antiga e substitui pelas convertidas do
+  motor novo (Decimal → number só nesta fronteira de saída, §8.32.32),
+  filtradas pro ano pedido; atualiza `categoriasComVendaNoAno` pra refletir
+  a nova fonte (evita cards vazios/fantasma no resumo anual). **Fallback
+  gracioso**: se o motor novo devolver `null` (sem versão de regra vigente
+  pro exercício, ou faltando algum parâmetro), o `mensal` simplesmente
+  mantém as linhas antigas dessas 3 categorias intocadas — nunca perde dado
+  por causa de uma fundação incompleta.
+- **`resumoAnual`** já agregava genericamente por `mensal.filter(l =>
+  l.categoria === categoria)` — como as linhas novas entram no MESMO array
+  `mensal` antes desse loop rodar, o resumo anual de ação/FII passou a vir
+  do motor novo automaticamente, sem precisar duplicar lógica de soma;
+  `origemMotor` do resumo é herdado das linhas mensais (`"novo_fase4"` se
+  qualquer uma delas vier do motor novo).
+- **UI (`ImpostoRendaView.tsx`):** selo "em validação" (pill pequena,
+  `bg-accent/10`, com tooltip explicando a origem) ao lado do nome da
+  categoria — tanto nos cards do resumo anual quanto nas linhas da tabela
+  mensal — sempre que `origemMotor === "novo_fase4"`. Linhas com
+  `pendente: true` (venda de ação com day trade não classificado, §8.32.31
+  item 8) mostram um traço (`—`) em vendas/lucro/base/alíquota/imposto em
+  vez de um número calculado, fundo com leve destaque (`bg-danger-soft`,
+  reaproveitando token de cor já existente — não foi criado nenhum token
+  novo de "warning"), e a coluna de observação explica "Pendente: day trade
+  não classificado (dados insuficientes)" com os motivos completos no
+  `title` (tooltip).
+- **Nenhuma pendência é gravada em `ir_pendencias`** ainda — a UI só
+  reflete o que o motor calcula em tempo real; persistir isso como
+  pendência de verdade (pra aparecer também fora da aba de relatório) fica
+  pra uma camada de conciliação futura (mesma dívida técnica já registrada
+  em §8.38).
+
+**Resultado prático:** quem tem só ações/FIIs "simples" (sem day trade, com
+corretora/horário preenchidos quando há múltiplas ordens no dia) não nota
+diferença nenhuma no relatório — os números batem com o motor antigo nos
+casos comuns (mesma fórmula de custo médio, mesma isenção/alíquota), só que
+agora calculados com precisão decimal e day trade pareado de verdade em vez
+de aproximado. Quem tem lançamentos sem corretora informada ou múltiplas
+ordens no mesmo dia sem horário vai ver linhas "Pendente" onde antes havia
+um número (possivelmente impreciso) — completar esses dados no Livro-razão
+(campos da fase 2: corretora, horário de negociação) resolve a pendência no
+próximo carregamento do relatório.
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Arquivos tocados.** `lib/ir/actions.ts` (merge do motor novo em
+`obterRelatorioIR`, tipos estendidos); `app/(app)/imposto-renda/ImpostoRendaView.tsx`
+(selo "em validação" + linhas pendentes).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
