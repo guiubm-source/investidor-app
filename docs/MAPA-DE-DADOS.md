@@ -4745,6 +4745,95 @@ checagem foi a causa direta deste terceiro erro.
 
 **Arquivos tocados.** `supabase/schema.sql` (seções 19, 20 e 21).
 
+### 8.35 Imposto de Renda — fase 2 (enriquecimento fiscal de transações/proventos) implementada (2026-07-21)
+
+Continuação de §8.33/§8.32.37 — "ok, segue para fase 2". Escopo definido
+com o Guilherme via 2 perguntas (protocolo do CLAUDE.md §1): (1) só as
+colunas fiscais agora, documentos/upload de arquivo (§8.32.25) fica pra
+uma fase separada; (2) já adicionar os campos correspondentes nos
+formulários de lançamento, não só no banco.
+
+**Implementado nesta fase:**
+
+- **Schema** (`supabase/schema.sql`, seção 22): `transacoes` ganhou `moeda`
+  (default `'BRL'`, check `BRL`/`USD`), `horario_negociacao`, `numero_nota`,
+  `numero_ordem`, `mercado` (todos texto opcional) e 4 custos discriminados
+  — `corretagem`, `emolumentos`, `taxa_liquidacao`, `outras_taxas`
+  (numeric opcional). `proventos` ganhou `valor_bruto` (espelha
+  `valor_total`, nenhuma matemática nova), `imposto_retido` (default 0),
+  `moeda` (default `'BRL'`), `cambio`, `pais_fonte` (default `'Brasil'`) e
+  `fonte_pagadora_identificador`. Todas as colunas são opcionais ou têm
+  default — lançamentos antigos continuam válidos sem preencher nada disso.
+- **`lib/carteira/schema.ts`:** `transacaoSchema` ganhou os 9 campos novos.
+  Os 4 custos discriminados, quando qualquer um é preenchido, são somados e
+  **sobrescrevem** `custos` no `.transform()` — evita ter dois totais
+  conflitantes (o campo `custos` cru digitado direto vs. a soma dos
+  discriminados). `custos` continua sendo o único valor que todo cálculo
+  já existente (posição, IR) usa — nenhum motor foi alterado.
+- **`lib/proventos/schema.ts`:** `proventoSchema` (que era um `z.object`
+  simples) virou `z.object(...).transform(...)` — mesmo padrão
+  `Form`/`FormInput` (`z.infer` vs. `z.input`) já usado em
+  `lib/ir/schema.ts`. `moeda` default `'BRL'`, `imposto_retido` default 0,
+  `pais_fonte` default `'Brasil'` quando não preenchido.
+- **`lib/carteira/actions.ts`:** `criarTransacao`/`editarTransacao` gravam
+  os 9 campos novos. `LancamentoTransacao` (tipo de leitura) e
+  `obterLivroRazao` (select + mapeamento) também passaram a expor os 9
+  campos, pra edição de um lançamento existente vir com os valores fiscais
+  já preenchidos no formulário (não só em lançamentos novos).
+- **`lib/proventos/actions.ts`:** `criarProvento`/`editarProvento` gravam
+  os 5 campos novos (`valor_bruto` sempre espelha o `valor_total`
+  calculado). `LancamentoProvento` e `obterLivroProventos` (select +
+  mapeamento) também expõem os 5 campos pelo mesmo motivo acima.
+- **Importação em lote** (`lib/carteira/importar-transacoes.ts`,
+  `lib/proventos/importar-proventos.ts`): os dois builders manuais de
+  `TransacaoForm`/`ProventoForm` (que não passam pelo `.transform()` do
+  Zod, montam o objeto de saída direto) foram atualizados com os campos
+  novos em `null`/default — importação em lote não coleta detalhe fiscal,
+  fica disponível pra completar depois via edição manual.
+- **UI:** `FormTransacao` (`LivroRazaoView.tsx`) e `FormProvento`
+  (`ProventosView.tsx`) ganharam uma seção colapsável "+ Detalhes fiscais
+  (opcional)" (fechada por padrão, `useState` local por formulário) — em
+  `FormTransacao` só aparece pra compra/venda (mesmo padrão de
+  `ehCompraOuVenda` que já escondia os campos de evento societário); campo
+  `moeda` só some pra ativos internacionais, mesmo padrão condicional já
+  usado pelo campo `cambio` existente.
+
+**Explicitamente adiado (decisão minha, não perguntada individualmente —
+critério: nada consome ainda, ver princípio "sem features extras não
+combinadas" do CLAUDE.md §1.3):**
+
+1. Documentos/upload de arquivo + bucket privado do Supabase Storage
+   (§8.32.25/§8.32.33) — adiado por decisão direta do Guilherme nesta
+   fase, fica pra uma fase separada.
+2. Campos "de sistema"/bookkeeping propostos pelo §8.32.27.1 —
+   `origem_tipo`, `origem_id`, `status_confirmacao`, `editado_manual`,
+   `classificacao_day_trade_status`, `modalidade_fiscal_confirmada` em
+   `transacoes`, e `origem_tipo`/`origem_id`/`status_confirmacao` em
+   `proventos` — nenhum motor ainda os consome (isso é papel do ledger
+   fiscal unificado/conciliação, fase 3+ do §8.32.37); adicionar agora
+   seria só ruído de schema sem uso.
+3. Uma coluna `valor_liquido` armazenada em `proventos` — redundante com
+   `valor_bruto - imposto_retido`, que pode ser calculado quando precisar
+   sem duplicar dado.
+4. Um campo `data_credito` separado em `proventos` — já existe
+   `data_pagamento`, que cobre o mesmo conceito.
+
+**Dívida técnica explícita:** nenhum motor de cálculo (IR, DY, posição)
+usa os campos novos ainda — eles existem só como registro/detalhe. O
+crédito de imposto pago no exterior (`imposto_retido` de proventos
+internacionais) só ganha um consumidor na fase 7 (exterior/Lei 14.754,
+§8.32.18). Os custos discriminados de `transacoes` só ganham um consumidor
+quando o ledger fiscal (fase 3) precisar detalhar corretagem/emolumentos
+separadamente num relatório.
+
+**Verificação:** `tsc --noEmit` sem erros; todos os arquivos tocados
+conferidos via `wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Arquivos tocados.** `supabase/schema.sql` (seção 22); `lib/carteira/schema.ts`,
+`lib/proventos/schema.ts`, `lib/carteira/actions.ts`, `lib/proventos/actions.ts`,
+`lib/carteira/importar-transacoes.ts`, `lib/proventos/importar-proventos.ts`,
+`app/(app)/carteira/LivroRazaoView.tsx`, `app/(app)/proventos/ProventosView.tsx`.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

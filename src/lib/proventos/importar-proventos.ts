@@ -311,6 +311,13 @@ export async function confirmarImportacaoProventos(
       data_pagamento: linha.dataPagamento,
       quantidade: linha.quantidade,
       valor_por_cota: linha.valorPorCota,
+      // Detalhe fiscal opcional (§8.32.27.1, fase 2) — importação em lote
+      // não coleta esses campos, ficam default até edição manual.
+      moeda: "BRL",
+      cambio: null,
+      imposto_retido: 0,
+      pais_fonte: "Brasil",
+      fonte_pagadora_identificador: null,
     };
 
     const resultado = await criarProvento(input);

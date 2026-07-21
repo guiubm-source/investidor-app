@@ -414,6 +414,15 @@ export default function LivroRazaoView({
                   fator_proporcao: l.fatorProporcao ?? NaN,
                   valor_capitalizado: l.valorCapitalizado ?? NaN,
                   cambio: l.cambio ?? NaN,
+                  moeda: l.moeda,
+                  horario_negociacao: l.horarioNegociacao ?? "",
+                  numero_nota: l.numeroNota ?? "",
+                  numero_ordem: l.numeroOrdem ?? "",
+                  mercado: l.mercado ?? "",
+                  corretagem: l.corretagem ?? NaN,
+                  emolumentos: l.emolumentos ?? NaN,
+                  taxa_liquidacao: l.taxaLiquidacao ?? NaN,
+                  outras_taxas: l.outrasTaxas ?? NaN,
                 }}
                 textoSalvar="Salvar"
                 onCancelar={() => setEditando(null)}
@@ -561,6 +570,8 @@ function FormTransacao({
     },
   });
 
+  const [detalhesFiscaisAbertos, setDetalhesFiscaisAbertos] = useState(false);
+
   const ativoIdSelecionado = watch("ativo_id");
   const tipoAtivoSelecionado = ativos.find((a) => a.id === ativoIdSelecionado)?.tipo;
 
@@ -703,6 +714,82 @@ function FormTransacao({
           />
           {errors.cambio?.message && <p className="field-error">{errors.cambio.message}</p>}
         </div>
+      )}
+
+      {ehCompraOuVenda && (
+        <div className="col-span-2 md:col-span-4">
+          <button
+            type="button"
+            onClick={() => setDetalhesFiscaisAbertos((v) => !v)}
+            className="text-xs text-accent hover:underline"
+          >
+            {detalhesFiscaisAbertos ? "− Ocultar detalhes fiscais" : "+ Detalhes fiscais (opcional)"}
+          </button>
+        </div>
+      )}
+
+      {ehCompraOuVenda && detalhesFiscaisAbertos && (
+        <>
+          {tipoAtivoSelecionado === "internacional" && (
+            <div>
+              <label className="label">Moeda</label>
+              <select {...register("moeda")} className="input">
+                <option value="BRL">BRL</option>
+                <option value="USD">USD</option>
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label className="label">Horário da negociação</label>
+            <input type="time" step="1" {...register("horario_negociacao")} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Número da nota</label>
+            <input type="text" {...register("numero_nota")} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Número da ordem</label>
+            <input type="text" {...register("numero_ordem")} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Mercado</label>
+            <input type="text" placeholder="Ex.: à vista, fracionário" {...register("mercado")} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Corretagem (R$)</label>
+            <input type="number" step="0.01" {...register("corretagem", { valueAsNumber: true })} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Emolumentos (R$)</label>
+            <input type="number" step="0.01" {...register("emolumentos", { valueAsNumber: true })} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Taxa de liquidação (R$)</label>
+            <input
+              type="number"
+              step="0.01"
+              {...register("taxa_liquidacao", { valueAsNumber: true })}
+              className="input"
+            />
+          </div>
+
+          <div>
+            <label className="label">Outras taxas (R$)</label>
+            <input type="number" step="0.01" {...register("outras_taxas", { valueAsNumber: true })} className="input" />
+          </div>
+
+          <p className="col-span-2 md:col-span-4 text-xs text-faint -mt-1">
+            Se preencher qualquer custo discriminado acima, o total em &quot;Custos/taxas&quot; é recalculado
+            automaticamente como a soma deles.
+          </p>
+        </>
       )}
 
       <div className="col-span-2 md:col-span-4 flex gap-2">

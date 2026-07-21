@@ -60,6 +60,13 @@ export type LancamentoProvento = {
   valorPorCota: number | null;
   valorTotal: number;
   status: StatusProvento;
+  // Detalhe fiscal opcional (§8.32.27.1, fase 2 — ver docs/MAPA-DE-DADOS.md
+  // §8.35). Nenhum motor ainda consome (fase 7, crédito de imposto pago fora).
+  moeda: "BRL" | "USD";
+  cambio: number | null;
+  impostoRetido: number;
+  paisFonte: string;
+  fontePagadoraIdentificador: string | null;
 };
 
 export type TotalPorTipo = { tipo: string; label: string; total: number };
@@ -151,7 +158,9 @@ export async function obterLivroProventos(): Promise<LivroProventos> {
   const [proventosRes, posicoes] = await Promise.all([
     supabase
       .from("proventos")
-      .select("id, ativo_id, tipo, data_com, data_pagamento, quantidade, valor_por_cota, valor_total, ativos(ticker)")
+      .select(
+        "id, ativo_id, tipo, data_com, data_pagamento, quantidade, valor_por_cota, valor_total, moeda, cambio, imposto_retido, pais_fonte, fonte_pagadora_identificador, ativos(ticker)"
+      )
       .eq("profile_id", user.id),
     obterAtivosComPosicao(),
   ]);
@@ -180,6 +189,11 @@ export async function obterLivroProventos(): Promise<LivroProventos> {
         valorPorCota: p.valor_por_cota !== null ? Number(p.valor_por_cota) : null,
         valorTotal: Number(p.valor_total),
         status: dataPagamento > hojeStr ? "provisionado" : "recebido",
+        moeda: (p.moeda as "BRL" | "USD" | null) ?? "BRL",
+        cambio: p.cambio !== null && p.cambio !== undefined ? Number(p.cambio) : null,
+        impostoRetido: p.imposto_retido !== null && p.imposto_retido !== undefined ? Number(p.imposto_retido) : 0,
+        paisFonte: (p.pais_fonte as string | null) ?? "Brasil",
+        fontePagadoraIdentificador: (p.fonte_pagadora_identificador as string | null) ?? null,
       };
       return item;
     })
@@ -331,6 +345,16 @@ export async function criarProvento(input: ProventoForm): Promise<AcaoResultado>
     quantidade: input.quantidade,
     valor_por_cota: input.valor_por_cota,
     valor_total: valorTotal,
+    // Detalhe fiscal opcional (§8.35) — valor_bruto espelha valor_total
+    // (mesma semântica de sempre: quantidade × valor por cota, sem nenhuma
+    // retenção descontada) até que um motor de crédito de imposto exterior
+    // (fase 7) precise de outra coisa. imposto_retido default 0.
+    valor_bruto: valorTotal,
+    imposto_retido: input.imposto_retido,
+    moeda: input.moeda,
+    cambio: input.cambio,
+    pais_fonte: input.pais_fonte,
+    fonte_pagadora_identificador: input.fonte_pagadora_identificador,
   });
 
   if (error) return { error: "Não foi possível registrar o provento." };
@@ -357,6 +381,12 @@ export async function editarProvento(id: string, input: ProventoForm): Promise<A
       quantidade: input.quantidade,
       valor_por_cota: input.valor_por_cota,
       valor_total: valorTotal,
+      valor_bruto: valorTotal,
+      imposto_retido: input.imposto_retido,
+      moeda: input.moeda,
+      cambio: input.cambio,
+      pais_fonte: input.pais_fonte,
+      fonte_pagadora_identificador: input.fonte_pagadora_identificador,
     })
     .eq("id", id)
     .eq("profile_id", user.id);

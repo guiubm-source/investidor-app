@@ -526,6 +526,11 @@ export default function ProventosView({
                             data_pagamento: l.dataPagamento,
                             quantidade: l.quantidade ?? 0,
                             valor_por_cota: l.valorPorCota ?? 0,
+                            moeda: l.moeda,
+                            cambio: l.cambio ?? NaN,
+                            imposto_retido: l.impostoRetido,
+                            pais_fonte: l.paisFonte,
+                            fonte_pagadora_identificador: l.fontePagadoraIdentificador ?? "",
                           }}
                           avisoLegado={l.quantidade === null}
                           textoSalvar="Salvar"
@@ -681,6 +686,8 @@ function FormProvento({
   const valorPorCota = Number(watch("valor_por_cota")) || 0;
   const valorTotalPreview = quantidade * valorPorCota;
 
+  const [detalhesFiscaisAbertos, setDetalhesFiscaisAbertos] = useState(false);
+
   return (
     <form onSubmit={onSubmit} className="grid grid-cols-2 md:grid-cols-4 gap-3">
       {avisoLegado && (
@@ -740,6 +747,58 @@ function FormProvento({
         <label className="label">Valor total (calculado)</label>
         <p className="input flex items-center bg-surface-2 text-ink">{formatarMoeda(valorTotalPreview)}</p>
       </div>
+
+      <div className="col-span-2 md:col-span-4">
+        <button
+          type="button"
+          onClick={() => setDetalhesFiscaisAbertos((v) => !v)}
+          className="text-xs text-accent hover:underline"
+        >
+          {detalhesFiscaisAbertos ? "− Ocultar detalhes fiscais" : "+ Detalhes fiscais (opcional)"}
+        </button>
+      </div>
+
+      {detalhesFiscaisAbertos && (
+        <>
+          <div>
+            <label className="label">Moeda</label>
+            <select {...register("moeda")} className="input">
+              <option value="BRL">BRL</option>
+              <option value="USD">USD</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="label">Câmbio do dia (para IR)</label>
+            <input type="number" step="0.0001" {...register("cambio", { valueAsNumber: true })} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Imposto retido na fonte (R$)</label>
+            <input
+              type="number"
+              step="0.01"
+              {...register("imposto_retido", { valueAsNumber: true })}
+              className="input"
+            />
+          </div>
+
+          <div>
+            <label className="label">País da fonte pagadora</label>
+            <input type="text" {...register("pais_fonte")} className="input" />
+          </div>
+
+          <div>
+            <label className="label">Identificador da fonte pagadora</label>
+            <input
+              type="text"
+              placeholder="Ex.: CNPJ do fundo/empresa, ticker no exterior"
+              {...register("fonte_pagadora_identificador")}
+              className="input"
+            />
+          </div>
+        </>
+      )}
 
       <div className="col-span-2 md:col-span-4 flex gap-2">
         <button type="button" onClick={onCancelar} className="btn btn-secondary flex-1">

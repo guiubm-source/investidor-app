@@ -414,6 +414,17 @@ export async function confirmarImportacaoTransacoes(linhas: LinhaImportacaoConfi
         fator_proporcao: null,
         valor_capitalizado: null,
         cambio: linha.cambio,
+        // Detalhe fiscal opcional (§8.32.27.1, fase 2) — importação em lote
+        // não coleta esses campos, ficam null/default até edição manual.
+        moeda: "BRL",
+        horario_negociacao: null,
+        numero_nota: null,
+        numero_ordem: null,
+        mercado: null,
+        corretagem: null,
+        emolumentos: null,
+        taxa_liquidacao: null,
+        outras_taxas: null,
       },
       { confirmarDuplicata: true }
     );

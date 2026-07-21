@@ -55,6 +55,17 @@ export type LancamentoTransacao = {
   cambio: number | null;
   corretoraId: string | null;
   corretoraNome: string | null;
+  // Detalhe fiscal opcional (§8.32.27.1, fase 2 — ver docs/MAPA-DE-DADOS.md
+  // §8.35). Só compra/venda preenche; demais tipos ficam com tudo null.
+  moeda: "BRL" | "USD";
+  horarioNegociacao: string | null;
+  numeroNota: string | null;
+  numeroOrdem: string | null;
+  mercado: string | null;
+  corretagem: number | null;
+  emolumentos: number | null;
+  taxaLiquidacao: number | null;
+  outrasTaxas: number | null;
 };
 
 export type Lancamento = LancamentoTransacao;
@@ -86,7 +97,7 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
     supabase
       .from("transacoes")
       .select(
-        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, cambio, ativos(ticker), corretoras(nome)"
+        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, cambio, moeda, horario_negociacao, numero_nota, numero_ordem, mercado, corretagem, emolumentos, taxa_liquidacao, outras_taxas, ativos(ticker), corretoras(nome)"
       )
       .eq("profile_id", user.id),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
@@ -112,6 +123,15 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
       cambio: t.cambio === null || t.cambio === undefined ? null : Number(t.cambio),
       corretoraId: t.corretora_id,
       corretoraNome: corretora?.nome ?? null,
+      moeda: (t.moeda as "BRL" | "USD" | null) ?? "BRL",
+      horarioNegociacao: t.horario_negociacao ?? null,
+      numeroNota: t.numero_nota ?? null,
+      numeroOrdem: t.numero_ordem ?? null,
+      mercado: t.mercado ?? null,
+      corretagem: numOuNull(t.corretagem),
+      emolumentos: numOuNull(t.emolumentos),
+      taxaLiquidacao: numOuNull(t.taxa_liquidacao),
+      outrasTaxas: numOuNull(t.outras_taxas),
     };
   });
 
@@ -254,6 +274,15 @@ export async function criarTransacao(
     fator_proporcao: input.fator_proporcao,
     valor_capitalizado: input.valor_capitalizado,
     cambio: input.cambio || null,
+    moeda: input.moeda,
+    horario_negociacao: input.horario_negociacao,
+    numero_nota: input.numero_nota,
+    numero_ordem: input.numero_ordem,
+    mercado: input.mercado,
+    corretagem: input.corretagem,
+    emolumentos: input.emolumentos,
+    taxa_liquidacao: input.taxa_liquidacao,
+    outras_taxas: input.outras_taxas,
   });
 
   if (error) return { error: "Não foi possível registrar a transação." };
@@ -301,6 +330,15 @@ export async function editarTransacao(
       fator_proporcao: input.fator_proporcao,
       valor_capitalizado: input.valor_capitalizado,
       cambio: input.cambio || null,
+      moeda: input.moeda,
+      horario_negociacao: input.horario_negociacao,
+      numero_nota: input.numero_nota,
+      numero_ordem: input.numero_ordem,
+      mercado: input.mercado,
+      corretagem: input.corretagem,
+      emolumentos: input.emolumentos,
+      taxa_liquidacao: input.taxa_liquidacao,
+      outras_taxas: input.outras_taxas,
     })
     .eq("id", id)
     .eq("profile_id", user.id);

@@ -1409,3 +1409,51 @@ begin
       where versao_regra_id = v_versao_id and chave = 'darf.codigo_receita_renda_variavel_comum';
   end if;
 end $$;
+
+-- =====================================================================
+-- 22. IR fase 2 (§8.32.37) — colunas fiscais em transacoes/proventos
+-- =====================================================================
+-- Ver docs/MAPA-DE-DADOS.md §8.35. Enriquecimento de detalhe fiscal por
+-- lançamento, escopo decidido com o Guilherme: SÓ colunas (documentos/
+-- upload de arquivo fica pra fase separada) e SEM os campos "de sistema"
+-- (origem_tipo/origem_id/status_confirmacao/editado_manual/
+-- classificacao_day_trade_status/modalidade_fiscal_confirmada) — nenhum
+-- motor ainda consome esses campos de bookkeeping, isso é fase 3 (ledger
+-- fiscal/conciliação). Todas as colunas abaixo são opcionais/têm default:
+-- lançamentos antigos continuam válidos sem preencher nada disso.
+
+-- 22.1 transacoes — moeda, identificação do lançamento (nota/ordem/mercado/
+--      horário) e custos discriminados (corretagem/emolumentos/taxa de
+--      liquidação/outras taxas). `custos` continua sendo o total que todo
+--      cálculo já existente usa — ver lib/carteira/schema.ts, que soma os 4
+--      campos discriminados em `custos` quando preenchidos.
+alter table public.transacoes
+  add column if not exists moeda text not null default 'BRL' check (moeda in ('BRL', 'USD')),
+  add column if not exists horario_negociacao text,
+  add column if not exists numero_nota text,
+  add column if not exists numero_ordem text,
+  add column if not exists mercado text,
+  add column if not exists corretagem numeric(14, 2),
+  add column if not exists emolumentos numeric(14, 2),
+  add column if not exists taxa_liquidacao numeric(14, 2),
+  add column if not exists outras_taxas numeric(14, 2);
+
+comment on column public.transacoes.moeda is 'Moeda do lançamento — BRL sempre pra ativos nacionais, BRL ou USD pra internacional (câmbio já existe em transacoes.cambio). Default BRL preserva lançamentos antigos.';
+comment on column public.transacoes.corretagem is 'Custo discriminado (§8.32.27.1) — junto com emolumentos/taxa_liquidacao/outras_taxas, soma pra `custos` quando preenchido (ver lib/carteira/schema.ts). Ainda sem motor consumidor individual (fase 3+).';
+
+-- 22.2 proventos — valor bruto (espelha valor_total — nenhuma matemática
+--      nova, mesma semântica de sempre), imposto retido na fonte, moeda,
+--      câmbio (só relevante pra proventos de ativo internacional), país da
+--      fonte pagadora (default 'Brasil') e identificador da fonte pagadora
+--      (CNPJ do fundo/empresa, ticker no exterior, etc — texto livre).
+alter table public.proventos
+  add column if not exists valor_bruto numeric(14, 2),
+  add column if not exists imposto_retido numeric(14, 2) not null default 0,
+  add column if not exists moeda text not null default 'BRL' check (moeda in ('BRL', 'USD')),
+  add column if not exists cambio numeric(10, 4) check (cambio is null or cambio > 0),
+  add column if not exists pais_fonte text not null default 'Brasil',
+  add column if not exists fonte_pagadora_identificador text;
+
+comment on column public.proventos.valor_bruto is 'Espelha valor_total (quantidade × valor_por_cota) — mesmo valor, campo separado só pra alinhar nome com o vocabulário fiscal do §8.32.27.1 (bruto vs. líquido após imposto_retido). Nenhum cálculo novo aqui.';
+comment on column public.proventos.imposto_retido is 'Imposto retido na fonte (ex.: withholding tax no exterior — Lei 14.754, §8.32.18.1). Default 0 preserva lançamentos antigos. Ainda sem motor de crédito de imposto (fase 7).';
+comment on column public.proventos.pais_fonte is 'País da fonte pagadora do provento. Default Brasil preserva lançamentos antigos (todos nacionais até aqui).';
