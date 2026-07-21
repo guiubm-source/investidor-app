@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import type { EstruturaAlocacao, MacroNode, ClasseNode, SetorNode } from "@/lib/alocacao/actions";
+import { moverMacroOrdem, moverClasseOrdem, moverSetorOrdem } from "@/lib/alocacao/actions";
 import type { Selecao } from "./arvore";
 import { statusSomaFilhos } from "./arvore";
+import { useToast } from "@/components/ToastProvider";
 
 /**
  * Árvore operacional (fase 3, §8.50/§16.2.2) — coluna esquerda (~60% da
@@ -11,15 +13,22 @@ import { statusSomaFilhos } from "./arvore";
  * (Macro/Classe/Setor/Ativo); selecionar atualiza o painel contextual à
  * direita sem sair da página (§16.2.3). Não é um formulário sequencial: o
  * usuário pode clicar em qualquer nó, em qualquer ordem.
+ *
+ * `onChange` (fase 5, §8.54/§16.2.8): os botões de subir/descer chamam
+ * `moverMacroOrdem`/`moverClasseOrdem`/`moverSetorOrdem` e depois pedem pro
+ * pai recarregar a estrutura — mesmo padrão de `onChange` já usado pelo
+ * `PainelContextual`.
  */
 export default function ArvoreAlocacao({
   estrutura,
   selecao,
   onSelecionar,
+  onChange,
 }: {
   estrutura: EstruturaAlocacao;
   selecao: Selecao;
   onSelecionar: (s: Selecao) => void;
+  onChange: () => void | Promise<void>;
 }) {
   return (
     <div className="card overflow-hidden">
@@ -35,12 +44,62 @@ export default function ArvoreAlocacao({
         {estrutura.macros.length === 0 ? (
           <p className="text-xs text-faint px-3 py-3">Nenhum Macro criado ainda.</p>
         ) : (
-          estrutura.macros.map((macro) => (
-            <NoMacro key={macro.id} macro={macro} selecao={selecao} onSelecionar={onSelecionar} />
+          estrutura.macros.map((macro, index) => (
+            <NoMacro
+              key={macro.id}
+              macro={macro}
+              selecao={selecao}
+              onSelecionar={onSelecionar}
+              podeSubir={index > 0}
+              podeDescer={index < estrutura.macros.length - 1}
+              onChange={onChange}
+            />
           ))
         )}
       </div>
     </div>
+  );
+}
+
+/** Botões subir/descer (fase 5, §16.2.8) — botões reais, sempre visíveis (acessibilidade, §16.2.18), não drag-and-drop. */
+function BotoesReordenar({
+  podeSubir,
+  podeDescer,
+  onSubir,
+  onDescer,
+}: {
+  podeSubir: boolean;
+  podeDescer: boolean;
+  onSubir: () => void;
+  onDescer: () => void;
+}) {
+  return (
+    <span className="flex flex-col shrink-0 -my-1">
+      <button
+        type="button"
+        aria-label="Mover para cima"
+        disabled={!podeSubir}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSubir();
+        }}
+        className="text-faint hover:text-ink disabled:opacity-20 disabled:hover:text-faint leading-none text-[10px]"
+      >
+        ▲
+      </button>
+      <button
+        type="button"
+        aria-label="Mover para baixo"
+        disabled={!podeDescer}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDescer();
+        }}
+        className="text-faint hover:text-ink disabled:opacity-20 disabled:hover:text-faint leading-none text-[10px]"
+      >
+        ▼
+      </button>
+    </span>
   );
 }
 
@@ -68,6 +127,10 @@ function LinhaNo({
   onClick,
   statusFilhos,
   destaqueMacro,
+  podeSubir,
+  podeDescer,
+  onSubir,
+  onDescer,
 }: {
   nivel: number;
   nome: string;
@@ -80,7 +143,13 @@ function LinhaNo({
   onClick: () => void;
   statusFilhos?: "completo" | "incompleto" | "excedido" | "vazio";
   destaqueMacro?: boolean;
+  /** Reordenar (§16.2.8) — omitido pra linhas de Ativo (não reordenáveis aqui). */
+  podeSubir?: boolean;
+  podeDescer?: boolean;
+  onSubir?: () => void;
+  onDescer?: () => void;
 }) {
+  const temReordenar = onSubir !== undefined && onDescer !== undefined;
   return (
     <div
       className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors ${
@@ -108,6 +177,14 @@ function LinhaNo({
       <span className="text-faint text-[10px] w-16 text-right shrink-0" title="Peso na carteira (global)">
         {pesoRealGlobal.toFixed(1)}% cart.
       </span>
+      {temReordenar && (
+        <BotoesReordenar
+          podeSubir={podeSubir ?? false}
+          podeDescer={podeDescer ?? false}
+          onSubir={onSubir!}
+          onDescer={onDescer!}
+        />
+      )}
     </div>
   );
 }
@@ -116,13 +193,20 @@ function NoMacro({
   macro,
   selecao,
   onSelecionar,
+  podeSubir,
+  podeDescer,
+  onChange,
 }: {
   macro: MacroNode;
   selecao: Selecao;
   onSelecionar: (s: Selecao) => void;
+  podeSubir: boolean;
+  podeDescer: boolean;
+  onChange: () => void | Promise<void>;
 }) {
   const [expandido, setExpandido] = useState(false);
   const status = statusSomaFilhos(macro.classes);
+  const toast = useToast();
 
   return (
     <div>
@@ -141,10 +225,30 @@ function NoMacro({
         }}
         statusFilhos={status.status}
         destaqueMacro
+        podeSubir={podeSubir}
+        podeDescer={podeDescer}
+        onSubir={async () => {
+          const resultado = await moverMacroOrdem(macro.id, "subir");
+          if (resultado.error) toast.error(resultado.error);
+          else await onChange();
+        }}
+        onDescer={async () => {
+          const resultado = await moverMacroOrdem(macro.id, "descer");
+          if (resultado.error) toast.error(resultado.error);
+          else await onChange();
+        }}
       />
       {expandido &&
-        macro.classes.map((classe) => (
-          <NoClasse key={classe.id} classe={classe} selecao={selecao} onSelecionar={onSelecionar} />
+        macro.classes.map((classe, index) => (
+          <NoClasse
+            key={classe.id}
+            classe={classe}
+            selecao={selecao}
+            onSelecionar={onSelecionar}
+            podeSubir={index > 0}
+            podeDescer={index < macro.classes.length - 1}
+            onChange={onChange}
+          />
         ))}
     </div>
   );
@@ -154,13 +258,20 @@ function NoClasse({
   classe,
   selecao,
   onSelecionar,
+  podeSubir,
+  podeDescer,
+  onChange,
 }: {
   classe: ClasseNode;
   selecao: Selecao;
   onSelecionar: (s: Selecao) => void;
+  podeSubir: boolean;
+  podeDescer: boolean;
+  onChange: () => void | Promise<void>;
 }) {
   const [expandido, setExpandido] = useState(false);
   const status = statusSomaFilhos(classe.setores);
+  const toast = useToast();
 
   return (
     <div>
@@ -178,10 +289,30 @@ function NoClasse({
           if (classe.setores.length > 0) setExpandido(true);
         }}
         statusFilhos={status.status}
+        podeSubir={podeSubir}
+        podeDescer={podeDescer}
+        onSubir={async () => {
+          const resultado = await moverClasseOrdem(classe.id, "subir");
+          if (resultado.error) toast.error(resultado.error);
+          else await onChange();
+        }}
+        onDescer={async () => {
+          const resultado = await moverClasseOrdem(classe.id, "descer");
+          if (resultado.error) toast.error(resultado.error);
+          else await onChange();
+        }}
       />
       {expandido &&
-        classe.setores.map((setor) => (
-          <NoSetor key={setor.id} setor={setor} selecao={selecao} onSelecionar={onSelecionar} />
+        classe.setores.map((setor, index) => (
+          <NoSetor
+            key={setor.id}
+            setor={setor}
+            selecao={selecao}
+            onSelecionar={onSelecionar}
+            podeSubir={index > 0}
+            podeDescer={index < classe.setores.length - 1}
+            onChange={onChange}
+          />
         ))}
     </div>
   );
@@ -191,12 +322,19 @@ function NoSetor({
   setor,
   selecao,
   onSelecionar,
+  podeSubir,
+  podeDescer,
+  onChange,
 }: {
   setor: SetorNode;
   selecao: Selecao;
   onSelecionar: (s: Selecao) => void;
+  podeSubir: boolean;
+  podeDescer: boolean;
+  onChange: () => void | Promise<void>;
 }) {
   const [expandido, setExpandido] = useState(false);
+  const toast = useToast();
 
   return (
     <div>
@@ -212,6 +350,18 @@ function NoSetor({
         onClick={() => {
           onSelecionar({ tipo: "setor", id: setor.id });
           if (setor.ativos.length > 0) setExpandido(true);
+        }}
+        podeSubir={podeSubir}
+        podeDescer={podeDescer}
+        onSubir={async () => {
+          const resultado = await moverSetorOrdem(setor.id, "subir");
+          if (resultado.error) toast.error(resultado.error);
+          else await onChange();
+        }}
+        onDescer={async () => {
+          const resultado = await moverSetorOrdem(setor.id, "descer");
+          if (resultado.error) toast.error(resultado.error);
+          else await onChange();
         }}
       />
       {expandido &&

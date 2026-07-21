@@ -6757,6 +6757,120 @@ Guilherme apagar manualmente `MacroRow.tsx`/`ClasseRow.tsx`/`SetorRow.tsx`
 e rodar `supabase/schema.sql` inteiro no SQL Editor do Supabase (migração
 do Macro da fase 1 ainda não confirmada como aplicada em produção).
 
+### 8.54 Alocação — fase 5 da reformulação "Metas e estrutura": ações principais e avançadas (2026-07-21)
+
+Implementa a fase 5 do plano (§8.50/§8.51): as ações principais (usar saldo
+restante, distribuir restante igualmente, reordenar) e avançadas (mover pra
+outro pai, excluir com opções) do §16.2.8/§16.2.9. Como sempre, protocolo de
+1 pergunta por vez (CLAUDE.md §1) antes de codar — 3 decisões:
+
+1. **Reordenar exige coluna nova?** A app não tinha nenhuma ordem explícita
+   persistida por nó (a consulta só ordenava por nome). Perguntado se
+   adiávamos "reordenar" pra depois, se fazíamos automático por peso-alvo
+   (sem coluna nova), ou se incluíamos a migração agora. **Decisão: incluir
+   agora** — nova coluna `ordem` (integer) em `alocacao_macros`/`_classes`/
+   `_setores`.
+2. **Exclusão com filhos: seletor de destino completo ou simplificado?**
+   O spec (§16.2.12) pede 3 opções (cancelar/mover filhos/excluir
+   subárvore), mas "mover os filhos" exige escolher um destino. Perguntado
+   se implementávamos o seletor completo ou simplificávamos pra só
+   cancelar/excluir subárvore. **Decisão: seletor de destino completo.**
+3. **"Distribuir restante igualmente" — soma ou reseta?** Perguntado se a
+   ação soma o restante (dividido em partes iguais) ao peso JÁ definido de
+   cada filho, ou se redefine TODOS os filhos pra ficarem iguais entre si
+   (ignorando valores atuais). **Decisão: somar o restante igualmente**
+   (mantém os pesos atuais, só divide a diferença até 100%).
+
+**Schema (seção 26 do `supabase/schema.sql`):** `ordem integer not null
+default 0` adicionada a `alocacao_macros`/`alocacao_classes`/
+`alocacao_setores`, com backfill idempotente (numera os irmãos existentes
+em sequência estável — `ordem` atual, `created_at` como desempate — seguro
+rodar de novo). `lib/alocacao/actions.ts`: `MacroNode`/`ClasseNode`/
+`SetorNode` ganharam o campo `ordem`; `obterEstruturaAlocacao` passou a
+`order("ordem")` em vez de `order("nome")` nas 3 queries.
+
+**Reordenar (ações principais, §16.2.8):** `moverMacroOrdem`/
+`moverClasseOrdem`/`moverSetorOrdem` (novo, `actions.ts`) trocam a `ordem`
+do nó com a do irmão adjacente (mesmo pai) — sem efeito/erro se já está na
+ponta. `ArvoreAlocacao.tsx` ganhou botões ▲/▼ reais (não drag-and-drop,
+decisão própria pra manter a acessibilidade por teclado do §16.2.18) em
+cada linha, desabilitados no primeiro/último item de cada grupo de irmãos.
+
+**Usar saldo restante / distribuir restante igualmente (ações principais,
+§16.2.8):** `calcularDistribuicaoIgual` (novo, `arvore.ts`) — função pura
+que soma o restante (100 − soma atual) dividido em partes iguais ao peso
+já definido de cada filho, garantindo que a soma feche em exatamente 100
+(o último item absorve o resíduo de arredondamento). `PainelContextual.tsx`
+ganhou: um botão "Distribuir restante (X%) igualmente entre todos" (visível
+só quando a soma está incompleta), um botão "Usar restante aqui" por linha
+de filho editável, e um componente `PreviaRestante` que mostra o resultado
+esperado de cada item (nome, peso atual → novo) antes de aplicar — nunca
+altera peso silenciosamente (§16.2.8), reaproveita as actions
+`editarMacro`/`editarClasse`/`editarSetor` já existentes (chamadas em
+sequência, uma por filho afetado).
+
+**Mover pra outro pai (ação avançada, §16.2.9/§16.2.11):**
+`moverClasseParaMacro`/`moverSetorParaClasse` (novo, `actions.ts`) —
+preservam o peso local, atualizam só `macro_id`/`classe_id`; bloqueiam com
+mensagem amigável se já existir um nó com o mesmo nome no destino, e
+**também bloqueiam se a soma dos pesos-alvo no destino ultrapassaria 100%**
+(checagem que não estava no escopo das 3 perguntas, mas que a prioridade
+"evitar bugs" do CLAUDE.md §1 item 4 exigia — sem ela, mover um nó pra um
+pai que já está com a distribuição cheia deixaria esse pai com mais de
+100% silenciosamente, quebrando a invariante central da aba). `no.id` do
+nó selecionado ganhou um botão "Mover para outro Macro/outra Classe" (só
+Classe/Setor, que têm um pai que pode mudar — Macro não, seu "pai" é o
+patrimônio total) que abre um seletor de destino com prévia do peso global
+antes/depois (`MoverParaOutroPai`, novo componente em `PainelContextual.tsx`).
+
+**Excluir com opções (ação avançada, §16.2.9/§16.2.12):**
+`excluirMacroComOpcao`/`excluirClasseComOpcao` (novo, `actions.ts`) —
+`opcao: "subarvore" | "mover"`. "Subárvore" é o `excluirMacro`/`excluirClasse`
+de sempre (cascade do banco cuida do resto). "Mover" reatribui todas as
+Classes/Setores do nó excluído pra um Macro/Classe de destino escolhido
+antes de excluir — bloqueia por colisão de nome E (mesma checagem de
+soma acima) se a soma no destino passaria de 100%. Setor **não** tem essa
+variante: seus filhos são Ativos, e mudar `ativos.setor_id` é exclusivo da
+aba Ativos (§16.2.13) — excluir um Setor com Ativos classificados agora só
+mostra um aviso mais claro ("N Ativo(s) ficarão não classificados") no
+`ConfirmModal` de sempre, sem opção de "mover" (o `on delete set null` do
+schema já cuida da reclassificação automática, sem a Alocação escrever
+diretamente no Ativo). `PainelContextual.tsx` ganhou o componente
+`ExclusaoComOpcoes` (radio "mover"/"excluir subárvore" + seletor de
+destino quando aplicável), usado tanto pra excluir o próprio nó selecionado
+quanto pra excluir um filho da lista — cobrindo também o caso de excluir um
+Macro direto da raiz (via linha de filho, não só via seleção do próprio
+Macro).
+
+**`arvore.ts`:** `FilhoResolvido` ganhou `qtdFilhosDiretos: number`
+(quantidade de filhos diretos de cada filho listado — ex. quantos Setores
+tem essa Classe) — usado pelos avisos de impacto antes de excluir.
+
+**Verificação:** `tsc --noEmit` sem erros. Arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos): `supabase/schema.sql`
+(1731 linhas), `lib/alocacao/actions.ts` (839), `arvore.ts` (315),
+`ArvoreAlocacao.tsx` (389), `PainelContextual.tsx` (915),
+`AlocacaoView.tsx` (177, só ganhou a prop `onChange` na chamada de
+`ArvoreAlocacao`). Sem suíte automatizada ainda (mesma situação das fases
+2-4). Testes manuais end-to-end (reordenar, mover Classe entre Macros,
+excluir Macro com "mover filhos", usar saldo restante) ficam recomendados
+antes de considerar a fase "fechada" na prática, já que a migração da
+coluna `ordem` só roda de fato quando o Guilherme aplicar o `schema.sql`
+atualizado no Supabase.
+
+**Arquivos tocados.** Editados: `supabase/schema.sql` (seção 26),
+`lib/alocacao/actions.ts`, `arvore.ts`, `ArvoreAlocacao.tsx`,
+`PainelContextual.tsx`, `AlocacaoView.tsx`. Nenhum arquivo novo nesta fase.
+
+**Pendências pra próxima sessão:** fase 6 (Ativos somente leitura na árvore
+já está pronto desde a fase 3 — falta o bucket "Não classificado" de
+primeira classe, estados vazio/carregando/erro formalizados, responsividade
+completa em telas pequenas/médias, e acessibilidade por teclado revisada
+ponta a ponta) do plano em §8.50/§8.51. Seguem pendentes as mesmas tarefas
+administrativas das fases anteriores: apagar `MacroRow.tsx`/`ClasseRow.tsx`/
+`SetorRow.tsx` manualmente e rodar `supabase/schema.sql` inteiro (agora
+incluindo a seção 26, coluna `ordem`) no SQL Editor do Supabase.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

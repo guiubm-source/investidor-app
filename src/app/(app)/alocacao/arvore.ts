@@ -35,6 +35,13 @@ export type FilhoResolvido = {
   pesoRealGlobal: number;
   valorAtual: number;
   ticker?: string; // só presente quando o filho é um Ativo
+  /**
+   * Quantidade de filhos DIRETOS deste filho (ex.: quantos Setores tem essa
+   * Classe) — usado na fase 5 (§8.54/§16.2.12) pra avisar o impacto antes de
+   * excluir um nó com descendentes ("isso vai apagar 3 Setores também" ou
+   * oferecer a opção de mover esses descendentes pra outro pai).
+   */
+  qtdFilhosDiretos: number;
 };
 
 export type NoResolvido = {
@@ -75,6 +82,7 @@ function paraFilhoClasse(c: ClasseNode): FilhoResolvido {
     pesoAlvoGlobal: c.pesoAlvoGlobal,
     pesoRealGlobal: c.pesoRealGlobal,
     valorAtual: c.valorAtual,
+    qtdFilhosDiretos: c.setores.length,
   };
 }
 function paraFilhoSetor(s: SetorNode): FilhoResolvido {
@@ -88,6 +96,7 @@ function paraFilhoSetor(s: SetorNode): FilhoResolvido {
     pesoAlvoGlobal: s.pesoAlvoGlobal,
     pesoRealGlobal: s.pesoRealGlobal,
     valorAtual: s.valorAtual,
+    qtdFilhosDiretos: s.ativos.length,
   };
 }
 function paraFilhoAtivo(a: AtivoNode): FilhoResolvido {
@@ -102,6 +111,7 @@ function paraFilhoAtivo(a: AtivoNode): FilhoResolvido {
     pesoAlvoGlobal: a.pesoAlvoGlobal,
     pesoRealGlobal: a.pesoRealGlobal,
     valorAtual: a.valorAtual,
+    qtdFilhosDiretos: 0,
   };
 }
 function paraFilhoMacro(m: MacroNode): FilhoResolvido {
@@ -115,6 +125,7 @@ function paraFilhoMacro(m: MacroNode): FilhoResolvido {
     pesoAlvoGlobal: m.pesoAlvoGlobal,
     pesoRealGlobal: m.pesoRealGlobal,
     valorAtual: m.valorAtual,
+    qtdFilhosDiretos: m.classes.length,
   };
 }
 
@@ -270,4 +281,35 @@ export function statusSomaFilhos(filhos: { pesoAlvo: number }[]): {
   if (soma > 100.01) return { soma, status: "excedido" };
   if (soma < 99.99) return { soma, status: "incompleto" };
   return { soma, status: "completo" };
+}
+
+export type ItemDistribuicaoIgual = { id: string; nome: string; pesoAtual: number; pesoNovo: number };
+
+/**
+ * Calcula o novo peso-alvo de cada filho ao "distribuir o restante
+ * igualmente" (ação principal, fase 5, §8.54/§16.2.8) — soma o restante
+ * (100 - soma atual) dividido em partes iguais ao peso JÁ definido de cada
+ * um (não reseta os valores atuais, decisão tomada explicitamente nesta
+ * fase). O último item absorve o resíduo de arredondamento de centavos, pra
+ * garantir que a soma final feche em exatamente 100.
+ */
+export function calcularDistribuicaoIgual(
+  filhos: { id: string; nome: string; pesoAlvo: number }[]
+): ItemDistribuicaoIgual[] {
+  const n = filhos.length;
+  if (n === 0) return [];
+  const soma = filhos.reduce((s, f) => s + f.pesoAlvo, 0);
+  const restante = 100 - soma;
+  const parteBase = Math.round((restante / n) * 100) / 100;
+  let acumulado = 0;
+  return filhos.map((f, i) => {
+    const parte = i < n - 1 ? parteBase : Math.round((restante - acumulado) * 100) / 100;
+    acumulado += parte;
+    return {
+      id: f.id,
+      nome: f.nome,
+      pesoAtual: f.pesoAlvo,
+      pesoNovo: Math.round((f.pesoAlvo + parte) * 100) / 100,
+    };
+  });
 }

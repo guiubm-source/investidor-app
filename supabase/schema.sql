@@ -1690,3 +1690,42 @@ alter table public.alocacao_classes drop constraint if exists alocacao_classes_m
 alter table public.alocacao_classes add constraint alocacao_classes_macro_id_nome_key unique (macro_id, nome);
 
 comment on table public.alocacao_classes is 'Nível 2 da estrutura-alvo (antes do §8.50/8.51 era o nível 1): classes de ativo (ex. Renda Fixa, Ações, FIIs) dentro de um Macro. Peso-alvo soma 100% DENTRO do Macro pai (macro_id), não mais do patrimônio total direto.';
+
+-- =====================================================================
+-- 26. Alocação — ordem persistida dos nós (fase 5 da reformulação "Metas
+--     e estrutura", §8.50/§8.54). A ação "reordenar" (§16.2.8) exige uma
+--     ordem explícita por irmão — antes disso a ordem era só a da
+--     consulta (por nome). Adiciona `ordem` a cada nível editável
+--     (Macro/Classe/Setor) e faz backfill idempotente, numerando os
+--     irmãos existentes em sequência estável (a própria `ordem`, ainda
+--     0 em todo mundo na 1ª rodada, com `created_at` como desempate) —
+--     seguro rodar de novo: uma vez numerada, a sequência já ordenada
+--     produz o mesmo resultado.
+-- =====================================================================
+alter table public.alocacao_macros add column if not exists ordem integer not null default 0;
+alter table public.alocacao_classes add column if not exists ordem integer not null default 0;
+alter table public.alocacao_setores add column if not exists ordem integer not null default 0;
+
+update public.alocacao_macros m
+set ordem = sub.rn
+from (
+  select id, row_number() over (partition by profile_id order by ordem, created_at) - 1 as rn
+  from public.alocacao_macros
+) sub
+where m.id = sub.id;
+
+update public.alocacao_classes c
+set ordem = sub.rn
+from (
+  select id, row_number() over (partition by macro_id order by ordem, created_at) - 1 as rn
+  from public.alocacao_classes
+) sub
+where c.id = sub.id;
+
+update public.alocacao_setores s
+set ordem = sub.rn
+from (
+  select id, row_number() over (partition by classe_id order by ordem, created_at) - 1 as rn
+  from public.alocacao_setores
+) sub
+where s.id = sub.id;

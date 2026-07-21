@@ -160,7 +160,7 @@ export default function AlocacaoView({
       */}
       <div className="flex flex-col lg:flex-row gap-4 items-start">
         <div className="w-full lg:w-[60%]">
-          <ArvoreAlocacao estrutura={estrutura} selecao={selecao} onSelecionar={setSelecao} />
+          <ArvoreAlocacao estrutura={estrutura} selecao={selecao} onSelecionar={setSelecao} onChange={atualizar} />
         </div>
         <div className="w-full lg:w-[40%]">
           <PainelContextual
