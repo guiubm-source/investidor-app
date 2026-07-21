@@ -5274,6 +5274,138 @@ manualmente antes do `git add`).
 **Arquivos tocados.** `lib/ir/motores/darf.ts`, `lib/ir/consultas/darf.ts`
 (novos).
 
+### 8.41 Imposto de Renda — fase 6 (renda fixa DIRETA: motor novo, sem UI) implementada (2026-07-21)
+
+Continuação de §8.40 — "proxima fase". Escopo desta fase decidido com o
+Guilherme: fase 6 do §8.32.37 cobre uma lista grande (renda fixa direta +
+fundos curto/longo prazo/ações + come-cotas) — escolhido começar só pela
+renda fixa direta (CDB/Tesouro/Debênture/LCI/LCA/CRI/CRA) no motor novo,
+mesmo padrão "motor sem tela" das fases 3/4/5. Fundos e come-cotas ficam
+para uma fase futura; nenhum campo novo foi adicionado em `ativos` (a opção
+"fundação de schema primeiro" foi descartada) — a distinção isenta/
+tributável continua vindo do campo já existente `ativos.subtipo_renda_fixa`
+(mesmo que o motor antigo já usa).
+
+**Implementado nesta fase:**
+
+- **`lib/ir/ledger/fifo-dias-renda-fixa.ts`** (novo, motor puro, Decimal, sem
+  `"use server"`): `calcularDiasMediosRetencao(eventosOrdenados)` —
+  reimplementação Decimal, independente, do `fifoRendaFixa` que já existia
+  em `lib/ir/actions.ts#apurarVendasDoAtivo` (motor antigo). Mantém uma fila
+  FIFO de lotes de compra (data + quantidade), aplica desdobramento/
+  grupamento (multiplica quantidade de todos os lotes pelo fator) e
+  bonificação (lote novo na data do evento) na mesma convenção do ledger
+  fiscal de custo médio, e em cada venda consome os lotes mais antigos
+  primeiro até completar a quantidade vendida, calculando a média ponderada
+  (por quantidade) de dias corridos entre compra e venda de cada lote
+  consumido. Diferente do motor antigo, que só guardava a média, este devolve
+  também `memoria: MemoriaConsumoLote[]` (data de cada lote, quantidade
+  consumida, dias) — atende literalmente o texto do próprio doc (§8.32.17.5:
+  "para cada resgate, guardar na memória os lotes consumidos, dias e faixa
+  aplicável").
+  - **Importante:** este FIFO é estritamente auxiliar, só para estimar prazo
+    de permanência — ele NÃO participa do cálculo do ganho/lucro da venda.
+    O ganho continua vindo do ledger fiscal de custo médio ponderado (fase
+    3, `construir-ledger.ts`), rodando em paralelo sobre a MESMA sequência
+    de eventos. Isto é uma exigência explícita do próprio doc (§8.32.17.5:
+    "a fila FIFO auxiliar... não pode substituir o custo médio oficial") e
+    também a mesma convenção que o motor antigo já seguia — só formalizada
+    aqui em dois módulos Decimal separados em vez de uma única função
+    imperativa.
+- **`lib/ir/motores/renda-fixa-brasil.ts`** (novo, motor puro, Decimal, sem
+  `"use server"`): `apurarRendaFixaBrasil(ativos, parametros)`. Diferença
+  estrutural em relação ao motor de renda variável (fase 4): **não há
+  compensação de prejuízo entre lançamentos** — não é uma simplificação, é a
+  regra tributária real (IRRF definitivo por resgate, sem ficha de
+  compensação como em renda variável). Por isso o motor processa cada
+  resgate de forma independente (sem percorrer o histórico cronologicamente
+  acumulando estado entre meses, ao contrário da fase 4).
+  - Isenta (`renda_fixa_isenta`, LCI/LCA/CRI/CRA): sempre `impostoDevido: 0`,
+    `aliquota: null`, `isento: true`, mesmo motivo já usado no relatório
+    antigo.
+  - Tributável (`renda_fixa_tributavel`, CDB/Tesouro/Debênture/etc.):
+    `baseCalculo = max(0, lucroBruto)` (prejuízo não abate nada, só zera a
+    própria base); alíquota resolvida pela tabela regressiva parametrizada
+    (`renda_fixa.regressiva_ate_180_dias` / `_ate_360_dias` / `_ate_720_dias`
+    / `_acima_720_dias`, já seedadas na fase 1, nunca hardcoded no motor) a
+    partir do `diasMediosRetencao` do resgate; `impostoDevido: null` sempre
+    — retido na fonte automaticamente pela instituição no ato do resgate,
+    não é um débito que o usuário recolhe via DARF, então **este motor não
+    alimenta a consolidação de DARF da fase 5** (mesmo comportamento do
+    motor antigo, preservado de propósito).
+  - Saída em duas camadas: `resgates: ResgateApuradoRendaFixa[]` (um por
+    venda/resgate, com a faixa/alíquota resolvida individualmente — a faixa
+    pode variar resgate a resgate mesmo dentro do mesmo ativo/mês, se lotes
+    de prazos diferentes forem consumidos) e `mensal:
+    LinhaMensalRendaFixa[]` (agregado por grupo+mês, mesma convenção do
+    motor antigo, pronta pra uma futura fase 6b conectar na tela do jeito
+    que a 4b fez com renda variável). Quando um mês mistura resgates de
+    faixas diferentes, a linha mensal expõe `aliquota: null` (não há uma
+    alíquota única representativa) mas preserva `resgates` com o detalhe por
+    evento — nunca perde a memória de cálculo só porque o agregado não cabe
+    num único número (§8.32.38).
+- **`lib/ir/consultas/renda-fixa.ts`** (novo, sem `"use server"`):
+  `obterParametrosRendaFixaVigente()` (carrega a tabela regressiva da versão
+  de regra vigente do exercício corrente, `null` se faltar qualquer uma das
+  4 chaves — mesmo padrão de bloqueio gracioso das fases 4/5) e
+  `apurarRendaFixaBrasilDoUsuario()` (lê só `ativos.tipo = 'renda_fixa'`,
+  monta o ledger fiscal de custo médio E o FIFO de dias em paralelo sobre a
+  mesma sequência de eventos por ativo, classifica isenta/tributável via
+  `subtipo_renda_fixa`, chama o motor).
+- **`lib/ir/consultas/ledger.ts`** (estendido): nova função exportada
+  `buscarEventosLedgerFiscalDoUsuario()` — devolve os eventos JÁ ORDENADOS
+  de todos os ativos do usuário, agrupados por `ativo_id`, SEM passar pelo
+  ledger de custo médio. Refaz a própria leitura em vez de reaproveitar
+  `construirLedgerFiscalDoUsuario` — mantém cada função exportada deste
+  arquivo com uma única responsabilidade, sem acoplar quem usa eventos crus
+  (fase 6) ao formato de saída do ledger. As funções já existentes
+  (`construirLedgerFiscalDoUsuario`, `construirLedgerFiscalDoAtivo`) não
+  foram alteradas.
+- **Testado manualmente com 7 cenários** (script `tsx` temporário, não
+  commitado): LCI sempre isenta independente de lucro/dias; CDB com resgate
+  a 100 dias corridos (faixa ≤180, 22,5%); CDB a 400 dias (faixa ≤720,
+  17,5%); CDB com dois lotes de compra consumidos por um único resgate
+  parcial (média ponderada de dias bate com o cálculo manual, memória com 2
+  entradas); CDB com prejuízo no resgate (base zerada, mas alíquota ainda
+  resolvida pelos dias — só o IMPOSTO que não incide, o prazo/faixa continua
+  sendo informação válida); agregação mensal com dois resgates de faixas
+  diferentes no mesmo mês (linha mensal com `aliquota: null`, mas
+  `resgates` preservando o detalhe); tributável nunca gera valor de DARF
+  (`impostoDevido` sempre `null` em todos os resgates tributáveis). Todos
+  bateram com o esperado calculado à mão.
+
+**Explicitamente fora do escopo desta fase:**
+
+1. Fundos de investimento (curto prazo/longo prazo/ações) e come-cotas —
+   `ativos.tipo = 'fundo'` continua fora deste motor; o relatório antigo
+   (`actions.ts`) segue sendo a única fonte pra esses ativos por enquanto.
+2. Novos campos em `ativos` (`tributacao_renda_fixa`, `regime_fundo`,
+   `possui_come_cotas`, `emissor_cnpj`, `instituicao_custodiante_cnpj`,
+   `vencimento`) recomendados por §8.32.17.5 — não adicionados (decisão
+   explícita do Guilherme de não fazer "fundação de schema" nesta fase).
+3. Nenhuma UI — mesmo padrão das fases 3/4 (motor-only): `ImpostoRendaView`
+   continua mostrando `renda_fixa_isenta`/`renda_fixa_tributavel` pela
+   aproximação antiga (`origemMotor: "legado"`) até uma futura fase 6b
+   conectar este motor na tela, do jeito que a 4b fez com renda variável.
+4. `ir_retencoes` continua sem nenhum motor escrevendo nela — mesma dívida
+   técnica já registrada em §8.37/§8.38/§8.40.
+5. Este motor não alimenta a consolidação de DARF (fase 5) — renda fixa
+   direta nunca gera guia de DARF, é retenção na fonte definitiva (ver
+   comentário no motor).
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos tocados/criados
+conferidos via `wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Nota operacional:** o arquivo de teste manual temporário
+`src/lib/ir/motores/_teste_renda_fixa_temp.ts` ficou parado no disco pelo
+mesmo motivo intermitente já registrado em §8.36-§8.40 (dessa vez o
+`_teste_darf_temp.ts` da fase anterior sumiu sozinho, mas este não) — apagar
+manualmente antes do `git add` (comando na seção de comandos abaixo).
+
+**Arquivos tocados.** `lib/ir/ledger/fifo-dias-renda-fixa.ts`,
+`lib/ir/motores/renda-fixa-brasil.ts`, `lib/ir/consultas/renda-fixa.ts`
+(novos); `lib/ir/consultas/ledger.ts` (estendido, só adição de função nova).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

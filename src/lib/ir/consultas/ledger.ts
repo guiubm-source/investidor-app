@@ -117,3 +117,36 @@ export async function construirLedgerFiscalDoAtivo(ativoId: string): Promise<Led
 
   return construirLedgerFiscal(ordenarEventosLedgerFiscal(eventosDoAtivo));
 }
+
+/**
+ * Eventos JÁ ORDENADOS de todos os ativos do usuário, agrupados por
+ * `ativo_id`, SEM passar pelo ledger fiscal — pra motores que precisam da
+ * sequência crua de eventos além do custo médio (ex.: fase 6, FIFO auxiliar
+ * de prazo de permanência de renda fixa, `ledger/fifo-dias-renda-fixa.ts`,
+ * que roda em paralelo ao ledger de custo médio sobre a MESMA sequência de
+ * eventos, sem substituí-lo — ver docs/MAPA-DE-DADOS.md §8.41). Refaz a
+ * própria leitura (não reaproveita `construirLedgerFiscalDoUsuario`) de
+ * propósito: mantém este arquivo com uma única responsabilidade por função
+ * exportada, sem acoplar o consumidor ao formato de saída do ledger.
+ */
+export async function buscarEventosLedgerFiscalDoUsuario(): Promise<Map<string, EventoLedgerFiscal[]>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return new Map();
+
+  const eventos = await buscarTodasTransacoesParaLedger(supabase, user.id);
+
+  const eventosPorAtivo = new Map<string, EventoLedgerFiscal[]>();
+  for (const evento of eventos) {
+    const lista = eventosPorAtivo.get(evento.ativoId) ?? [];
+    lista.push(evento);
+    eventosPorAtivo.set(evento.ativoId, lista);
+  }
+  for (const [ativoId, lista] of eventosPorAtivo) {
+    eventosPorAtivo.set(ativoId, ordenarEventosLedgerFiscal(lista));
+  }
+
+  return eventosPorAtivo;
+}
