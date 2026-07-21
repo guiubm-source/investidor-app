@@ -1113,3 +1113,21 @@ alter table public.ativos add constraint ativos_subtipo_internacional_check
 alter table public.proventos drop constraint if exists proventos_tipo_check;
 alter table public.proventos add constraint proventos_tipo_check
   check (tipo in ('dividendo','jcp','rendimento','aluguel','outro'));
+
+-- ============================================================================
+-- 20. Proventos — importação por copiar/colar + tipo "Reembolso" (decisões em
+--     docs/MAPA-DE-DADOS.md §8.30, 2026-07-20).
+--     - Reembolso é outro tipo que o Guilherme recebe hoje só como "outro"
+--       (sem distinção) — mesma decisão de "Aluguel de ações" na seção 19:
+--       vira tipo próprio, registros antigos em "outro" não são migrados
+--       automaticamente.
+--     - Nenhuma coluna nova pra importação em si: reaproveita
+--       ativo_id/tipo/data_com/data_pagamento/quantidade/valor_por_cota já
+--       existentes, mesmo padrão da importação de transações (seção
+--       "Livro-razão", §8.24) — só client-side (parsing) e a mesma
+--       `criarProvento` de sempre gravam.
+-- ============================================================================
+
+alter table public.proventos drop constraint if exists proventos_tipo_check;
+alter table public.proventos add constraint proventos_tipo_check
+  check (tipo in ('dividendo','jcp','rendimento','aluguel','reembolso','outro'));

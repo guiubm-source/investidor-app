@@ -41,6 +41,7 @@ import { LABEL_GRUPO, type GrupoPosicao } from "@/lib/carteira/grupo-classificac
 import ConfirmModal from "@/components/ConfirmModal";
 import { useToast } from "@/components/ToastProvider";
 import GradeProventosView from "./GradeProventosView";
+import ImportarProventosView from "./ImportarProventosView";
 
 type ProventoFormInput = z.input<typeof proventoSchema>;
 
@@ -83,6 +84,7 @@ export default function ProventosView({
   const [livro, setLivro] = useState(livroInicial);
   const [aba, setAba] = useState<"dashboard" | "grade">("dashboard");
   const [addProvento, setAddProvento] = useState(false);
+  const [importando, setImportando] = useState(false);
   const [editando, setEditando] = useState<string | null>(null);
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [confirmandoLote, setConfirmandoLote] = useState(false);
@@ -381,10 +383,16 @@ export default function ProventosView({
               antes de lançar proventos.
             </p>
           ) : (
-            !addProvento && (
-              <button onClick={() => setAddProvento(true)} className="btn btn-secondary">
-                + Registrar provento
-              </button>
+            !addProvento &&
+            !importando && (
+              <div className="flex gap-2">
+                <button onClick={() => setAddProvento(true)} className="btn btn-secondary">
+                  + Registrar provento
+                </button>
+                <button onClick={() => setImportando(true)} className="btn btn-secondary">
+                  Importar (colar)
+                </button>
+              </div>
             )
           )}
 
@@ -402,6 +410,19 @@ export default function ProventosView({
                 }}
               />
             </div>
+          )}
+
+          {importando && (
+            <ImportarProventosView
+              onImportado={() => {
+                atualizar();
+              }}
+            />
+          )}
+          {importando && (
+            <button onClick={() => setImportando(false)} className="btn btn-secondary">
+              Fechar importação
+            </button>
           )}
 
           {/* ---- Filtros da tabela detalhada ---- */}

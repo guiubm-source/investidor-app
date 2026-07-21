@@ -24,73 +24,13 @@
  */
 
 import { createClient } from "@/lib/supabase/server";
-import { criarAtivo, type TipoAtivo } from "@/lib/ativos/actions";
+import { criarAtivo } from "@/lib/ativos/actions";
 import { criarCorretora, criarTransacao, obterCorretoras } from "./actions";
+import { normalizar, parseNumeroBR, parseDataBR, resolverAtivoNovo, detectarIndicesColuna, type AtivoNovo } from "./importar-shared";
 
-// ---------------------------------------------------------------------------
-// Parsing — funções puras (não exportadas, sem restrição do "use server").
-// ---------------------------------------------------------------------------
-
-function normalizar(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function parseNumeroBR(txt: string): number | null {
-  const limpo = txt.trim().replace(/\./g, "").replace(",", ".");
-  if (limpo === "") return null;
-  const n = Number(limpo);
-  return Number.isFinite(n) ? n : null;
-}
-
-function parseDataBR(txt: string): string | null {
-  const m = txt.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return null;
-  const [, d, mo, y] = m;
-  const iso = `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
-  // Validação mínima de data real (30/02 etc. não vira uma data "quase certa" silenciosa).
-  const dt = new Date(`${iso}T00:00:00Z`);
-  if (Number.isNaN(dt.getTime()) || dt.getUTCDate() !== Number(d)) return null;
-  return iso;
-}
-
-/**
- * "Grupo" da planilha do Guilherme → tipo/subtipo do app (ver docs/MAPA-DE-DADOS.md
- * §8.16/§8.23 pra classificação já existente) — só usado quando o ATIVO ainda
- * não está cadastrado (ativo já existente usa o tipo/subtipo já salvo,
- * ignorando o texto do Grupo colado).
- */
-const MAPA_GRUPO: Record<string, { tipo: TipoAtivo; subtipoInternacional?: string; subtipoRendaFixa?: string }> = {
-  acoes: { tipo: "acao" },
-  acao: { tipo: "acao" },
-  "acoes eua": { tipo: "internacional", subtipoInternacional: "acao" },
-  "acoes exterior": { tipo: "internacional", subtipoInternacional: "acao" },
-  stocks: { tipo: "internacional", subtipoInternacional: "acao" },
-  stock: { tipo: "internacional", subtipoInternacional: "acao" },
-  "etf usa": { tipo: "internacional", subtipoInternacional: "etf" },
-  "etf exterior": { tipo: "internacional", subtipoInternacional: "etf" },
-  "etf eua": { tipo: "internacional", subtipoInternacional: "etf" },
-  "etf brasil": { tipo: "etf" },
-  etf: { tipo: "etf" },
-  "fundo imobiliario": { tipo: "fii" },
-  fii: { tipo: "fii" },
-  fiis: { tipo: "fii" },
-  reit: { tipo: "internacional", subtipoInternacional: "reit" },
-  reits: { tipo: "internacional", subtipoInternacional: "reit" },
-  "tesouro direto": { tipo: "renda_fixa", subtipoRendaFixa: "tesouro" },
-  tesouro: { tipo: "renda_fixa", subtipoRendaFixa: "tesouro" },
-  "renda fixa": { tipo: "renda_fixa" },
-  cripto: { tipo: "cripto" },
-  criptomoeda: { tipo: "cripto" },
-  fundo: { tipo: "fundo" },
-  fundos: { tipo: "fundo" },
-  "fundo de investimento": { tipo: "fundo" },
-  outro: { tipo: "outro" },
-  outros: { tipo: "outro" },
-};
+// Parsing/classificação — reaproveita os helpers compartilhados com a
+// importação de Proventos (ver docs/MAPA-DE-DADOS.md §8.30) em
+// `./importar-shared.ts` (normalizar/parseNumeroBR/parseDataBR/MAPA_GRUPO).
 
 const COLUNAS_ESPERADAS = [
   "data de negociacao",
@@ -107,20 +47,6 @@ const COLUNAS_ESPERADAS = [
   "total sem taxas",
   "total com taxas",
 ] as const;
-
-/** Índice de cada coluna esperada dentro da linha, na ordem de COLUNAS_ESPERADAS — ou `null` se a 1ª linha não for um cabeçalho reconhecível (nesse caso assume a ordem fixa de sempre). */
-function detectarIndicesColuna(primeiraLinha: string[]): number[] | null {
-  const normalizado = primeiraLinha.map(normalizar);
-  const indices = COLUNAS_ESPERADAS.map((c) => normalizado.findIndex((n) => n === c));
-  if (indices.some((i) => i === -1)) return null;
-  return indices;
-}
-
-type AtivoNovo = {
-  tipo: TipoAtivo;
-  subtipoInternacional: "acao" | "etf" | "reit" | null;
-  subtipoRendaFixa: "cdb" | "tesouro" | "debenture" | "lci" | "lca" | "cri" | "cra" | null;
-};
 
 export type StatusLinhaImportacao = "ok" | "duplicado" | "erro";
 
@@ -195,7 +121,7 @@ export async function analisarImportacaoTransacoes(textoColado: string): Promise
   if (linhasBrutas.length === 0) return { linhas: [], resumo: { total: 0, ok: 0, duplicado: 0, erro: 0 } };
 
   const celulas = linhasBrutas.map((l) => l.split("\t"));
-  const indicesCabecalho = detectarIndicesColuna(celulas[0]);
+  const indicesCabecalho = detectarIndicesColuna(celulas[0], COLUNAS_ESPERADAS);
   const linhasDados = indicesCabecalho ? celulas.slice(1) : celulas;
   const idx = indicesCabecalho ?? COLUNAS_ESPERADAS.map((_, i) => i);
   const [
@@ -320,8 +246,8 @@ export async function analisarImportacaoTransacoes(textoColado: string): Promise
     const ativoId = ativoPorTicker.get(normalizar(ativoTexto)) ?? null;
     let ativoNovo: AtivoNovo | null = null;
     if (!ativoId) {
-      const mapeado = MAPA_GRUPO[normalizar(grupoTexto)];
-      if (!mapeado) {
+      const resolvido = resolverAtivoNovo(grupoTexto);
+      if (!resolvido) {
         return {
           ...base,
           tipo,
@@ -333,11 +259,7 @@ export async function analisarImportacaoTransacoes(textoColado: string): Promise
           mensagem: `Ativo "${ativoTexto}" não cadastrado e categoria "${grupoTexto}" não reconhecida — cadastre manualmente antes de importar`,
         };
       }
-      ativoNovo = {
-        tipo: mapeado.tipo,
-        subtipoInternacional: (mapeado.subtipoInternacional as AtivoNovo["subtipoInternacional"]) ?? null,
-        subtipoRendaFixa: (mapeado.subtipoRendaFixa as AtivoNovo["subtipoRendaFixa"]) ?? null,
-      };
+      ativoNovo = resolvido;
     }
 
     const corretoraId = instituicao ? corretoraPorNome.get(normalizar(instituicao)) ?? null : null;

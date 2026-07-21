@@ -2398,6 +2398,84 @@ os CHECK constraints de cabeça.
 
 **Arquivos tocados.** `lib/carteira/schema.ts` (`transacaoSchema.transform`).
 
+### 8.30 Proventos — Importar por copiar/colar + tipo "Reembolso" (2026-07-21)
+
+Motivado pelo Guilherme pedindo pra aprimorar a importação por copiar/colar
+na aba Proventos, no mesmo espírito da já existente no Livro-razão (§8.24),
+recebendo um exemplo real do formato colado (planilha com colunas Ativo,
+Nome do ativo, Tipo do ativo, Provento, Data COM, Data pgto, Qtd ativos,
+Valor pago por cota, Total do pgto, Preço medio) e a lista dos tipos de
+provento que recebe (Dividendo, JCP, Rendimento, Aluguel, Reembolso).
+
+**Decisões tomadas (perguntadas uma a uma antes de implementar, por
+CLAUDE.md §1):**
+- **Tipo "Reembolso"** não existia em `TIPOS_PROVENTO` — criado como tipo
+  próprio (não reaproveitando "Outro"), igual foi feito com "Aluguel de
+  ações" em §8.26. `proventos_tipo_check` (schema.sql) agora aceita
+  `'dividendo','jcp','rendimento','aluguel','reembolso','outro'`.
+- **Ativo não encontrado na importação:** criado automaticamente (mesmo
+  padrão do Livro-razão, §8.24), classificando via a coluna "Tipo do ativo"
+  colada através do `MAPA_GRUPO` compartilhado (`importar-shared.ts`) — um
+  ativo cadastrado assim nasce com `preco_atual = 0`, igual qualquer ativo
+  novo criado manualmente.
+- **Duplicatas:** detectadas (mesmo ativo + tipo + data de pagamento + valor
+  total) e marcadas com badge "Duplicado" na pré-visualização, mas
+  DEIXADAS DESMARCADAS por padrão (checkbox continua habilitada) — o
+  Guilherme decide linha a linha, sem popup de confirmação separado.
+  Diferente do Livro-razão, que pula duplicatas automaticamente.
+- **Coluna "Preço médio" colada:** ignorada por completo — não alimenta
+  nada no banco (nem semente de `preco_atual` do ativo novo). Serve só de
+  conferência visual pro Guilherme na planilha de origem.
+
+**Refatoração prévia (pré-requisito, não pedida mas necessária pra não
+duplicar lógica — §1.3 "sem refatorações colaterais" não se aplica aqui
+porque sem isso o novo motor duplicaria `normalizar`/`parseNumeroBR`/
+`parseDataBR`/`MAPA_GRUPO`/`detectarIndicesColuna` do zero):** essas 5
+funções/dados, antes vivendo só dentro de `importar-transacoes.ts`, foram
+extraídas para `lib/carteira/importar-shared.ts` (arquivo puro, sem `"use
+server"` — mesmo motivo de `posicao-calculo.ts`, ver §3 do CLAUDE.md:
+Server Actions só podem exportar `async function`). `importar-transacoes.ts`
+foi atualizado pra importar de lá em vez de definir localmente; nenhum
+comportamento da importação de transações mudou.
+
+**Arquitetura do motor novo (`lib/proventos/importar-proventos.ts`,
+`"use server"`), mesmo padrão em 2 passos do Livro-razão:**
+1. `analisarImportacaoProventos(textoColado)` — só leitura. Detecta
+   cabeçalho (via `detectarIndicesColuna` compartilhado) ou assume ordem
+   fixa; para cada linha, faz parsing de datas (`parseDataBR`) e números
+   (`parseNumeroBR`), mapeia o texto da coluna "Provento" pro `tipo` interno
+   (`MAPA_TIPO_PROVENTO`, local a este arquivo — só usado aqui, diferente de
+   `MAPA_GRUPO` que é usado tanto por transações quanto proventos),
+   resolve o ativo (existente por ticker, ou `resolverAtivoNovo` a partir da
+   coluna "Tipo do ativo"), recalcula `valor_total = quantidade ×
+   valor_por_cota` (NUNCA usa o "Total do pgto" colado direto — mesma regra
+   de `criarProvento`, ver §8.23) e checa duplicata contra o banco + contra
+   o próprio lote colado. Retorna `status: "ok"|"duplicado"|"erro"` por
+   linha com mensagem explicativa.
+2. `confirmarImportacaoProventos(linhas)` — grava só as linhas
+   selecionadas na pré-visualização: cria ativos que faltarem (reaproveita
+   `criarAtivo`, dedupe dentro do próprio lote pra não criar o mesmo ativo
+   novo duas vezes) e chama `criarProvento` linha a linha (reaproveita 100%
+   do cálculo/gravação já existente — nenhuma lógica de insert duplicada).
+
+**UI (`app/(app)/proventos/ImportarProventosView.tsx`):** clone estrutural
+de `ImportarTransacoesView.tsx` — textarea (placeholder com exemplo real do
+Guilherme) → "Analisar" → tabela de pré-visualização com checkbox por linha
+(nasce marcada só pra `status: "ok"`), badges de status, coluna "Total
+(calc.)" mostrando um aviso pequeno quando o valor recalculado diverge do
+"Total do pgto" colado (arredondamento de planilha, por exemplo) → "Confirmar
+importação (N)" → resumo final. Ligada em `ProventosView.tsx` como um botão
+"Importar (colar)" ao lado do já existente "+ Registrar provento" (novo
+estado `importando`, mutuamente exclusivo com `addProvento`).
+
+**Arquivos tocados/criados.** `lib/carteira/importar-shared.ts` (novo,
+helpers extraídos); `lib/carteira/importar-transacoes.ts` (refatorado pra
+importar os helpers); `lib/proventos/schema.ts` (tipo "reembolso" em
+`TIPOS_PROVENTO` e no enum Zod); `supabase/schema.sql` (seção 20,
+`proventos_tipo_check` incluindo "reembolso"); `lib/proventos/importar-
+proventos.ts` (novo); `app/(app)/proventos/ImportarProventosView.tsx`
+(novo); `app/(app)/proventos/ProventosView.tsx` (botão + estado de toggle).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
