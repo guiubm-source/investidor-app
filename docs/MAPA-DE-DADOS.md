@@ -6611,6 +6611,86 @@ ter a experiência de fato descrita no spec; até lá, o que existe é
 funcionalmente equivalente a antes (cards empilhados), só que com um nível
 extra (Macro) por cima.
 
+### 8.52 Alocação — fase 3 da reformulação "Metas e estrutura": árvore + editor contextual implementados (2026-07-21)
+
+Substitui o layout de cards empilhados (Macro/Classe/Setor cada um num
+`card` expansível) pela árvore + editor contextual descritos no spec
+(§8.50, §16.2.1-§16.2.6). Aprovado no plano de fases da §8.51 — nenhuma
+pergunta nova nesta fase (escopo já fechado).
+
+**Novos arquivos:**
+- `app/(app)/alocacao/arvore.ts` — helpers puros (sem rede) de navegação:
+  `resolverNo(estrutura, selecao)` percorre a árvore já carregada em memória
+  e devolve o nó selecionado + breadcrumb (`caminho`) + filhos prontos pro
+  painel (`FilhoResolvido[]`); `statusSomaFilhos` calcula a soma dos
+  pesos-alvo dos filhos e um status simples (completo/incompleto/excedido/
+  vazio) — versão provisória, a fase 4 troca por um indicador mais completo
+  com bloqueio de salvamento.
+- `app/(app)/alocacao/ArvoreAlocacao.tsx` — coluna esquerda (~60% da
+  largura em telas ≥lg, empilha em telas menores). Cada linha é um nó
+  (Macro/Classe/Setor/Ativo), com chevron de expandir/colapsar (só quando
+  tem filhos), nome, peso-alvo local, peso real global e um badge de status
+  da soma dos filhos. Clique seleciona sem navegar pra outra página nem
+  reordenar a árvore (§16.2.3).
+- `app/(app)/alocacao/PainelContextual.tsx` — coluna direita (~40%).
+  Recebe `selecao` e devolve: breadcrumb clicável (volta pra qualquer
+  ancestral ou pra raiz), título específico da tarefa ("Distribuir Classes
+  de Brasil", "Ativos de Financeiro", etc. — nunca "Editar item" genérico,
+  §16.2.3), texto explicando o que está sendo distribuído e lembrando o
+  peso dos ancestrais (§16.2.4), editar/excluir do PRÓPRIO nó selecionado, e
+  a lista de distribuição dos filhos diretos com peso local editável (via
+  os mesmos formulários `FormMacro`/`FormClasse`/`FormSetor`) e peso global
+  só leitura (§16.2.5/16.2.6). Ativo nunca aparece como filho editável —
+  quando o nó selecionado é um Setor, seus Ativos aparecem como linhas
+  somente leitura (link pra aba Ativos); quando o próprio Ativo é
+  selecionado, o painel mostra uma view somente leitura dedicada, sem
+  nenhum controle de edição (§16.2.13 — Alocação nunca cria/edita ativo,
+  regra que já existia desde a fundação da aba, ver §4 deste mapa).
+- `app/(app)/alocacao/FormMacro.tsx`, `FormClasse.tsx`, `FormSetor.tsx` —
+  **renomeados** de `MacroRow.tsx`/`ClasseRow.tsx`/`SetorRow.tsx`: esses
+  arquivos tinham tanto o formulário quanto o card expansível antigo; o
+  card foi removido (substituído pela árvore+painel) e sobrou só o
+  formulário, então o nome do arquivo passou a refletir isso. Aproveitado
+  pra corrigir o rótulo do campo de peso-alvo de Classe, que ainda dizia
+  "Peso-alvo no patrimônio (%)" — desde a fase 1 (§8.51) isso é o peso
+  dentro do Macro, não mais do patrimônio total direto.
+
+**`AlocacaoView.tsx`** — mantém a lógica de empty-state/sugestão de
+template da fase 2 sem mudança, mas o corpo principal (quando já existe
+pelo menos 1 Macro) virou o layout de duas colunas
+(`ArvoreAlocacao` + `PainelContextual`), com um estado `selecao: Selecao`
+(default: raiz) elevado no componente pai e passado pra ambos. O
+`PainelContextual` é montado com uma `key` derivada da seleção
+(`${tipo}:${id}`) — força o React a remontar o painel do zero a cada troca
+de nó, o que evita que um estado de "editando"/"adicionando filho" de um
+nó vaze visualmente pro próximo nó selecionado (bug fácil de introduzir
+sem isso, já que os campos de formulário reaproveitariam o componente).
+
+**Verificação:** `tsc --noEmit` sem erros (3 rodadas: motor+UI inicial,
+depois de remover os cards antigos, depois do fix de breadcrumb). Sem
+suíte automatizada ainda (mesma situação da fase 2 — motor de Alocação não
+usa Decimal/Vitest como o de IR). Arquivos conferidos via `wc -l -c` +
+contagem de bytes nulos (0 em todos).
+
+**Dívida técnica registrada:** os arquivos antigos `MacroRow.tsx`,
+`ClasseRow.tsx` e `SetorRow.tsx` continuam fisicamente no disco (viraram
+duplicatas órfãs do formulário, sem o card) — a exclusão via ferramenta
+falhou neste ambiente (mesmo problema intermitente de permissão já
+registrado em sessões anteriores). O Guilherme precisa apagá-los
+manualmente antes do commit (comando na entrega desta sessão).
+
+**Arquivos tocados.** Novos: `arvore.ts`, `ArvoreAlocacao.tsx`,
+`PainelContextual.tsx`, `FormMacro.tsx`, `FormClasse.tsx`, `FormSetor.tsx`.
+Editado: `AlocacaoView.tsx`. Órfãos a apagar manualmente: `MacroRow.tsx`,
+`ClasseRow.tsx`, `SetorRow.tsx`.
+
+**Pendências pra próxima sessão:** fases 4 (indicador de distribuição com
+bloqueio de salvamento quando excedido), 5 (ações principais/avançadas —
+usar saldo restante, distribuir igualmente, mover entre pais, excluir
+subárvore, reordenar) e 6 (Não classificado como bucket de primeira classe
+na árvore, estados vazio/erro, responsividade completa, acessibilidade por
+teclado) do plano em §8.50/§8.51.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

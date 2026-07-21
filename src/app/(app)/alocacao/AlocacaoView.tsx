@@ -8,7 +8,10 @@ import {
   type EstruturaAlocacao,
 } from "@/lib/alocacao/actions";
 import { SUGESTAO_ALOCACAO_POR_PERFIL, TOLERANCIA_REBALANCEAMENTO_PP } from "@/lib/alocacao/constants";
-import MacroRow, { FormMacro } from "./MacroRow";
+import { FormMacro } from "./FormMacro";
+import ArvoreAlocacao from "./ArvoreAlocacao";
+import PainelContextual from "./PainelContextual";
+import { RAIZ, type Selecao } from "./arvore";
 import DesvioBar from "@/components/DesvioBar";
 import { useToast } from "@/components/ToastProvider";
 
@@ -28,6 +31,7 @@ export default function AlocacaoView({
   const [estrutura, setEstrutura] = useState(estruturaInicial);
   const [adicionandoMacro, setAdicionandoMacro] = useState(false);
   const [aplicandoSugestao, setAplicandoSugestao] = useState(false);
+  const [selecao, setSelecao] = useState<Selecao>(RAIZ);
   const toast = useToast();
 
   const atualizar = async () => {
@@ -148,28 +152,26 @@ export default function AlocacaoView({
         </p>
       )}
 
-      {estrutura.macros.map((macro) => (
-        <MacroRow key={macro.id} macro={macro} onChange={atualizar} />
-      ))}
-
-      {adicionandoMacro ? (
-        <div className="card p-4">
-          <FormMacro
-            onCancelar={() => setAdicionandoMacro(false)}
-            onSalvo={async (dados) => {
-              const resultado = await criarMacro(dados);
-              if (resultado.error) throw new Error(resultado.error);
-              await atualizar();
-              setAdicionandoMacro(false);
-              toast.success("Macro criado.");
-            }}
+      {/*
+        Árvore (esquerda, ~60%) + editor contextual (direita, ~40%) — §8.50
+        §16.2.1. Empilha em telas pequenas (responsividade completa é fase
+        6); o painel é remontado (via `key`) a cada troca de seleção pra não
+        vazar estado de edição de um nó pro outro.
+      */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start">
+        <div className="w-full lg:w-[60%]">
+          <ArvoreAlocacao estrutura={estrutura} selecao={selecao} onSelecionar={setSelecao} />
+        </div>
+        <div className="w-full lg:w-[40%]">
+          <PainelContextual
+            key={`${selecao.tipo}:${selecao.id}`}
+            estrutura={estrutura}
+            selecao={selecao}
+            onSelecionar={setSelecao}
+            onChange={atualizar}
           />
         </div>
-      ) : (
-        <button onClick={() => setAdicionandoMacro(true)} className="btn btn-secondary mt-2">
-          + Adicionar Macro
-        </button>
-      )}
+      </div>
     </div>
   );
 }
