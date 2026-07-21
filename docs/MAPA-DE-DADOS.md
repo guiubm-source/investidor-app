@@ -2352,6 +2352,52 @@ grupo, total da carteira), `lib/ativos/actions.ts` (`rentabilidadeTotalValor`/
 `rentabilidadePct` de `obterRentabilidadeHistoricaAtivo` e na agregação de
 `obterEvolucaoCarteira`).
 
+### 8.29 Correção: Bonificação (e desdobramento/grupamento) falhava ao registrar (2026-07-20)
+
+Motivado pelo Guilherme reportando "Não foi possível registrar a transação"
+ao tentar cadastrar uma bonificação de BBDC3 (quantidade recebida: 1, valor
+capitalizado: R$4,53) no Livro-razão.
+
+**Causa raiz.** O formulário de lançamento (`LivroRazaoView.tsx`) é ÚNICO
+pros 5 tipos de transação — só troca quais campos aparecem na tela conforme
+o `tipo` selecionado (ver §8.22). O form nasce com `tipo: "compra"` por
+padrão, e o campo `preco_unitario` começa com valor `0`. `react-hook-form`
+**não limpa** o valor de um campo quando ele deixa de ser renderizado (ao
+trocar pra "Bonificação", o input de `preco_unitario` some da tela, mas o
+`0` que estava lá continua vivo no estado interno do form). O
+`transacaoSchema.transform()` simplesmente repassava esse valor adiante sem
+filtrar por tipo — resultado: uma bonificação lançada logo após abrir o
+formulário (sem antes ter passado por "Compra"/"Venda" de propósito) ia pro
+banco com `preco_unitario: 0` em vez de `null`.
+
+O CHECK `transacoes_campos_por_tipo` (seção 17 do `schema.sql`) exige, pra
+`tipo = 'bonificacao'`, que `preco_unitario is null` — `0` não é `null`,
+então o Postgres rejeitava o insert. O código tratava qualquer erro do
+banco com a mesma mensagem genérica ("Não foi possível registrar a
+transação"), então não havia pista nenhuma de qual constraint tinha
+falhado — só dava pra achar a causa lendo o código e reconstruindo o
+CHECK constraint mentalmente contra os valores enviados.
+
+**Correção.** `transacaoSchema.transform()` (`lib/carteira/schema.ts`)
+agora decide explicitamente, com base no `tipo` já validado (não no que
+sobrou no estado do form), quais campos valem: `quantidade` só pra
+compra/venda/bonificação, `preco_unitario`/`custos` só pra compra/venda,
+`fator_proporcao` só pra desdobramento/grupamento, `valor_capitalizado` só
+pra bonificação — todo campo fora do seu tipo vira `null` (ou `0` pra
+`custos`) incondicionalmente, nunca repassa o valor cru do form. Isso
+protege tanto criação quanto edição (ambas passam pelo mesmo schema antes
+de chegar em `criarTransacao`/`editarTransacao`).
+
+**Dívida técnica não resolvida.** A mensagem de erro genérica em
+`criarTransacao`/`editarTransacao` (`"Não foi possível registrar/salvar a
+transação"`) esconde a causa real de QUALQUER falha do Postgres — só
+achamos essa causa lendo o código, não pela mensagem em si. Melhoria futura
+pendente: logar/expor o `error.message` real do Supabase (pelo menos no
+console do servidor) pra futuros diagnósticos não dependerem de reconstruir
+os CHECK constraints de cabeça.
+
+**Arquivos tocados.** `lib/carteira/schema.ts` (`transacaoSchema.transform`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
