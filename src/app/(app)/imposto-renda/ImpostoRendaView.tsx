@@ -16,6 +16,7 @@ import type { GrupoCodigoBensDireitos } from "@/lib/ir/motores/bens-direitos";
 import QuestionarioIR from "./QuestionarioIR";
 import BensDireitosView from "./BensDireitosView";
 import DashboardIRView from "./DashboardIRView";
+import RelatorioPdfButton from "./RelatorioPdfButton";
 
 const ABAS = [
   { id: "dashboard", label: "Dashboard" },
@@ -155,7 +156,12 @@ export default function ImpostoRendaView({
 
   return (
     <div className="space-y-6">
-      <CardPerfilFiscal declaracaoComPerfil={declaracaoComPerfil} onRefazer={() => setMostrarQuestionario(true)} />
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <CardPerfilFiscal declaracaoComPerfil={declaracaoComPerfil} onRefazer={() => setMostrarQuestionario(true)} />
+        </div>
+        <RelatorioPdfButton ano={declaracaoComPerfil.declaracao.anoCalendario} />
+      </div>
 
       <div className="flex gap-1 border-b border-border overflow-x-auto">
         {ABAS.map((a) => (

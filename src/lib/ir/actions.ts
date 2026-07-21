@@ -15,6 +15,20 @@ import {
 import type { GrupoCodigoBensDireitos } from "./motores/bens-direitos";
 import { obterDashboardIR as _obterDashboardIR } from "./consultas/dashboard";
 import type { CardsPrincipaisIR, CardValor, PrejuizoGrupo } from "./motores/dashboard-fiscal";
+import { obterRelatorioCompletoIR as _obterRelatorioCompletoIR } from "./consultas/relatorio-completo";
+import type { ItemBensDireitos } from "./motores/bens-direitos";
+import type { LinhaMensalRendaVariavel as LinhaMensalRendaVariavelFiscal } from "./motores/renda-variavel-brasil";
+import type { LinhaMensalRendaFixa, ResgateApuradoRendaFixa } from "./motores/renda-fixa-brasil";
+import type { LinhaAnualExterior, VendaParaApuracaoExterior } from "./motores/exterior-lei-14754";
+import type { GuiaDarfConsolidada, SaldoPendenteDarf, ParcelaNaMemoriaDarf, ResultadoDarf } from "./motores/darf";
+import type {
+  RelatorioCompletoIR,
+  SecaoRelatorio,
+  StatusSecao,
+  CapaRelatorio,
+  PendenciaRelatorio,
+  OperacaoAnexo,
+} from "./relatorios/tipos";
 
 export type AcaoResultado = { error?: string };
 
@@ -1007,4 +1021,295 @@ export async function obterDashboardIR(ano: number): Promise<DashboardUI> {
     quantidadePendencias: resultado.quantidadePendencias,
     versaoFiscalNome: resultado.versaoFiscalNome,
   };
+}
+
+// ============================================================================
+// Fase 11 (§8.32.37) — PDF final: agrega o que já existe (fases 3-10) na
+// estrutura de 23 itens do §8.32.26. NENHUM cálculo novo — só conversão
+// Decimal → number nesta fronteira, mesmo padrão de todas as fases
+// anteriores. Ver docs/MAPA-DE-DADOS.md §8.46.
+// ============================================================================
+
+export type SecaoRelatorioUI<T> = { status: StatusSecao; dados: T | null; motivo: string | null; avisos: string[] };
+
+export type ItemBensDireitosRelatorioUI = {
+  origem: "manual" | "investimento";
+  grupo: string;
+  codigo: string;
+  nome: string;
+  localizacao: string | null;
+  cpfCnpj: string | null;
+  discriminacao: string | null;
+  situacaoAnterior: number;
+  situacaoAtual: number;
+  observacoes: string | null;
+  statusRevisao: "pendente" | "revisado" | null;
+};
+
+export type LinhaMensalRendaVariavelUI = {
+  grupo: string;
+  anoMes: string;
+  vendaTotalBruta: number;
+  lucroBruto: number;
+  prejuizoAnteriorAplicado: number;
+  baseCalculo: number;
+  isento: boolean;
+  motivoIsencao: string | null;
+  aliquota: number | null;
+  impostoDevido: number | null;
+  prejuizoSaldoFinal: number;
+  pendente: boolean;
+  motivosPendencia: string[];
+};
+
+export type ResgateRendaFixaUI = {
+  ativoId: string;
+  ativoTicker: string;
+  grupo: string;
+  anoMes: string;
+  vendaTotalBruta: number;
+  lucroBruto: number;
+  baseCalculo: number;
+  isento: boolean;
+  motivoIsencao: string | null;
+  diasMediosRetencao: number | null;
+  aliquota: number | null;
+  impostoDevido: number | null;
+};
+
+export type LinhaMensalRendaFixaUI = {
+  grupo: string;
+  anoMes: string;
+  vendaTotalBruta: number;
+  lucroBruto: number;
+  baseCalculo: number;
+  isento: boolean;
+  motivoIsencao: string | null;
+  diasMediosRetencao: number | null;
+  aliquota: number | null;
+  impostoDevido: number | null;
+  resgates: ResgateRendaFixaUI[];
+};
+
+export type VendaExteriorUI = { ativoId: string; ativoTicker: string; transacaoId: string; ano: number; vendaTotalBrutaReais: number; resultadoRealizadoReais: number };
+
+export type LinhaAnualExteriorUI = {
+  ano: number;
+  vendaTotalBruta: number;
+  lucroBruto: number;
+  prejuizoAnteriorAplicado: number;
+  baseCalculo: number;
+  aliquota: number;
+  impostoDevido: number;
+  prejuizoSaldoFinal: number;
+  vendas: VendaExteriorUI[];
+};
+
+export type ParcelaNaMemoriaDarfUI = { grupo: string; anoMes: string; valor: number };
+export type GuiaDarfConsolidadaUI = { codigoReceita: string; competenciaGeracao: string; valorConsolidado: number; memoria: ParcelaNaMemoriaDarfUI[] };
+export type SaldoPendenteDarfUI = { codigoReceita: string; valorAcumulado: number; memoria: ParcelaNaMemoriaDarfUI[] };
+export type ResultadoDarfUI = { guias: GuiaDarfConsolidadaUI[]; saldosPendentes: SaldoPendenteDarfUI[] };
+
+export type OperacaoAnexoUI = { ativoId: string; ativoTicker: string; categoria: string; data: string; quantidade: number; valorVendaBruto: number; resultadoRealizado: number };
+
+export type RelatorioCompletoUI = {
+  capa: CapaRelatorio;
+  disclaimer: string[];
+  instrucoesUso: string[];
+  resumoObrigatoriedade: SecaoRelatorioUI<null>;
+  resumoDeclaracao: SecaoRelatorioUI<CardsPrincipaisUI>;
+  pendencias: PendenciaRelatorio[];
+  documentosSemComprovante: SecaoRelatorioUI<null>;
+  bensDireitos: SecaoRelatorioUI<ItemBensDireitosRelatorioUI[]>;
+  rendimentosTributaveis: SecaoRelatorioUI<null>;
+  rendimentosIsentos: SecaoRelatorioUI<{ rendaVariavelIsenta: LinhaMensalRendaVariavelUI[]; rendaFixaIsenta: LinhaMensalRendaFixaUI[] }>;
+  tributacaoExclusiva: SecaoRelatorioUI<LinhaMensalRendaFixaUI[]>;
+  rendaVariavelMensal: SecaoRelatorioUI<LinhaMensalRendaVariavelUI[]>;
+  ganhoCapitalForaBolsa: SecaoRelatorioUI<null>;
+  aplicacoesExterior: SecaoRelatorioUI<LinhaAnualExteriorUI[]>;
+  impostoPagoExteriorCredito: SecaoRelatorioUI<null>;
+  pagamentosDeducoes: SecaoRelatorioUI<null>;
+  dividas: SecaoRelatorioUI<null>;
+  resumoDarfs: SecaoRelatorioUI<ResultadoDarfUI>;
+  nota21MemoriaCalculo: string;
+  anexoOperacoes: SecaoRelatorioUI<OperacaoAnexoUI[]>;
+  anexoDocumentos: SecaoRelatorioUI<null>;
+  ativosComPendenciaExterior: { ativoId: string; ativoTicker: string; motivos: string[] }[];
+};
+
+function converterSecao<TIn, TOut>(s: SecaoRelatorio<TIn>, conv: (v: TIn) => TOut): SecaoRelatorioUI<TOut> {
+  return { status: s.status, dados: s.dados !== null ? conv(s.dados) : null, motivo: s.motivo, avisos: s.avisos };
+}
+
+function converterItemBemDireitoRelatorio(i: ItemBensDireitos): ItemBensDireitosRelatorioUI {
+  return {
+    origem: i.origem,
+    grupo: i.grupo,
+    codigo: i.codigo,
+    nome: i.nome,
+    localizacao: i.localizacao,
+    cpfCnpj: i.cpfCnpj,
+    discriminacao: i.discriminacao,
+    situacaoAnterior: i.situacaoAnterior.toNumber(),
+    situacaoAtual: i.situacaoAtual.toNumber(),
+    observacoes: i.observacoes,
+    statusRevisao: i.statusRevisao,
+  };
+}
+
+function converterLinhaMensalRendaVariavelRelatorio(l: LinhaMensalRendaVariavelFiscal): LinhaMensalRendaVariavelUI {
+  return {
+    grupo: l.grupo,
+    anoMes: l.anoMes,
+    vendaTotalBruta: l.vendaTotalBruta.toNumber(),
+    lucroBruto: l.lucroBruto.toNumber(),
+    prejuizoAnteriorAplicado: l.prejuizoAnteriorAplicado.toNumber(),
+    baseCalculo: l.baseCalculo.toNumber(),
+    isento: l.isento,
+    motivoIsencao: l.motivoIsencao,
+    aliquota: l.aliquota ? l.aliquota.toNumber() : null,
+    impostoDevido: l.impostoDevido ? l.impostoDevido.toNumber() : null,
+    prejuizoSaldoFinal: l.prejuizoSaldoFinal.toNumber(),
+    pendente: l.pendente,
+    motivosPendencia: l.motivosPendencia,
+  };
+}
+
+/** `memoriaLotes` (detalhe lote a lote do FIFO de dias) não é levado pro PDF — o resgate já expõe `diasMediosRetencao`; auditoria lote a lote fica só no motor. */
+function converterResgateRendaFixa(r: ResgateApuradoRendaFixa): ResgateRendaFixaUI {
+  return {
+    ativoId: r.ativoId,
+    ativoTicker: r.ativoTicker,
+    grupo: r.grupo,
+    anoMes: r.anoMes,
+    vendaTotalBruta: r.vendaTotalBruta.toNumber(),
+    lucroBruto: r.lucroBruto.toNumber(),
+    baseCalculo: r.baseCalculo.toNumber(),
+    isento: r.isento,
+    motivoIsencao: r.motivoIsencao,
+    diasMediosRetencao: r.diasMediosRetencao ? r.diasMediosRetencao.toNumber() : null,
+    aliquota: r.aliquota ? r.aliquota.toNumber() : null,
+    impostoDevido: r.impostoDevido !== null ? r.impostoDevido.toNumber() : null,
+  };
+}
+
+function converterLinhaMensalRendaFixaRelatorio(l: LinhaMensalRendaFixa): LinhaMensalRendaFixaUI {
+  return {
+    grupo: l.grupo,
+    anoMes: l.anoMes,
+    vendaTotalBruta: l.vendaTotalBruta.toNumber(),
+    lucroBruto: l.lucroBruto.toNumber(),
+    baseCalculo: l.baseCalculo.toNumber(),
+    isento: l.isento,
+    motivoIsencao: l.motivoIsencao,
+    diasMediosRetencao: l.diasMediosRetencao ? l.diasMediosRetencao.toNumber() : null,
+    aliquota: l.aliquota ? l.aliquota.toNumber() : null,
+    impostoDevido: l.impostoDevido !== null ? l.impostoDevido.toNumber() : null,
+    resgates: l.resgates.map(converterResgateRendaFixa),
+  };
+}
+
+function converterVendaExterior(v: VendaParaApuracaoExterior & { ativoId: string; ativoTicker: string }): VendaExteriorUI {
+  return {
+    ativoId: v.ativoId,
+    ativoTicker: v.ativoTicker,
+    transacaoId: v.transacaoId,
+    ano: v.ano,
+    vendaTotalBrutaReais: v.vendaTotalBrutaReais.toNumber(),
+    resultadoRealizadoReais: v.resultadoRealizadoReais.toNumber(),
+  };
+}
+
+function converterLinhaAnualExterior(l: LinhaAnualExterior): LinhaAnualExteriorUI {
+  return {
+    ano: l.ano,
+    vendaTotalBruta: l.vendaTotalBruta.toNumber(),
+    lucroBruto: l.lucroBruto.toNumber(),
+    prejuizoAnteriorAplicado: l.prejuizoAnteriorAplicado.toNumber(),
+    baseCalculo: l.baseCalculo.toNumber(),
+    aliquota: l.aliquota.toNumber(),
+    impostoDevido: l.impostoDevido.toNumber(),
+    prejuizoSaldoFinal: l.prejuizoSaldoFinal.toNumber(),
+    vendas: l.vendas.map(converterVendaExterior),
+  };
+}
+
+function converterParcelaNaMemoriaDarf(p: ParcelaNaMemoriaDarf): ParcelaNaMemoriaDarfUI {
+  return { grupo: p.grupo, anoMes: p.anoMes, valor: p.valor.toNumber() };
+}
+
+function converterGuiaDarf(g: GuiaDarfConsolidada): GuiaDarfConsolidadaUI {
+  return {
+    codigoReceita: g.codigoReceita,
+    competenciaGeracao: g.competenciaGeracao,
+    valorConsolidado: g.valorConsolidado.toNumber(),
+    memoria: g.memoria.map(converterParcelaNaMemoriaDarf),
+  };
+}
+
+function converterSaldoPendenteDarf(s: SaldoPendenteDarf): SaldoPendenteDarfUI {
+  return { codigoReceita: s.codigoReceita, valorAcumulado: s.valorAcumulado.toNumber(), memoria: s.memoria.map(converterParcelaNaMemoriaDarf) };
+}
+
+function converterResultadoDarf(r: ResultadoDarf): ResultadoDarfUI {
+  return { guias: r.guias.map(converterGuiaDarf), saldosPendentes: r.saldosPendentes.map(converterSaldoPendenteDarf) };
+}
+
+function converterOperacaoAnexo(o: OperacaoAnexo): OperacaoAnexoUI {
+  return {
+    ativoId: o.ativoId,
+    ativoTicker: o.ativoTicker,
+    categoria: o.categoria,
+    data: o.data,
+    quantidade: o.quantidade.toNumber(),
+    valorVendaBruto: o.valorVendaBruto.toNumber(),
+    resultadoRealizado: o.resultadoRealizado.toNumber(),
+  };
+}
+
+function converterRelatorioCompleto(r: RelatorioCompletoIR): RelatorioCompletoUI {
+  return {
+    capa: r.capa,
+    disclaimer: r.disclaimer,
+    instrucoesUso: r.instrucoesUso,
+    resumoObrigatoriedade: converterSecao(r.resumoObrigatoriedade, (v) => v as null),
+    resumoDeclaracao: converterSecao(r.resumoDeclaracao, (cards) => ({
+      obrigacaoDeclarar: cards.obrigacaoDeclarar,
+      impostoAPagar: converterCardValor(cards.impostoAPagar),
+      impostoPago: converterCardValor(cards.impostoPago),
+      impostoVencido: converterCardValor(cards.impostoVencido),
+      prejuizoPorGrupo: cards.prejuizoPorGrupo.map(converterPrejuizoGrupo),
+      irrfDisponivel: converterCardValor(cards.irrfDisponivel),
+      ganhoCapitalExterior: converterCardValor(cards.ganhoCapitalExterior),
+      impostoPagoExterior: converterCardValor(cards.impostoPagoExterior),
+      creditoExteriorAdmitido: converterCardValor(cards.creditoExteriorAdmitido),
+      documentosSemComprovante: converterCardValor(cards.documentosSemComprovante),
+    })),
+    pendencias: r.pendencias,
+    documentosSemComprovante: converterSecao(r.documentosSemComprovante, (v) => v as null),
+    bensDireitos: converterSecao(r.bensDireitos, (itens) => itens.map(converterItemBemDireitoRelatorio)),
+    rendimentosTributaveis: converterSecao(r.rendimentosTributaveis, (v) => v as null),
+    rendimentosIsentos: converterSecao(r.rendimentosIsentos, (d) => ({
+      rendaVariavelIsenta: d.rendaVariavelIsenta.map(converterLinhaMensalRendaVariavelRelatorio),
+      rendaFixaIsenta: d.rendaFixaIsenta.map(converterLinhaMensalRendaFixaRelatorio),
+    })),
+    tributacaoExclusiva: converterSecao(r.tributacaoExclusiva, (linhas) => linhas.map(converterLinhaMensalRendaFixaRelatorio)),
+    rendaVariavelMensal: converterSecao(r.rendaVariavelMensal, (linhas) => linhas.map(converterLinhaMensalRendaVariavelRelatorio)),
+    ganhoCapitalForaBolsa: converterSecao(r.ganhoCapitalForaBolsa, (v) => v as null),
+    aplicacoesExterior: converterSecao(r.aplicacoesExterior, (linhas) => linhas.map(converterLinhaAnualExterior)),
+    impostoPagoExteriorCredito: converterSecao(r.impostoPagoExteriorCredito, (v) => v as null),
+    pagamentosDeducoes: converterSecao(r.pagamentosDeducoes, (v) => v as null),
+    dividas: converterSecao(r.dividas, (v) => v as null),
+    resumoDarfs: converterSecao(r.resumoDarfs, converterResultadoDarf),
+    nota21MemoriaCalculo: r.nota21MemoriaCalculo,
+    anexoOperacoes: converterSecao(r.anexoOperacoes, (ops) => ops.map(converterOperacaoAnexo)),
+    anexoDocumentos: converterSecao(r.anexoDocumentos, (v) => v as null),
+    ativosComPendenciaExterior: r.ativosComPendenciaExterior,
+  };
+}
+
+/** PDF final (fase 11) — relatório completo pro ano-calendário pedido, pronto pra virar PDF no cliente (`relatorios/gerar-pdf.tsx`). */
+export async function obterRelatorioCompletoIR(ano: number): Promise<RelatorioCompletoUI> {
+  const resultado = await _obterRelatorioCompletoIR(ano);
+  return converterRelatorioCompleto(resultado);
 }

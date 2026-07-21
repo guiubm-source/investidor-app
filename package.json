@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
+    "@react-pdf/renderer": "^4.5.1",
     "@supabase/ssr": "^0.12.1",
     "@supabase/supabase-js": "^2.110.3",
     "decimal.js": "^10.6.0",

@@ -5792,6 +5792,181 @@ ImpostoRendaView.tsx` (3ª sub-aba, agora padrão),
 `app/(app)/imposto-renda/DashboardIRView.tsx` (novo),
 `app/(app)/imposto-renda/page.tsx` (busca o dashboard inicial).
 
+### 8.46 Imposto de Renda — fase 11 (PDF final) implementada (2026-07-21)
+
+Continuação — "segue para fase 11". Fase 11 do §8.32.37 é o PDF final
+(§8.32.26), 23 itens na estrutura (capa, disclaimer, versão de regras,
+resumos, Bens e Direitos, rendimentos isentos/tributação exclusiva/renda
+variável/exterior, DARFs, memória de cálculo, anexos). Perguntado ao
+Guilherme como fatiar, já que várias das 23 seções (rendimentos tributáveis
+do trabalho, ganho de capital fora de bolsa, crédito de imposto no exterior,
+pagamentos/deduções, dívidas, anexo de documentos) não têm motor nenhum
+construído — só dashboard (fase 10), Bens e Direitos (fase 9), renda
+variável (fase 4), renda fixa (fase 6), exterior (fase 7) e DARF (fase 5)
+existem. Escolhido **"PDF completo já, seções sem dado como 'não disponível'"**
+— mesmo princípio de honestidade da fase 10 (dashboard), aplicado à escala do
+documento inteiro: nenhuma seção aparece com valor fabricado ou zerado, cada
+uma que não tem motor mostra o motivo exato.
+
+**Implementado nesta fase:**
+
+- **`lib/ir/relatorios/tipos.ts`** (novo) — `SecaoRelatorio<T>` generaliza o
+  padrão `CardValor` da fase 10 (`{status: "disponivel"|"nao_disponivel",
+  dados: T|null, motivo, avisos[]}`) pra qualquer seção do PDF, não só cards
+  numéricos. `avisos` é novo: notas que aparecem MESMO quando a seção está
+  disponível, pra deixar explícito o que ela ainda não cobre (ex.: "não
+  inclui proventos/dividendos" na seção de rendimentos isentos). `RelatorioCompletoIR`
+  espelha a ordem dos 23 itens do §8.32.26 — os itens 1/4/8 (capa, versão de
+  regras, instruções) viram campos próprios (sempre existem, não dependem de
+  motor), e o item 21 ("memória de cálculo por regime") virou uma nota de
+  texto (`nota21MemoriaCalculo`) em vez de seção separada — decisão de
+  engenharia registrada abaixo.
+- **`lib/ir/motores/relatorio-completo.ts`** (novo, motor puro, sem
+  `"use server"`) — `montarRelatorioCompleto(input)`: mesmo espírito do
+  motor da fase 10 (`dashboard-fiscal.ts`), NENHUM cálculo fiscal novo, só
+  filtra por ano-calendário e decide disponibilidade por seção. A única
+  lógica de verdade: extrair `pendencias` (linhas de renda variável com
+  `pendente: true` + ativos internacionais excluídos por câmbio faltando —
+  ambos já sinalizados pelos motores das fases 4/7, aqui só reapresentados
+  numa lista única); filtrar `rendimentosIsentos` (renda variável com
+  `isento: true` + renda fixa grupo `renda_fixa_isenta`) e `tributacaoExclusiva`
+  (renda fixa grupo `renda_fixa_tributavel`) a partir das MESMAS linhas
+  mensais que alimentam as seções 13/14; filtrar guias de DARF pela
+  competência do ano pedido (`saldosPendentes` não é filtrado por ano — é um
+  acumulador "agora", não tem corte anual natural).
+- **`lib/ir/relatorios/descricoes-irpf.ts`** (novo) — textos fixos
+  (disclaimer, instruções de uso no programa oficial), separados do motor
+  pra não misturar texto longo com lógica de agregação (organização sugerida
+  em §8.32.29).
+- **`lib/ir/consultas/relatorio-completo.ts`** (novo, sem `"use server"`) —
+  `obterRelatorioCompletoIR(ano)` chama em paralelo TODAS as consultas já
+  prontas das fases 3-10 (`obterDashboardIR` fase 10 — reaproveitado inteiro,
+  já traz `cardsPrincipais` e `versaoFiscalNome` prontos;
+  `apurarRendaVariavelBrasilDoUsuario` fase 4; `apurarRendaFixaBrasilDoUsuario`
+  fase 6; `apurarGanhoCapitalExteriorDoUsuario` fase 7;
+  `consolidarDarfRendaVariavelDoUsuario` fase 5; `obterBensDireitos` fase 9)
+  e monta a capa (nome/CPF do titular vêm de `profiles`, tabela do cadastro
+  original — nunca existiu em `ir_perfis_fiscais`). Uma função nova, porém
+  sem cálculo fiscal: `obterOperacoesRendaVariavelDoAno(ano)`, que reaproveita
+  o MESMO `construirLedgerFiscalDoUsuario()` (fase 3) que o motor de renda
+  variável já usa, só que aqui extrai a linha bruta (`LinhaLedgerFiscal`) em
+  vez de agregar por mês — vira o "anexo de operações" (item 22) sem
+  reprocessar nada. Renda fixa e exterior não precisaram desta extração à
+  parte porque `LinhaMensalRendaFixa.resgates`/`LinhaAnualExterior.vendas`
+  (fases 6/7) já carregam o detalhe por evento embutido na própria linha
+  agregada.
+- **`lib/ir/actions.ts`** (Server Action nova) — `obterRelatorioCompletoIR(ano)`:
+  conversão Decimal→number na fronteira, mesmo padrão de todas as fases
+  anteriores. Volume grande de tipos/conversores dedicados (`LinhaMensalRendaVariavelUI`,
+  `LinhaMensalRendaFixaUI`, `LinhaAnualExteriorUI`, `ResultadoDarfUI` etc.) —
+  cada um convertido explicitamente campo a campo (sem reflexão genérica),
+  seguindo a mesma disciplina de auditabilidade já usada em
+  `converterLinhaRendaVariavelNova`/`converterBensDireitos`/`converterCardValor`.
+  Simplificação deliberada: `ResgateApuradoRendaFixa.memoriaLotes` (detalhe
+  lote a lote do FIFO de dias de um resgate) NÃO é convertido pro PDF — o
+  resgate já expõe `diasMediosRetencao` agregado, e auditoria lote a lote
+  fica só no motor/console, não no relatório final.
+- **`lib/ir/relatorios/gerar-pdf.tsx`** (novo, `"use client"`) — componente
+  `Documento` em `@react-pdf/renderer` (biblioteca nova, `npm install
+  @react-pdf/renderer`, instalação limpa neste sandbox — pacote puro JS, sem
+  binário nativo baixado por rede, diferente do problema do `@next/swc-linux-x64-gnu`
+  registrado na seção 3 deste arquivo). Renderiza as 23 seções numa única
+  `<Page wrap>` — o `@react-pdf/renderer` quebra automaticamente em várias
+  páginas físicas conforme o conteúdo transborda, sem eu precisar gerenciar
+  paginação manual. Cada seção usa o componente genérico `SecaoComOuSemDado`
+  (mostra "Não disponível ainda — {motivo}" em itálico quando a seção não
+  tem motor, ou o conteúdo real com os `avisos` como notas de atenção). Para
+  as 3 seções com detalhe aninhado (renda fixa/renda variável/exterior),
+  cada tabela principal ("valor pra copiar") vem seguida de uma tabela
+  "memória auxiliar" com o detalhe por evento — mesma instrução do §8.32.26
+  ("PDF deve identificar claramente valor pra copiar e memória auxiliar").
+- **`app/(app)/imposto-renda/RelatorioPdfButton.tsx`** (novo, client
+  component) — botão "Gerar PDF": chama a Server Action, monta
+  `pdf(<Documento .../>).toBlob()` inteiramente no navegador (import
+  dinâmico de `@react-pdf/renderer` só no client) e dispara o download via
+  link temporário. Nada é enviado a servidor nenhum além da própria Server
+  Action que já busca os dados do usuário logado.
+- **`app/(app)/imposto-renda/ImpostoRendaView.tsx`** (estendido) — botão
+  novo ao lado do card de perfil fiscal, sempre visível (não é exclusivo de
+  nenhuma sub-aba, já que o relatório cobre a declaração inteira), usando
+  `declaracaoComPerfil.declaracao.anoCalendario` como ano padrão.
+- **Testado com 2 scripts `tsx` temporários (não commitados):**
+  1. 3 cenários no motor puro (`montarRelatorioCompleto`): fundação
+     totalmente ausente (todas as seções dependentes de motor ficam
+     `nao_disponivel`, Bens e Direitos e disclaimer/instruções sempre
+     presentes); renda variável com pendência + isenção + linha de outro ano
+     (filtragem por `anoMes` confirmada, pendência de renda variável E de
+     exterior aparecem juntas na lista consolidada); renda fixa isenta +
+     tributável + DARF com guia de competência de outro ano (confirma que só
+     a guia do ano pedido aparece, mas `saldosPendentes` sempre passa
+     inteiro). Total 26 asserções, todas OK.
+  2. Renderização real do `Documento` via `pdf(...).toBuffer()` em Node (o
+     `@react-pdf/renderer` suporta gerar buffer fora do navegador, útil só
+     pra teste) com um `RelatorioCompletoUI` fabricado cobrindo as 23 seções
+     — PDF gerado com sucesso (24KB), header `%PDF-` confirmado.
+- **Verificação:** `tsc --noEmit` sem erros (checado 3 vezes, após cada
+  bloco de arquivos); todos os arquivos criados/editados conferidos via
+  `wc -l -c` + contagem de bytes nulos (0 em todos).
+
+**Decisões de engenharia registradas (sem novo `AskUserQuestion` — mesmo
+padrão de julgamento técnico já aplicado nas fases 7/9/10):**
+
+1. Biblioteca de PDF: `@react-pdf/renderer` em vez de `pdfkit`/`puppeteer` —
+   API declarativa em JSX (mais fácil de manter as 23 seções), pacote puro
+   JS (instala limpo neste sandbox sem rede pra binário nativo, diferente do
+   Chromium que `puppeteer` exigiria), e suporta tanto geração no navegador
+   (`toBlob`, usado em produção) quanto em Node (`toBuffer`, usado só nos
+   testes deste segmento).
+2. Geração 100% client-side (botão dispara `pdf(...).toBlob()` no navegador)
+   em vez de uma rota de API server-side — mais simples (sem precisar de
+   streaming de arquivo binário numa Route Handler) e mantém a mesma
+   fronteira Decimal→number já estabelecida (a Server Action só devolve o
+   DTO já em `number`, o componente de PDF nunca vê `Decimal`).
+3. Item 21 do §8.32.26 ("memória de cálculo por regime") não virou uma
+   seção própria no PDF — cada seção de apuração (renda fixa/variável/
+   exterior) já carrega o detalhe linha a linha (base de cálculo, alíquota,
+   prejuízo aplicado), então uma seção separada duplicaria a mesma
+   informação. Registrado como nota de texto (`nota21MemoriaCalculo`)
+   explicando essa decisão pro usuário do PDF.
+4. "Anexo de operações" (item 22) cobre só ações/fundos/FII — renda fixa e
+   exterior já têm o detalhe por evento embutido nas próprias seções 13/16
+   (`resgates`/`vendas`), então um anexo separado pra elas duplicaria dado;
+   registrado como aviso na própria seção do PDF.
+
+**Explicitamente fora do escopo desta fase (a maioria já registrada como
+dívida técnica de fases anteriores, reconfirmada aqui porque agora aparece
+como seção "não disponível" no PDF pra qualquer usuário ver):**
+
+1. Rendimentos tributáveis (trabalho/pró-labore/aluguel) — fora do escopo do
+   app inteiro (app cobre só investimentos), não é uma fase futura.
+2. Ganho de capital fora de bolsa (imóveis, veículos, participações fora de
+   bolsa), crédito de imposto pago no exterior, pagamentos/deduções, dívidas
+   e ônus reais, anexo de documentos — nenhum motor construído (backlog do
+   §8.32.20/§8.32.18.2/§8.35, sem mudança nesta fase).
+3. Obrigação de declarar — motor de regras nunca construído (mesma lacuna do
+   card do dashboard, §8.45); card sempre "não avaliada" também no PDF.
+4. Status de pagamento de DARF (calculado→guia→aguardando→pago), multa/
+   juros de atraso — mesma dívida técnica da fase 5 (§8.40).
+5. Proventos/dividendos (isentos) não entram na seção de rendimentos
+   isentos — só a isenção de venda dentro do limite mensal (ações/FII) e a
+   isenção de renda fixa (LCI/LCA/CRI/CRA) entram, porque só essas já são
+   calculadas por algum motor. Registrado como `aviso` na própria seção.
+
+**Nota operacional:** os 2 arquivos de teste manual temporários
+(`src/lib/ir/relatorios/_teste_relatorio_completo_temp.ts` e
+`_teste_pdf_render_temp.tsx`) ficaram parados no disco pelo mesmo motivo
+intermitente já registrado em §8.36-§8.45 — apagar manualmente antes do
+`git add` (comandos na seção de comandos abaixo).
+
+**Arquivos tocados.** `lib/ir/relatorios/tipos.ts`,
+`lib/ir/relatorios/descricoes-irpf.ts`, `lib/ir/motores/relatorio-completo.ts`,
+`lib/ir/consultas/relatorio-completo.ts`, `lib/ir/relatorios/gerar-pdf.tsx`,
+`app/(app)/imposto-renda/RelatorioPdfButton.tsx` (todos novos);
+`lib/ir/actions.ts` (nova Server Action `obterRelatorioCompletoIR` + ~15
+tipos/conversores de UI); `app/(app)/imposto-renda/ImpostoRendaView.tsx`
+(botão novo); `package.json`/`package-lock.json` (nova dependência
+`@react-pdf/renderer`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
