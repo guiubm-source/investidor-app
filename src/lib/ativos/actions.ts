@@ -85,9 +85,11 @@ export type AtivoResumo = {
   totalInvestidoBruto: number;
   /**
    * "Retorno simples acumulado" — mesma fórmula unificada usada na
-   * rentabilidade histórica (§8.15): (valorAtual + lucroRealizado) −
+   * rentabilidade histórica (§8.15): (valorAtual + totalVendidoLiquido) −
    * totalInvestidoBruto, em R$, e o mesmo dividido por totalInvestidoBruto
    * em %. `null` antes da primeira compra (totalInvestidoBruto === 0).
+   * Usa `totalVendidoLiquido` (dinheiro total recebido em vendas), NÃO
+   * `lucroRealizado` (só a fatia de lucro) — ver correção §8.28.
    */
   rentabilidadeTotalValor: number | null;
   rentabilidadeTotalPct: number | null;
@@ -206,7 +208,8 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       });
 
     const transacoesOrdenadas = ordenarTransacoes(transacoesDoAtivo);
-    const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto } = calcularPosicao(transacoesOrdenadas);
+    const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto, totalVendidoLiquido } =
+      calcularPosicao(transacoesOrdenadas);
 
     const proventosDoAtivo = proventos.filter((p) => p.ativo_id === ativo.id);
     const proventosRecebidos = proventosDoAtivo.reduce((s, p) => s + Number(p.valor_total), 0);
@@ -221,9 +224,16 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     // (§8.15), unificada aqui pro "hoje" (ver §8.16): soma o que já foi
     // embolsado em vendas parciais/totais ao que ainda está de pé, sobre
     // tudo que já foi pago em compras até agora.
-    const rentabilidadeTotalValor = totalInvestidoBruto > 0 ? valorAtual + lucroRealizado - totalInvestidoBruto : null;
+    //
+    // Ver §8.28 (correção 2026-07-20): usa `totalVendidoLiquido` (dinheiro
+    // TOTAL recebido em vendas — principal + lucro), não `lucroRealizado`
+    // (só a fatia de lucro). Usar só o lucro descartava o principal
+    // devolvido em qualquer venda parcial anterior, subestimando (às vezes
+    // catastroficamente) o retorno de ativos com esse histórico.
+    const rentabilidadeTotalValor =
+      totalInvestidoBruto > 0 ? valorAtual + totalVendidoLiquido - totalInvestidoBruto : null;
     const rentabilidadeTotalPct =
-      totalInvestidoBruto > 0 ? ((valorAtual + lucroRealizado) / totalInvestidoBruto - 1) * 100 : null;
+      totalInvestidoBruto > 0 ? ((valorAtual + totalVendidoLiquido) / totalInvestidoBruto - 1) * 100 : null;
 
     return {
       id: ativo.id,

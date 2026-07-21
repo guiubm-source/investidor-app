@@ -36,18 +36,31 @@ export type PontoRentabilidade = {
    * Lucro já realizado (vendas parciais/totais) acumulado ATÉ esta data —
    * exposto separado de `rentabilidadePct` pra permitir auditar a conta na
    * UI/tooltip sem recalcular nada (ver docs/MAPA-DE-DADOS.md §8.15).
+   * NÃO é usado no cálculo de `rentabilidadePct` (ver §8.28) — é só a fatia
+   * de lucro, não o dinheiro total recebido em vendas.
    */
   lucroRealizadoAcumulado: number;
+  /**
+   * Dinheiro TOTAL recebido em vendas (principal + lucro) acumulado até esta
+   * data — usado no cálculo de `rentabilidadePct` abaixo (ver §8.28).
+   */
+  totalVendidoLiquidoAcumulado: number;
   /** Soma bruta de compras até esta data — denominador da rentabilidade. */
   totalInvestidoBruto: number;
   /**
-   * "Retorno simples acumulado": (valorPosicao + lucroRealizadoAcumulado) /
+   * "Retorno simples acumulado": (valorPosicao + totalVendidoLiquidoAcumulado) /
    * totalInvestidoBruto − 1, em %. `null` só quando ainda não houve nenhuma
    * compra até essa data (totalInvestidoBruto === 0) — diferente da versão
    * anterior, que zerava (`null`) assim que a posição era totalmente
    * vendida; agora, depois de zerada, o valor fica congelado no retorno
    * final realizado (a série é truncada na data da venda que zerou a
    * posição — ver corte em `obterRentabilidadeHistoricaAtivo`).
+   *
+   * Correção 2026-07-20 (§8.28): antes usava `lucroRealizadoAcumulado` (só a
+   * fatia de lucro da venda) em vez de `totalVendidoLiquidoAcumulado`
+   * (principal + lucro) — descartava o principal devolvido em qualquer
+   * venda parcial anterior, subestimando o retorno de ativos com esse
+   * histórico (às vezes catastroficamente).
    */
   rentabilidadePct: number | null;
 };
@@ -168,9 +181,11 @@ export async function obterRentabilidadeHistoricaAtivo(ativoId: string): Promise
     // "Retorno simples acumulado" (mesma fórmula da Carteira, ver §8.15):
     // soma o que já foi embolsado em vendas parciais/totais ao que ainda
     // está de pé, sobre tudo que já foi pago em compras até aqui.
+    // Ver §8.28: usa `totalVendidoLiquido` (principal + lucro), não
+    // `lucroRealizado` (só lucro) — mesma correção aplicada em toda a app.
     const rentabilidadePct =
       estado.totalInvestidoBruto > 0
-        ? ((valorPosicao + estado.lucroRealizado) / estado.totalInvestidoBruto - 1) * 100
+        ? ((valorPosicao + estado.totalVendidoLiquido) / estado.totalInvestidoBruto - 1) * 100
         : null;
 
     pontos.push({
@@ -181,6 +196,7 @@ export async function obterRentabilidadeHistoricaAtivo(ativoId: string): Promise
       valorPosicao,
       valorAplicado,
       lucroRealizadoAcumulado: estado.lucroRealizado,
+      totalVendidoLiquidoAcumulado: estado.totalVendidoLiquido,
       totalInvestidoBruto: estado.totalInvestidoBruto,
       rentabilidadePct,
     });
@@ -203,9 +219,10 @@ export type PontoEvolucaoCarteira = {
   data: string;
   valorTotal: number;
   /** Mesma fórmula "retorno simples acumulado" da Carteira (ver §8.15) — soma
-   *  os ativos ainda em carteira + o que já foi realizado em vendas, sobre
-   *  tudo que já foi investido em compras até aquele dia. `null` só antes da
-   *  primeira compra de qualquer ativo. */
+   *  os ativos ainda em carteira + o dinheiro total já recebido em vendas
+   *  (principal + lucro, ver correção §8.28), sobre tudo que já foi
+   *  investido em compras até aquele dia. `null` só antes da primeira
+   *  compra de qualquer ativo. */
   rentabilidadePct: number | null;
 };
 
@@ -253,7 +270,7 @@ export async function obterEvolucaoCarteira(): Promise<PontoEvolucaoCarteira[]> 
 
   for (const data of datasOrdenadas) {
     let valorTotal = 0;
-    let lucroRealizadoTotal = 0;
+    let totalVendidoLiquidoTotal = 0;
     let totalInvestidoBrutoTotal = 0;
     for (let i = 0; i < seriesPorAtivo.length; i++) {
       const serie = seriesPorAtivo[i];
@@ -264,12 +281,16 @@ export async function obterEvolucaoCarteira(): Promise<PontoEvolucaoCarteira[]> 
       if (serie[indices[i]].data <= data) {
         const p = serie[indices[i]];
         valorTotal += p.valorPosicao;
-        lucroRealizadoTotal += p.lucroRealizadoAcumulado;
+        totalVendidoLiquidoTotal += p.totalVendidoLiquidoAcumulado;
         totalInvestidoBrutoTotal += p.totalInvestidoBruto;
       }
     }
+    // Ver §8.28 — totalVendidoLiquido, não lucroRealizado (mesma correção
+    // aplicada por ativo, agora agregada em nível de carteira).
     const rentabilidadePct =
-      totalInvestidoBrutoTotal > 0 ? ((valorTotal + lucroRealizadoTotal) / totalInvestidoBrutoTotal - 1) * 100 : null;
+      totalInvestidoBrutoTotal > 0
+        ? ((valorTotal + totalVendidoLiquidoTotal) / totalInvestidoBrutoTotal - 1) * 100
+        : null;
     resultado.push({ data, valorTotal, rentabilidadePct });
   }
 

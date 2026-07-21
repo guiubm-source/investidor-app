@@ -2270,6 +2270,88 @@ filtrado por AZZA3.
 cabeçalhos de "Preço médio ajustado"/"Variação total", CSV com nova coluna
 `lucro_realizado` também nas linhas de posição aberta).
 
+### 8.28 Correção estrutural: "retorno simples acumulado" descartava o principal devolvido em vendas (2026-07-20)
+
+Motivado pelo Guilherme insistindo que a Variação total da AZZA3 continuava
+errada mesmo depois da §8.27 adicionar a coluna "Lucro realizado" pra
+transparência. A fórmula batia matematicamente com os números da tela, mas
+isso escondia um bug de verdade nos DADOS DE ORIGEM da fórmula, não só na
+falta de transparência.
+
+**O bug.** "Retorno simples acumulado" (usado em 3 lugares que duplicam a
+mesma fórmula: `lib/carteira/posicao.ts`, `lib/ativos/actions.ts` e
+`lib/ativos/preco-historico.ts` — série histórica por ativo E evolução
+agregada da carteira, ambas no Dashboard) sempre foi `(valor atual +
+lucroRealizado) − totalInvestidoBruto`. O problema: `lucroRealizado` é só a
+FATIA DE LUCRO de uma venda (preço de venda − custo médio), não o dinheiro
+TOTAL recebido. Quando um ativo tem QUALQUER venda parcial no passado, o
+principal (custo de aquisição das cotas vendidas) que voltou pro bolso do
+investidor simplesmente some da conta — como se aquele dinheiro nunca
+tivesse sido devolvido. Resultado: qualquer ativo com histórico de venda
+parcial tem o retorno subestimado, às vezes catastroficamente.
+
+Exemplo simples pra provar o bug: compra 200 cotas a R$10 (R$2.000
+investidos), depois vende 100 cotas a R$10 (sem lucro nem prejuízo — só
+recupera o dinheiro). `lucroRealizado = 0`. Com a fórmula antiga: (R$1.000
+[100 cotas restantes] + R$0) − R$2.000 = **−R$1.000 (−50%)** — um "prejuízo"
+que não existe, porque metade do dinheiro voltou pro bolso vendendo pelo
+mesmo preço da compra.
+
+**A correção.** Trocar `lucroRealizado` por `totalVendidoLiquido` (campo já
+existente em `EstadoPosicao` desde a §8.25 — dinheiro total recebido em
+TODAS as vendas, principal + lucro, "só cresce" igual `totalInvestidoBruto`).
+Fórmula corrigida: `(valor atual + totalVendidoLiquido) −
+totalInvestidoBruto`. No exemplo acima: `totalVendidoLiquido = R$1.000`
+(as 100 cotas vendidas por R$10 cada) → (R$1.000 + R$1.000) − R$2.000 = R$0
+(zero, correto).
+
+**Números reais da AZZA3** (reconstruídos a partir da tela antes da
+correção): `totalInvestidoBruto` = R$11.636,00, `lucroRealizado` =
+−R$3.318,22 → variação total antiga = **−R$13.137,22 (−112,91%)**.
+Recalculando `totalVendidoLiquido` = (totalInvestidoBruto − custoTotal
+residual) + lucroRealizado = (11.636 − 2.871) + (−3.318,22) = R$5.446,78 →
+variação total corrigida = (R$1.817 + R$5.446,78) − R$11.636 = **−R$4.372,22
+(−37,56%)** — uma diferença de mais de 75 pontos percentuais. Isso confirma
+que era mesmo um bug de fórmula, não uma característica real dos dados (uma
+venda parcial com prejuízo de R$3.318 é bem diferente de "perder 112% do
+investido").
+
+**Escopo do impacto.** Como a fórmula é duplicada (não centralizada — ver
+nota de dívida técnica abaixo) em 3 arquivos, a correção precisou ser
+aplicada nos 3 mesmos lugares pra não deixar um consistente e outro não:
+Posição (`variacaoTotalValor`/`variacaoTotalPct`, por ativo/grupo/total da
+carteira), Ativo (`rentabilidadeTotalValor`/`rentabilidadeTotalPct` na
+página `/ativos/[id]`), e Dashboard (`rentabilidadePct` na série histórica
+por ativo E na evolução agregada da carteira, `preco-historico.ts`). Todo
+ativo que já teve QUALQUER venda parcial no passado (não só a AZZA3) tinha
+esse número igualmente subestimado nesses 3 lugares — não é um bug
+exclusivo da AZZA3, só foi ali que o Guilherme percebeu.
+
+**O que NÃO mudou.** `lucroRealizado` continua correto e é usado em outros
+lugares onde faz sentido usar SÓ o lucro (não o dinheiro total): o card
+"Lucro realizado" do Livro-razão (§8.25), a nova coluna "Lucro realizado" da
+Posição (§8.27), e `retornoTotal` do Ativo (`lucroNaoRealizado +
+lucroRealizado + proventosRecebidos` — soma de lucro com lucro, não precisa
+do principal). O bug era especificamente em comparar `lucroRealizado`
+contra `totalInvestidoBruto` (que é bruto, inclui o principal) — comparar
+uma coisa "líquida de principal" com uma "bruta de principal" é a raiz do
+problema.
+
+**Dívida técnica não resolvida nesta correção.** A fórmula "retorno simples
+acumulado" está fisicamente duplicada em 3 arquivos (não factorada numa
+função só) — cada correção futura nessa fórmula precisa lembrar de tocar os
+3 lugares. Não fizemos essa refatoração agora (risco maior, fora do escopo
+do bug reportado), mas fica registrado como melhoria futura (extrair pra
+`posicao-calculo.ts`, que já é a fonte única de outras fórmulas
+compartilhadas).
+
+**Arquivos tocados.** `lib/carteira/posicao.ts` (3 pontos: por ativo, por
+grupo, total da carteira), `lib/ativos/actions.ts` (`rentabilidadeTotalValor`/
+`rentabilidadeTotalPct`), `lib/ativos/preco-historico.ts` (novo campo
+`totalVendidoLiquidoAcumulado` em `PontoRentabilidade`, usado em
+`rentabilidadePct` de `obterRentabilidadeHistoricaAtivo` e na agregação de
+`obterEvolucaoCarteira`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
