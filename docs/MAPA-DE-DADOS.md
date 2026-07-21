@@ -4834,6 +4834,103 @@ conferidos via `wc -l -c` + contagem de bytes nulos (0 em todos).
 `lib/carteira/importar-transacoes.ts`, `lib/proventos/importar-proventos.ts`,
 `app/(app)/carteira/LivroRazaoView.tsx`, `app/(app)/proventos/ProventosView.tsx`.
 
+### 8.36 Imposto de Renda — fase 3 (ledger fiscal único de custo médio) implementada (2026-07-21)
+
+Continuação de §8.35/§8.32.37 — "ok, proxima fase". Fase 3 do doc junta duas
+coisas bem diferentes (classificação de day trade e o ledger de custo médio
+fiscal) mais a tabela de retenções (`ir_retencoes`); perguntei duas vezes
+(protocolo do CLAUDE.md §1) antes de codar: (1) por qual das duas partes
+começar — escolhido: ledger de custo médio fiscal; (2) se essa parte já
+precisava de uma tela de conferência agora — escolhido: só motor, sem tela
+(a fase 10, dashboard completo, é quem expõe isso de verdade).
+
+**Implementado nesta fase:**
+
+- **`lib/ir/ledger/construir-ledger.ts`** (novo, motor puro, sem
+  `"use server"`): `aplicarEventoAoLedgerFiscal`, `ordenarEventosLedgerFiscal`,
+  `construirLedgerFiscal`. Mesmo algoritmo de custo médio ponderado de
+  `lib/ativos/posicao-calculo.ts` (compra recalcula preço médio
+  proporcionalmente; venda reduz quantidade sem alterar preço médio e apura
+  resultado; eventos societários reorganizam sem gerar resultado) —
+  **reimplementado do zero, sem importar aquele módulo**, por exigência
+  explícita da invariante §8.32.31 item 14 ("o custo médio ajustado
+  gerencial nunca é importado pelo motor fiscal"): a Posição gerencial
+  existe pra decisão de investimento e pode um dia divergir da regra fiscal;
+  o motor que alimenta a declaração de IR não pode depender de uma tela
+  pensada pra outro fim.
+- **`decimal.js` como dependência nova** (`package.json`/`package-lock.json`,
+  só essas duas linhas mudaram — `npm install decimal.js` rodado neste
+  ambiente, sandbox tem rede pra pacotes npm puros mesmo sem rede pro
+  binário nativo do SWC). Todo o motor do ledger usa `Decimal` em vez de
+  `number` — exigência explícita do §8.32.32 ("biblioteca decimal no motor;
+  não fazer somas fiscais com ponto flutuante JS"). O motor gerencial
+  (`posicao-calculo.ts`) continua em `number` de propósito — não foi tocado,
+  e a diferença de precisão entre os dois é aceitável ali (poucas casas
+  exibidas na Posição) mas não seria aceitável numa memória de cálculo
+  fiscal.
+- **Memória de cálculo já embutida:** `construirLedgerFiscal` retorna não só
+  o estado final (quantidade/custo total/lucro acumulado), mas uma
+  `LinhaLedgerFiscal` por evento (antes/depois de quantidade, custo total e
+  preço médio, mais o resultado realizado daquela linha) — antecipa a
+  exigência do §8.32.38 ("todo valor do dashboard abre memória de cálculo")
+  sem precisar reconstruir o histórico passo a passo depois a partir de um
+  estado final que já "esqueceu" o caminho.
+- **`lib/ir/consultas/ledger.ts`** (novo, sem `"use server"`, mesmo padrão de
+  `consultas/declaracao.ts`): `construirLedgerFiscalDoUsuario()` (lê todas as
+  transações do usuário logado, paginando em lotes de 1000 — mesmo padrão e
+  mesmo motivo de `buscarTodasCotacoesDolar`, ver §8.14/§8.32.35 — agrupa por
+  `ativo_id` e devolve um `Map<ativoId, LedgerFiscalAtivo>`) e
+  `construirLedgerFiscalDoAtivo(ativoId)` (mesma coisa filtrada num único
+  ativo, já na consulta ao banco, não busca as transações dos demais).
+- **Verificado com um teste manual isolado** (script `tsx` temporário, não
+  commitado): 2 compras + 1 venda + 1 desdobramento — preço médio, custo
+  total e resultado realizado bateram com o cálculo manual esperado (custo
+  médio ponderado 10,05 → 10,7167 antes da venda; resultado realizado
+  125,50; desdobramento ×2 preserva custo total e derruba o preço médio pela
+  metade). Confirma que a reimplementação em Decimal não introduziu erro de
+  lógica em relação ao motor gerencial equivalente.
+
+**Nenhum motor de imposto consome o ledger ainda** — nem `obterRelatorioIR`
+(pré-existente, intocado) nem nenhuma nova action. Isso é deliberado: a fase
+4 (renda variável Brasil, IRRF e prejuízos) é quem primeiro consome
+`construirLedgerFiscalDoUsuario`/`DoAtivo` pra parar de calcular custo médio
+"na mão" dentro do motor de relatório antigo.
+
+**Explicitamente adiado para as próximas fases:**
+
+1. Classificação de day trade (`classificacao_day_trade_status`,
+   `modalidade_fiscal_confirmada`, pareamento mesmo ativo/dia/corretora) —
+   segunda metade da fase 3 no doc, não iniciada.
+2. Tabela `ir_retencoes` (IRRF/JCP/renda fixa/exterior como fatos próprios,
+   separados por modalidade) — também parte da fase 3 no doc, não iniciada.
+3. O ledger hoje trata TODA venda igual (comum) — não separa resultado por
+   "grupo fiscal" (comum/day trade/FII/exterior, §8.32.17) nem aplica
+   isenção mensal, alíquota ou qualquer regra de imposto. Isso é
+   propositalmente da fase 4 em diante — o ledger só entrega custo médio e
+   resultado realizado brutos, os motores de regime é que decidem o que
+   fazer com eles.
+4. Custos (`corretagem`/`emolumentos`/`taxa_liquidacao`/`outras_taxas`,
+   fase 2) continuam entrando no ledger só via `custos` agregado (mesma
+   fonte que a Posição gerencial usa) — detalhamento por tipo de custo
+   dentro do ledger fica para quando um motor de regime precisar reportar
+   isso separadamente (§8.32.16 pede o detalhamento no relatório, não
+   necessariamente na conta do custo médio em si).
+
+**Verificação:** `tsc --noEmit` sem erros; arquivos tocados conferidos via
+`wc -l -c` + contagem de bytes nulos (0 em todos, incluindo `package.json`/
+`package-lock.json`).
+
+**Nota operacional:** um arquivo de teste manual temporário
+(`teste_ledger_temp.ts`, na raiz do projeto) ficou parado no disco — a
+ferramenta de shell deste ambiente não conseguiu apagá-lo (mesma classe de
+limitação de mount Windows já registrada na seção 3 do CLAUDE.md, aqui
+travando `rm` em vez de corromper um arquivo). Ele NÃO deve ser commitado;
+apagar manualmente antes do `git add` ou excluir da área de stage.
+
+**Arquivos tocados.** `package.json`, `package-lock.json` (dependência nova
+`decimal.js`); `lib/ir/ledger/construir-ledger.ts`,
+`lib/ir/consultas/ledger.ts` (novos).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
