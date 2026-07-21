@@ -21,11 +21,28 @@
  *   — nenhuma fórmula de posição é duplicada aqui, só usada.
  */
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { ProventoForm } from "./schema";
 import { TIPOS_PROVENTO } from "./schema";
 import { obterAtivosComPosicao } from "@/lib/ativos/actions";
 import { ORDEM_GRUPOS, LABEL_GRUPO, grupoDoAtivo, type GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
+
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.31 (2026-07-21) — bug "Dividendos não
+ * puxa na Posição": Next.js cacheia no cliente (Router Cache) o payload
+ * de rota já renderizado de `/carteira` e `/ativos/[id]`; sem chamar
+ * `revalidatePath` depois de gravar, quem navega pra essas rotas por link
+ * (sem F5) continua vendo o snapshot de ANTES do provento existir — a aba
+ * Proventos em si sempre mostra certo porque refaz o fetch on-demand
+ * (`atualizar()`), sem depender desse cache de rota. Chamado depois de toda
+ * gravação que muda `proventos`, nunca condicionado a sucesso silencioso.
+ */
+function revalidarRotasAfetadas(ativoId?: string) {
+  revalidatePath("/carteira");
+  revalidatePath("/proventos");
+  if (ativoId) revalidatePath(`/ativos/${ativoId}`);
+}
 
 export type AcaoResultado = { error?: string };
 
@@ -317,6 +334,7 @@ export async function criarProvento(input: ProventoForm): Promise<AcaoResultado>
   });
 
   if (error) return { error: "Não foi possível registrar o provento." };
+  revalidarRotasAfetadas(input.ativo_id);
   return {};
 }
 
@@ -344,6 +362,7 @@ export async function editarProvento(id: string, input: ProventoForm): Promise<A
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível salvar o provento." };
+  revalidarRotasAfetadas(input.ativo_id);
   return {};
 }
 
@@ -354,8 +373,13 @@ export async function excluirProvento(id: string): Promise<AcaoResultado> {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
+  // Pega o ativo_id ANTES de excluir só pra saber qual página do Ativo
+  // revalidar depois — não bloqueia a exclusão se essa leitura falhar.
+  const { data: existente } = await supabase.from("proventos").select("ativo_id").eq("id", id).maybeSingle();
+
   const { error } = await supabase.from("proventos").delete().eq("id", id).eq("profile_id", user.id);
   if (error) return { error: "Não foi possível excluir o provento." };
+  revalidarRotasAfetadas(existente?.ativo_id as string | undefined);
   return {};
 }
 
@@ -371,5 +395,10 @@ export async function excluirProventosEmLote(ids: string[]): Promise<AcaoResulta
 
   const { error } = await supabase.from("proventos").delete().eq("profile_id", user.id).in("id", ids);
   if (error) return { error: "Não foi possível excluir os proventos selecionados." };
+  // Vários ativos podem estar envolvidos na seleção — revalida só as rotas
+  // que não dependem de um ativo específico (a de cada Ativo individual
+  // fica sem revalidar aqui; próxima visita normal já resolve, e o custo de
+  // buscar todos os ativo_id antes de já ter apagado não compensa).
+  revalidarRotasAfetadas();
   return {};
 }

@@ -2476,6 +2476,54 @@ importar os helpers); `lib/proventos/schema.ts` (tipo "reembolso" em
 proventos.ts` (novo); `app/(app)/proventos/ImportarProventosView.tsx`
 (novo); `app/(app)/proventos/ProventosView.tsx` (botão + estado de toggle).
 
+### 8.31 Correção: "Dividendos" não puxava na Posição para ativos recém-lançados (2026-07-21)
+
+Motivado pelo Guilherme reportando, com print, que KNRI11/MXRF11/XPML11/
+XPLG11 mostravam "Dividendos: R$0,00" na tabela de Posição mesmo com
+proventos cadastrados — confirmado por ele que a aba Proventos mostrava os
+valores certos pra esses mesmos ativos, isolando o bug pra Posição
+especificamente (não era perda de dado).
+
+**Causa raiz.** Nenhuma Server Action do app, em NENHUM arquivo, jamais
+chamava `revalidatePath`/`revalidateTag`. O Next.js mantém um cache de
+rota no lado do cliente (Router Cache) do payload já renderizado de
+`/carteira` e `/ativos/[id]` — sem invalidar esse cache depois de gravar,
+qualquer navegação por link (sidebar, `<Link>`, sem F5) pra essas rotas
+continua mostrando o snapshot de ANTES da gravação, mesmo que o banco já
+tenha o dado novo. A aba Proventos em si nunca sofria esse sintoma porque
+`ProventosView.tsx` já refaz o fetch on-demand via `atualizar()` (chamada
+direta à Server Action, não depende de cache de rota) — só quem navegava
+PRA FORA da aba Proventos e voltava pra Posição via link via cache é que
+via o valor desatualizado.
+
+**Correção.** Toda gravação (criar/editar/excluir, individual e em lote)
+em `lib/proventos/actions.ts` e `lib/carteira/actions.ts` agora chama
+`revalidatePath("/carteira")` (+ `revalidatePath("/proventos")` nas
+proventos) e, quando o `ativo_id` afetado é conhecido, também
+`revalidatePath(`/ativos/${ativoId}`)`. Na exclusão individual, o
+`ativo_id` é lido do registro ANTES de apagar (só pra saber o que
+revalidar depois — não bloqueia a exclusão se essa leitura falhar). Na
+exclusão em lote (múltiplos ativos possivelmente envolvidos), só
+`/carteira`/`/proventos` são revalidadas — resolver o `ativo_id` de cada
+item pra revalidar a página de Ativo individual não compensa o custo, e a
+próxima visita normal àquela página já resolve.
+
+Como `confirmarImportacaoTransacoes`/`confirmarImportacaoProventos` (§8.24,
+§8.30) reaproveitam `criarTransacao`/`criarProvento` internamente linha a
+linha, a correção vale automaticamente pra importação em massa também —
+nenhuma mudança extra precisou ser feita nesses dois arquivos.
+
+**Escopo desta correção.** Limitado às duas tabelas que alimentam a
+Posição (`transacoes` e `proventos`) — mutações em `ativos` (preço manual,
+classificação/setor) e em `alocacao_setores`/`alocacao_classes` NÃO foram
+tocadas nesta rodada; se o mesmo sintoma (dado sumido até dar F5) aparecer
+em Alocação ou na lista de Ativos depois de uma edição, é o mesmo bug de
+raiz, só que num par de arquivos ainda não corrigido.
+
+**Arquivos tocados.** `lib/proventos/actions.ts` (todas as 4 funções de
+escrita); `lib/carteira/actions.ts` (todas as 4 funções de escrita de
+transação).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

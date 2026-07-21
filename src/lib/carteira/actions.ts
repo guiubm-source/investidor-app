@@ -1,8 +1,21 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { CorretoraForm, TransacaoForm } from "./schema";
 import { obterQuantidadeDisponivelEmData } from "@/lib/ativos/actions";
+
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.31 (2026-07-21) — mesmo bug de cache de rota
+ * corrigido em lib/proventos/actions.ts, só que pro lado das transações:
+ * sem isso, uma compra/venda/evento societário lançado no Livro-razão podia
+ * não aparecer na Posição (nem no detalhe do Ativo) até um F5, porque o
+ * Router Cache do Next mantém o payload já renderizado dessas rotas.
+ */
+function revalidarRotasAfetadas(ativoId?: string) {
+  revalidatePath("/carteira");
+  if (ativoId) revalidatePath(`/ativos/${ativoId}`);
+}
 
 export type AcaoResultado = {
   error?: string;
@@ -244,6 +257,7 @@ export async function criarTransacao(
   });
 
   if (error) return { error: "Não foi possível registrar a transação." };
+  revalidarRotasAfetadas(input.ativo_id);
   return {};
 }
 
@@ -292,6 +306,7 @@ export async function editarTransacao(
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível salvar a transação." };
+  revalidarRotasAfetadas(input.ativo_id);
   return {};
 }
 
@@ -302,8 +317,13 @@ export async function excluirTransacao(id: string): Promise<AcaoResultado> {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Sessão expirada. Faça login novamente." };
 
+  // Pega o ativo_id ANTES de excluir só pra saber qual página do Ativo
+  // revalidar depois — não bloqueia a exclusão se essa leitura falhar.
+  const { data: existente } = await supabase.from("transacoes").select("ativo_id").eq("id", id).maybeSingle();
+
   const { error } = await supabase.from("transacoes").delete().eq("id", id).eq("profile_id", user.id);
   if (error) return { error: "Não foi possível excluir a transação." };
+  revalidarRotasAfetadas(existente?.ativo_id as string | undefined);
   return {};
 }
 
@@ -319,6 +339,10 @@ export async function excluirTransacoesEmLote(ids: string[]): Promise<AcaoResult
 
   const { error } = await supabase.from("transacoes").delete().eq("profile_id", user.id).in("id", ids);
   if (error) return { error: "Não foi possível excluir as transações selecionadas." };
+  // Várias transações de ativos diferentes podem estar na seleção — mesma
+  // observação da exclusão em lote de proventos: revalida só /carteira,
+  // sem custo extra de resolver cada ativo_id envolvido.
+  revalidarRotasAfetadas();
   return {};
 }
 
