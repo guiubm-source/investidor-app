@@ -1108,11 +1108,21 @@ alter table public.ativos add constraint ativos_subtipo_internacional_check
 --     - Nenhum novo campo pro cálculo de "preço médio ajustado" (Posição): ele
 --       é 100% derivado em runtime (totalInvestidoBruto − soma de proventos
 --       por ativo, já lida em obterPosicaoConsolidada), nunca armazenado.
+--     - O check abaixo já inclui 'reembolso' (só criado de fato na seção 20,
+--       logo depois) — na ORDEM histórica em que essas duas seções foram
+--       escritas, "aluguel" veio antes de "reembolso" sozinho. Mas como o
+--       script inteiro é re-executado do zero em qualquer atualização (não
+--       roda só a parte nova), recriar aqui a constraint antiga (sem
+--       'reembolso') falha na hora com ERROR 23514 assim que já existir
+--       qualquer provento tipo 'reembolso' na base — a seção 20 alargaria de
+--       volta um instante depois, mas o `alter table ... add constraint`
+--       desta seção já teria sido rejeitado antes de chegar lá. Por isso a
+--       lista aqui é idêntica à da seção 20 desde 2026-07-21.
 -- ============================================================================
 
 alter table public.proventos drop constraint if exists proventos_tipo_check;
 alter table public.proventos add constraint proventos_tipo_check
-  check (tipo in ('dividendo','jcp','rendimento','aluguel','outro'));
+  check (tipo in ('dividendo','jcp','rendimento','aluguel','reembolso','outro'));
 
 -- ============================================================================
 -- 20. Proventos — importação por copiar/colar + tipo "Reembolso" (decisões em
@@ -1126,6 +1136,10 @@ alter table public.proventos add constraint proventos_tipo_check
 --       existentes, mesmo padrão da importação de transações (seção
 --       "Livro-razão", §8.24) — só client-side (parsing) e a mesma
 --       `criarProvento` de sempre gravam.
+--     - Desde 2026-07-21 a seção 19 já recria a constraint com esta MESMA
+--       lista (ver comentário lá) — o drop+add abaixo virou uma
+--       reafirmação idempotente, não um alargamento de fato. Mantido por
+--       redundância/auditoria (CLAUDE.md §1.5), não por necessidade.
 -- ============================================================================
 
 alter table public.proventos drop constraint if exists proventos_tipo_check;
@@ -1291,9 +1305,12 @@ drop trigger if exists set_updated_at on public.ir_versoes_regra;
 create trigger set_updated_at before update on public.ir_versoes_regra
   for each row execute function public.set_updated_at();
 
-drop trigger if exists set_updated_at on public.ir_parametros_regra;
-create trigger set_updated_at before update on public.ir_parametros_regra
-  for each row execute function public.set_updated_at();
+-- Sem trigger em ir_parametros_regra de propósito: essa tabela NÃO tem
+-- coluna updated_at (não estava na especificação §8.32.27.2 e não faz
+-- falta — parâmetro raramente é editado in-place, o normal é criar nova
+-- versão). Um trigger genérico aqui quebrava com "record new has no field
+-- updated_at" assim que o próprio seed da seção 21.7 tentava fazer um
+-- UPDATE nesta tabela.
 
 drop trigger if exists set_updated_at on public.ir_declaracoes;
 create trigger set_updated_at before update on public.ir_declaracoes
@@ -1348,7 +1365,7 @@ create policy "ir_confirmacoes_all_own" on public.ir_confirmacoes
 --      §8.32.40 (Instrução Normativa do exercício, Perguntas e Respostas
 --      IRPF, Manual ReVar) — isso é dívida técnica explícita, não uma
 --      omissão silenciosa.
-do $
+do $$
 declare
   v_versao_id uuid;
 begin
@@ -1391,4 +1408,4 @@ begin
       set valor_texto = '6015'
       where versao_regra_id = v_versao_id and chave = 'darf.codigo_receita_renda_variavel_comum';
   end if;
-end $;
+end $$;

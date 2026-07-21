@@ -4690,6 +4690,61 @@ actions, resto intocado); `app/(app)/imposto-renda/QuestionarioIR.tsx`
 (novo); `app/(app)/imposto-renda/ImpostoRendaView.tsx` e `page.tsx`
 (portão do questionário + cabeçalho de exercício).
 
+### 8.34 Correção: 3 erros impedindo rodar o schema.sql (2026-07-21)
+
+Motivado pelo Guilherme reportando três erros seguidos ao rodar o
+`schema.sql` completo depois da seção 21 (fundação fiscal do IR) ter sido
+adicionada — cada um só aparecia depois de corrigir o anterior, então foram
+resolvidos em sequência:
+
+1. **`ERROR: 42601: syntax error at or near "$"` na linha do `do $`** — o
+   bloco de seed da seção 21.7 foi escrito com dólar-quote de UM símbolo só
+   (`do $ ... end $;`) em vez do padrão `do $$ ... end $$;` usado nos outros
+   3 blocos `do` do arquivo (seções 9.3, 12.1 e 18) — Postgres exige pelo
+   menos `$$` (ou `$tag$`) pra abrir/fechar um bloco `do`, `$` sozinho não é
+   um delimitador válido. Confirmado com `cat -n` que era erro de digitação
+   real (não o bug de encoding/rendering do bash documentado no §3 do
+   CLAUDE.md — aquele é outro tipo de problema, com caracteres acentuados).
+   Corrigido nas duas ocorrências (abertura e fechamento do bloco).
+2. **`ERROR: 23514: check constraint "proventos_tipo_check" ... is violated
+   by some row`** — a seção 19 (§8.26) recria `proventos_tipo_check` com a
+   lista `('dividendo','jcp','rendimento','aluguel','outro')` (sem
+   'reembolso'), e só a seção 20 (§8.30), logo depois, alarga pra incluir
+   'reembolso'. Isso é inofensivo na PRIMEIRA vez que o script roda (ainda
+   não existia nenhum provento tipo 'reembolso' na base), mas como o script
+   inteiro é reexecutado do zero em qualquer atualização futura (não só a
+   parte nova), numa base que JÁ tem proventos tipo 'reembolso' cadastrados
+   (depois que a feature de §8.30 foi usada de verdade), a seção 19 tenta
+   recriar uma constraint mais estreita que os dados atuais já violam —
+   Postgres rejeita o `alter table ... add constraint` na hora, antes mesmo
+   de chegar na seção 20 que alargaria de novo. Corrigido igualando a lista
+   da seção 19 à da seção 20 (ambas incluem 'reembolso' desde já) — a
+   recriação da seção 20 vira uma reafirmação idempotente, mantida por
+   redundância/auditoria (CLAUDE.md §1.5), não por necessidade.
+3. **`ERROR: 42703: record "new" has no field "updated_at"`** (disparado de
+   dentro de `set_updated_at()`, na mesma instrução `update
+   ir_parametros_regra` do seed da seção 21.7) — a seção 21 anexou o
+   trigger genérico `set_updated_at` em `ir_parametros_regra`, mas essa
+   tabela nunca teve coluna `updated_at` (nem na especificação §8.32.27.2,
+   nem no `create table` desta seção) — só ganha esse trigger quem realmente
+   tem a coluna (`ir_versoes_regra`, `ir_declaracoes`, `ir_perfis_fiscais`,
+   essas sim com `updated_at`). Corrigido removendo o trigger indevido, com
+   um comentário no lugar explicando por que essa tabela não precisa dele
+   (parâmetro fiscal normalmente ganha versão nova em vez de ser editado
+   in-place).
+
+**Lição pro futuro:** ao adicionar um NOVO valor a um `check` já existente
+em duas seções sucessivas do mesmo jeito (drop+add), a seção mais ANTIGA
+não pode ficar mais restritiva que o estado final se o script for
+reexecutável do zero — ou o valor novo entra desde a primeira recriação, ou
+a segunda seção não recria a mesma constraint (só documenta a decisão). E,
+de forma mais geral, antes de colar o bloco padrão de trigger
+`set_updated_at` numa tabela nova, conferir se ela realmente tem a coluna
+`updated_at` no `create table` — copiar o bloco de outra seção sem essa
+checagem foi a causa direta deste terceiro erro.
+
+**Arquivos tocados.** `supabase/schema.sql` (seções 19, 20 e 21).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
