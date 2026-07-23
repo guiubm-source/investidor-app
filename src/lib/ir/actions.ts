@@ -7,6 +7,8 @@ import { obterDeclaracaoAtual as _obterDeclaracaoAtual, type DeclaracaoComPerfil
 import type { AvisoEscopoIR, PerfilFiscalIR } from "./tipos";
 import { apurarRendaVariavelBrasilDoUsuario } from "./consultas/renda-variavel";
 import type { LinhaMensalRendaVariavel } from "./motores/renda-variavel-brasil";
+import { apurarRendaFixaBrasilDoUsuario } from "./consultas/renda-fixa";
+import { apurarGanhoCapitalExteriorDoUsuario } from "./consultas/exterior";
 import {
   obterBensDireitos,
   obterTabelaGruposCodigosVigente,
@@ -315,15 +317,20 @@ export type LinhaMensal = {
    * anterior, não só do mês anterior dentro do mesmo ano. */
   prejuizoAnteriorAplicado: number;
   /**
-   * Ver docs/MAPA-DE-DADOS.md §8.39 (fase 4b): `acao_swing`/`acao_day`/`fii`
-   * passaram a vir do motor novo (lib/ir/motores/renda-variavel-brasil.ts,
-   * ledger fiscal + classificação de day trade reais), marcado "em
-   * validação" na UI — as demais categorias continuam vindo da aproximação
-   * antiga (`legado`) até as fases 6-8 cobrirem renda fixa/exterior/cripto.
-   * Fallback: se a versão de regra vigente não existir/faltar parâmetro, a
-   * categoria volta a `legado` automaticamente (ver `obterRelatorioIR`).
+   * Ver docs/MAPA-DE-DADOS.md §8.39 (fase 4b) e §8.59 (fase 6b/7b, 2026-07-22):
+   * `acao_swing`/`acao_day`/`fii` vêm do motor novo de renda variável
+   * (lib/ir/motores/renda-variavel-brasil.ts, ledger fiscal + classificação
+   * de day trade reais); `renda_fixa_tributavel`/`renda_fixa_isenta` vêm do
+   * motor novo de renda fixa (motores/renda-fixa-brasil.ts, tabela
+   * regressiva real); `internacional` vem do motor novo de exterior
+   * (motores/exterior-lei-14754.ts, conversão cambial evento a evento — o
+   * `legado` somava USD como se fosse BRL, bug crítico corrigido nesta
+   * fase). `cripto_nacional`/`cripto_estrangeira` continuam em `legado`
+   * (fase 8 explicitamente fora de escopo, ver §8.44). Fallback: se a versão
+   * de regra vigente não existir/faltar parâmetro, a categoria volta a
+   * `legado` automaticamente (ver `obterRelatorioIR`).
    */
-  origemMotor: "novo_fase4" | "legado";
+  origemMotor: "novo_fase4" | "novo_fase6" | "novo_fase7" | "legado";
   /**
    * true quando pelo menos uma venda deste mês/categoria não pôde ser
    * classificada com segurança pelo motor novo (day trade pendente,
@@ -342,7 +349,7 @@ export type ResumoAnualCategoria = {
   impostoDevido: number;
   apuracaoAnual: boolean;
   /** Ver `LinhaMensal.origemMotor` — herdado das linhas mensais que compõem este resumo. */
-  origemMotor: "novo_fase4" | "legado";
+  origemMotor: "novo_fase4" | "novo_fase6" | "novo_fase7" | "legado";
 };
 
 export type RelatorioIR = {
@@ -378,6 +385,37 @@ function converterLinhaRendaVariavelNova(l: LinhaMensalRendaVariavel): LinhaMens
     origemMotor: "novo_fase4",
     pendente: l.pendente,
     motivosPendencia: l.motivosPendencia,
+  };
+}
+
+/**
+ * Converte uma linha do motor de renda fixa direta (fase 6, Decimal, ver
+ * docs/MAPA-DE-DADOS.md §8.41/§8.59) pro formato `LinhaMensal` — mesmo
+ * padrão de `converterLinhaRendaVariavelNova`. Diferença: renda fixa nunca
+ * tem compensação de prejuízo (IRRF definitivo por resgate, ver comentário
+ * no topo de `motores/renda-fixa-brasil.ts`), por isso
+ * `prejuizoAnteriorAplicado` é sempre 0 e não há conceito de "pendente"
+ * neste motor (todo resgate sempre tem dado suficiente pra apurar).
+ */
+function converterLinhaRendaFixaNova(l: LinhaMensalRendaFixa): LinhaMensal {
+  const categoria = l.grupo as CategoriaIR;
+  return {
+    anoMes: l.anoMes,
+    categoria,
+    categoriaLabel: LABEL_CATEGORIA[categoria],
+    vendaTotal: l.vendaTotalBruta.toNumber(),
+    lucroBruto: l.lucroBruto.toNumber(),
+    isento: l.isento,
+    motivoIsencao: l.motivoIsencao,
+    baseCalculo: l.baseCalculo.toNumber(),
+    aliquota: l.aliquota ? l.aliquota.toNumber() : null,
+    impostoDevido: l.impostoDevido ? l.impostoDevido.toNumber() : null,
+    apuracaoAnual: false,
+    diasMediosRetencao: l.diasMediosRetencao ? l.diasMediosRetencao.toNumber() : null,
+    prejuizoAnteriorAplicado: 0,
+    origemMotor: "novo_fase6",
+    pendente: false,
+    motivosPendencia: [],
   };
 }
 
@@ -630,6 +668,55 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
     }
   }
 
+  // ---- Fase 6b (§8.59, 2026-07-22): substitui renda_fixa_tributavel/
+  // renda_fixa_isenta pelo motor novo (motores/renda-fixa-brasil.ts, fase 6,
+  // tabela regressiva REAL por dias de permanência), em vez da aproximação
+  // acima (`aliquotaRendaFixaPorDias` sobre uma média simples de dias — o
+  // motor novo calcula a alíquota por RESGATE, com FIFO de lotes reais).
+  // Mesmo fallback gracioso da fase 4b: se faltar versão de regra/parâmetro,
+  // `apurarRendaFixaBrasilDoUsuario` devolve `null` e a aproximação antiga
+  // permanece.
+  const resultadoRendaFixaNovo = await apurarRendaFixaBrasilDoUsuario();
+  if (resultadoRendaFixaNovo) {
+    const categoriasSubstituidas: CategoriaIR[] = ["renda_fixa_tributavel", "renda_fixa_isenta"];
+    const mensalSemAntigas = mensal.filter((l) => !categoriasSubstituidas.includes(l.categoria));
+    mensal.length = 0;
+    mensal.push(...mensalSemAntigas, ...resultadoRendaFixaNovo.mensal.filter((l) => l.anoMes.startsWith(String(ano))).map(converterLinhaRendaFixaNova));
+
+    for (const categoria of categoriasSubstituidas) {
+      const temLinhaNoAno = mensal.some((l) => l.categoria === categoria);
+      if (temLinhaNoAno) categoriasComVendaNoAno.add(categoria);
+      else categoriasComVendaNoAno.delete(categoria);
+    }
+  }
+
+  // ---- Fase 7b (§8.59, 2026-07-22): substitui "internacional" pelo motor
+  // novo (motores/exterior-lei-14754.ts, fase 7) — CORREÇÃO CRÍTICA: a
+  // aproximação legada acima soma `preco_unitario`/`custos` em USD como se já
+  // estivessem em reais (nunca lê `transacoes.cambio`/`moeda`), inflando ou
+  // subestimando o ganho real por todo o efeito cambial. O motor novo
+  // converte evento a evento pelo câmbio de cada compra/venda antes de
+  // apurar (ver `consultas/exterior.ts`). Sem granularidade mensal (a Lei
+  // 14.754 apura só por ANO) — por isso as linhas mensais informativas de
+  // "internacional" são removidas (nunca aproximamos: melhor omitir o
+  // detalhe mensal do que continuar mostrando a soma em USD-como-se-fosse-
+  // BRL); o valor que importa pra declaração é o resumo anual, tratado
+  // logo abaixo. Mesmo fallback gracioso: se faltar versão de
+  // regra/parâmetro, `apurarGanhoCapitalExteriorDoUsuario` devolve `null` e
+  // a aproximação antiga (com o bug cambial) permanece — nunca perdemos
+  // dado por causa de fundação incompleta, mas o bug em si só é corrigido
+  // quando a versão de regra existir.
+  const resultadoExteriorNovo = await apurarGanhoCapitalExteriorDoUsuario();
+  if (resultadoExteriorNovo) {
+    const mensalSemInternacional = mensal.filter((l) => l.categoria !== "internacional");
+    mensal.length = 0;
+    mensal.push(...mensalSemInternacional);
+
+    const temNoAno = resultadoExteriorNovo.anual.some((a) => a.ano === ano);
+    if (temNoAno) categoriasComVendaNoAno.add("internacional");
+    else categoriasComVendaNoAno.delete("internacional");
+  }
+
   mensal.sort((a, b) => (a.anoMes === b.anoMes ? a.categoria.localeCompare(b.categoria) : a.anoMes < b.anoMes ? -1 : 1));
 
   // Resumo anual: soma o que já foi apurado mês a mês (categorias mensais,
@@ -638,6 +725,22 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
   // princípio, prejuízo de um ano abate lucro de qualquer ano seguinte.
   const resumoAnual: ResumoAnualCategoria[] = [];
   for (const categoria of categoriasComVendaNoAno) {
+    if (categoria === "internacional" && resultadoExteriorNovo) {
+      // Ver comentário da fase 7b acima — este é o número que de fato
+      // importa (usado na declaração), já com a conversão cambial correta.
+      const linhaAno = resultadoExteriorNovo.anual.find((a) => a.ano === ano);
+      resumoAnual.push({
+        categoria,
+        categoriaLabel: LABEL_CATEGORIA[categoria],
+        vendaTotal: linhaAno ? linhaAno.vendaTotalBruta.toNumber() : 0,
+        lucroLiquido: linhaAno ? linhaAno.lucroBruto.toNumber() : 0,
+        impostoDevido: linhaAno ? linhaAno.impostoDevido.toNumber() : 0,
+        apuracaoAnual: true,
+        origemMotor: "novo_fase7",
+      });
+      continue;
+    }
+
     if (CATEGORIAS_APURACAO_ANUAL.includes(categoria)) {
       const vendasCategoria = todasVendas.filter(
         (v) => v.categoria === categoria && Number(v.anoMes.slice(0, 4)) <= ano
@@ -693,7 +796,7 @@ export async function obterRelatorioIR(ano: number): Promise<RelatorioIR> {
       lucroLiquido,
       impostoDevido,
       apuracaoAnual: false,
-      origemMotor: linhasCategoria.some((l) => l.origemMotor === "novo_fase4") ? "novo_fase4" : "legado",
+      origemMotor: linhasCategoria.find((l) => l.origemMotor !== "legado")?.origemMotor ?? "legado",
     });
   }
 

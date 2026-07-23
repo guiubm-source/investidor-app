@@ -17,7 +17,12 @@
  */
 
 import { createClient } from "@/lib/supabase/server";
-import { calcularPosicao, ordenarTransacoes, type TransacaoCalc } from "@/lib/ativos/posicao-calculo";
+import {
+  calcularPosicao,
+  ordenarTransacoes,
+  calcularRetornoSimplesAcumulado,
+  type TransacaoCalc,
+} from "@/lib/ativos/posicao-calculo";
 import { TIPOS_COTACAO_AUTOMATICA } from "@/lib/ativos/yahoo-finance";
 import type { TipoAtivo } from "@/lib/ativos/actions";
 import type { Corretora } from "./actions";
@@ -473,17 +478,13 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       variacaoHojePct = ((p.precoAtual - precoAnterior) / precoAnterior) * 100;
     }
 
-    // Ver §8.28 (correção 2026-07-20) — "retorno simples acumulado": usa
-    // `totalVendidoLiquido` (dinheiro TOTAL já embolsado em vendas — principal
-    // + lucro), não `lucroRealizado` (só a fatia de LUCRO da venda). Bug
-    // anterior subestimava (às vezes catastroficamente) o retorno de
-    // qualquer ativo com venda parcial no passado, porque descartava o
-    // principal devolvido — só olhava o lucro da venda, como se o dinheiro do
-    // custo de aquisição das cotas vendidas tivesse simplesmente sumido.
-    const variacaoTotalValor =
-      p.totalInvestidoBruto > 0 ? patrimonioAtual + p.totalVendidoLiquido - p.totalInvestidoBruto : null;
-    const variacaoTotalPct =
-      p.totalInvestidoBruto > 0 ? ((patrimonioAtual + p.totalVendidoLiquido) / p.totalInvestidoBruto - 1) * 100 : null;
+    // Ver §8.28 (correção 2026-07-20) e §8.59 (extração 2026-07-22) —
+    // "retorno simples acumulado", fórmula única em posicao-calculo.ts.
+    const { valor: variacaoTotalValor, pct: variacaoTotalPct } = calcularRetornoSimplesAcumulado(
+      patrimonioAtual,
+      p.totalVendidoLiquido,
+      p.totalInvestidoBruto
+    );
 
     // Ver §8.27 (correção 2026-07-20) — preço médio ajustado (informal, não
     // afeta IR): custo RESIDUAL das cotas que ainda estão em carteira
@@ -556,17 +557,19 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     }
     const variacaoHojePct = somaOntem > 0 ? (somaHoje / somaOntem) * 100 : null;
 
-    // Variação total do grupo: mesma fórmula unificada, agregada (ver §8.28 —
-    // totalVendidoLiquido, não lucroRealizado).
+    // Variação total do grupo: mesma fórmula unificada, agregada (ver §8.28,
+    // §8.59 — totalVendidoLiquido, não lucroRealizado). `?? 0` preserva o
+    // comportamento original deste agregado (valor 0 quando não há base de
+    // investimento, diferente do `null` por ativo individual).
     const somaVendidoLiquido = posicoesBase
       .filter((p) => ativosDoGrupo.some((a) => a.ativoId === p.ativoId))
       .reduce((s, p) => s + p.totalVendidoLiquido, 0);
     const somaInvestidoBruto = posicoesBase
       .filter((p) => ativosDoGrupo.some((a) => a.ativoId === p.ativoId))
       .reduce((s, p) => s + p.totalInvestidoBruto, 0);
-    const variacaoTotalValor = somaInvestidoBruto > 0 ? patrimonioGrupo + somaVendidoLiquido - somaInvestidoBruto : 0;
-    const variacaoTotalPct =
-      somaInvestidoBruto > 0 ? ((patrimonioGrupo + somaVendidoLiquido) / somaInvestidoBruto - 1) * 100 : null;
+    const retornoGrupo = calcularRetornoSimplesAcumulado(patrimonioGrupo, somaVendidoLiquido, somaInvestidoBruto);
+    const variacaoTotalValor = retornoGrupo.valor ?? 0;
+    const variacaoTotalPct = retornoGrupo.pct;
 
     return {
       grupo,
@@ -672,14 +675,14 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
   );
   const totalVariacaoHojePct = totalOntem > 0 ? (totalHojeValor / totalOntem) * 100 : null;
 
-  // Ver §8.28 — totalVendidoLiquido, não lucroRealizado (mesma correção
-  // aplicada por ativo e por grupo, agora também no total da carteira).
+  // Ver §8.28, §8.59 — totalVendidoLiquido, não lucroRealizado (mesma
+  // correção aplicada por ativo e por grupo, agora também no total da
+  // carteira). `?? 0` preserva o comportamento original deste agregado.
   const totalVendidoLiquido = posicoesBase.reduce((s, p) => s + p.totalVendidoLiquido, 0);
   const totalInvestidoBruto = posicoesBase.reduce((s, p) => s + p.totalInvestidoBruto, 0);
-  const totalVariacaoTotalValor =
-    totalInvestidoBruto > 0 ? totalCarteira + totalVendidoLiquido - totalInvestidoBruto : 0;
-  const totalVariacaoTotalPct =
-    totalInvestidoBruto > 0 ? ((totalCarteira + totalVendidoLiquido) / totalInvestidoBruto - 1) * 100 : null;
+  const retornoTotalCarteira = calcularRetornoSimplesAcumulado(totalCarteira, totalVendidoLiquido, totalInvestidoBruto);
+  const totalVariacaoTotalValor = retornoTotalCarteira.valor ?? 0;
+  const totalVariacaoTotalPct = retornoTotalCarteira.pct;
 
   // Ver docs/MAPA-DE-DADOS.md §8.25 — "Ativos encerrados": ordenado por data
   // da última venda mais recente primeiro (linha do tempo de saídas).

@@ -44,6 +44,9 @@ const USER_AGENT_NAVEGADOR =
  */
 export async function buscarCotacaoYahoo(symbol: string): Promise<CotacaoYahoo> {
   try {
+    // Timeout de 8s (docs/MAPA-DE-DADOS.md §8.59) — sem isso, uma resposta
+    // lenta prende a Server Action/cron até o limite de execução da
+    // plataforma, em vez de falhar rápido e seguir pro próximo ativo.
     const resposta = await fetch(`${YAHOO_CHART_URL}/${encodeURIComponent(symbol)}?interval=1d&range=1d`, {
       cache: "no-store",
       headers: {
@@ -53,6 +56,7 @@ export async function buscarCotacaoYahoo(symbol: string): Promise<CotacaoYahoo> 
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
         Accept: "application/json",
       },
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!resposta.ok) {
@@ -68,6 +72,9 @@ export async function buscarCotacaoYahoo(symbol: string): Promise<CotacaoYahoo> 
 
     return { preco };
   } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      return { erro: `Yahoo Finance demorou demais para responder por ${symbol} (mais de 8s).` };
+    }
     return { erro: e instanceof Error ? e.message : `Erro desconhecido ao buscar cotação de ${symbol}` };
   }
 }
@@ -97,6 +104,7 @@ export async function buscarHistoricoYahoo(symbol: string, range: string): Promi
           "User-Agent": USER_AGENT_NAVEGADOR,
           Accept: "application/json",
         },
+        signal: AbortSignal.timeout(8000),
       }
     );
 

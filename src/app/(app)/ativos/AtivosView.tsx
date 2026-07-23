@@ -25,9 +25,17 @@ export default function AtivosView({ ativosIniciais }: { ativosIniciais: AtivoRe
   const [adicionando, setAdicionando] = useState(false);
   const toast = useToast();
 
+  // try/catch + toast (docs/MAPA-DE-DADOS.md §8.59) — sem isso, uma falha no
+  // refetch pós-mutação (rede, RLS) deixava a lista sem atualizar em
+  // silêncio, reabrindo o mesmo problema que o bug #159 já tinha corrigido
+  // no fetch inicial (mesmo padrão de AlocacaoView.tsx).
   const atualizar = async () => {
-    const novo = await obterAtivosComPosicao();
-    setAtivos(novo);
+    try {
+      const novo = await obterAtivosComPosicao();
+      setAtivos(novo);
+    } catch {
+      toast.error("Não foi possível atualizar a lista de ativos. Tente novamente.");
+    }
   };
 
   return (

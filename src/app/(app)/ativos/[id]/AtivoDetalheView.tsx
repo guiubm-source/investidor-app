@@ -203,6 +203,8 @@ export default function AtivoDetalheView({
   const [excluindoTransacaoId, setExcluindoTransacaoId] = useState<string | null>(null);
   const [excluindoTransacaoLoading, setExcluindoTransacaoLoading] = useState(false);
   const [atualizandoCotacao, setAtualizandoCotacao] = useState(false);
+  const [removendoClassificacao, setRemovendoClassificacao] = useState(false);
+  const [removendoClassificacaoLoading, setRemovendoClassificacaoLoading] = useState(false);
   const toast = useToast();
 
   const atualizar = async () => {
@@ -301,6 +303,27 @@ export default function AtivoDetalheView({
             }}
           />
         )}
+
+        {removendoClassificacao && (
+          <ConfirmModal
+            title="Remover classificação?"
+            message="O ativo volta a aparecer como 'Não classificado' na Alocação e na Posição por Alocação. Essa ação não pode ser desfeita."
+            loading={removendoClassificacaoLoading}
+            onCancel={() => setRemovendoClassificacao(false)}
+            onConfirm={async () => {
+              setRemovendoClassificacaoLoading(true);
+              const resultado = await removerClassificacao(ativo.id);
+              setRemovendoClassificacaoLoading(false);
+              if (resultado.error) {
+                toast.error(resultado.error);
+                return;
+              }
+              setRemovendoClassificacao(false);
+              await atualizar();
+              toast.success("Classificação removida.");
+            }}
+          />
+        )}
       </div>
 
       {TIPOS_CARTAO_EMPRESA.includes(ativo.tipo) && (
@@ -393,11 +416,7 @@ export default function AtivoDetalheView({
                   </button>
                   {ativo.setorNome && (
                     <button
-                      onClick={async () => {
-                        await removerClassificacao(ativo.id);
-                        await atualizar();
-                        toast.success("Classificação removida.");
-                      }}
+                      onClick={() => setRemovendoClassificacao(true)}
                       className="text-xs text-faint hover:text-danger"
                     >
                       Remover

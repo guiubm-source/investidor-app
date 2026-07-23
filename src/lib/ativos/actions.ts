@@ -27,7 +27,12 @@ import type {
   SaldoAcionistasForm,
   SimboloTradingviewForm,
 } from "./schema";
-import { calcularPosicao, ordenarTransacoes, type TransacaoCalc } from "./posicao-calculo";
+import {
+  calcularPosicao,
+  ordenarTransacoes,
+  calcularRetornoSimplesAcumulado,
+  type TransacaoCalc,
+} from "./posicao-calculo";
 
 export type AcaoResultado = { error?: string };
 
@@ -262,19 +267,13 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     const lucroNaoRealizadoPct = valorAplicado > 0 ? (lucroNaoRealizado / valorAplicado) * 100 : 0;
 
     // "Retorno simples acumulado" — mesma fórmula da rentabilidade histórica
-    // (§8.15), unificada aqui pro "hoje" (ver §8.16): soma o que já foi
-    // embolsado em vendas parciais/totais ao que ainda está de pé, sobre
-    // tudo que já foi pago em compras até agora.
-    //
-    // Ver §8.28 (correção 2026-07-20): usa `totalVendidoLiquido` (dinheiro
-    // TOTAL recebido em vendas — principal + lucro), não `lucroRealizado`
-    // (só a fatia de lucro). Usar só o lucro descartava o principal
-    // devolvido em qualquer venda parcial anterior, subestimando (às vezes
-    // catastroficamente) o retorno de ativos com esse histórico.
-    const rentabilidadeTotalValor =
-      totalInvestidoBruto > 0 ? valorAtual + totalVendidoLiquido - totalInvestidoBruto : null;
-    const rentabilidadeTotalPct =
-      totalInvestidoBruto > 0 ? ((valorAtual + totalVendidoLiquido) / totalInvestidoBruto - 1) * 100 : null;
+    // (§8.15), unificada aqui pro "hoje" (ver §8.16 e §8.28/§8.59 —
+    // fórmula única em posicao-calculo.ts).
+    const { valor: rentabilidadeTotalValor, pct: rentabilidadeTotalPct } = calcularRetornoSimplesAcumulado(
+      valorAtual,
+      totalVendidoLiquido,
+      totalInvestidoBruto
+    );
 
     return {
       id: ativo.id,

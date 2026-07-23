@@ -60,7 +60,9 @@ type LinhaSgs = { data: string; valor: string };
 
 async function buscarJanela(inicioIso: string, fimIso: string): Promise<{ data: string; cotacao: number }[]> {
   const url = `${SGS_URL}?formato=json&dataInicial=${formatarDataBr(inicioIso)}&dataFinal=${formatarDataBr(fimIso)}`;
-  const resposta = await fetch(url, { cache: "no-store" });
+  // Timeout de 10s (docs/MAPA-DE-DADOS.md §8.59) — sem isso, o Bacen lento
+  // prende a rota de cron até o `maxDuration` da Vercel matar a função.
+  const resposta = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10000) });
   if (!resposta.ok) {
     throw new Error(`API do Bacen retornou ${resposta.status} para o intervalo ${inicioIso} a ${fimIso}`);
   }

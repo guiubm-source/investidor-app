@@ -28,10 +28,14 @@ export async function criarConta(input: {
   });
 
   if (error) {
-    if (error.message.toLowerCase().includes("already registered")) {
-      return { error: "Já existe uma conta com esse email. Faça login.", sessaoCriada: false };
-    }
-    return { error: "Não foi possível criar a conta. Tente novamente.", sessaoCriada: false };
+    // Mensagem propositalmente genérica (não confirma nem nega se o email já
+    // tem conta) — evita enumeração de contas via esta tela, mesmo padrão já
+    // usado em esqueci-senha/actions.ts e login/actions.ts (ver docs/MAPA-DE-DADOS.md §8.59).
+    return {
+      error:
+        "Não foi possível concluir o cadastro com os dados informados. Se você já tem uma conta com esse email, faça login ou use \"Esqueci minha senha\"; caso contrário, tente novamente em instantes.",
+      sessaoCriada: false,
+    };
   }
 
   return { sessaoCriada: !!data.session };

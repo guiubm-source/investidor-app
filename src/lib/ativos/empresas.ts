@@ -40,9 +40,23 @@ export async function buscarDadosEmpresaBrapi(ticker: string): Promise<Resultado
   if (token) url.searchParams.set("token", token);
 
   try {
-    const resposta = await fetch(url.toString(), { cache: "no-store" });
+    // Timeout de 8s (docs/MAPA-DE-DADOS.md §8.59) — sem isso, uma resposta
+    // lenta da brapi.dev prende a Server Action até o limite de execução da
+    // plataforma, em vez de falhar rápido e visível.
+    const resposta = await fetch(url.toString(), { cache: "no-store", signal: AbortSignal.timeout(8000) });
     if (!resposta.ok) {
-      return { erro: `brapi.dev retornou ${resposta.status} para ${ticker} — verifique o token em BRAPI_TOKEN.` };
+      // Mensagem diferenciada por status (§8.59) — "verifique o token" só
+      // faz sentido pra 401/403; pra ticker não encontrado ou API fora do
+      // ar a causa é outra e a mensagem antiga confundia mais do que ajudava.
+      if (resposta.status === 401 || resposta.status === 403) {
+        return {
+          erro: `brapi.dev recusou a requisição para ${ticker} (${resposta.status}) — confira se BRAPI_TOKEN está configurado corretamente.`,
+        };
+      }
+      if (resposta.status === 404) {
+        return { erro: `brapi.dev não encontrou o ticker ${ticker}.` };
+      }
+      return { erro: `brapi.dev retornou ${resposta.status} para ${ticker} — a API pode estar fora do ar no momento.` };
     }
 
     const corpo = await resposta.json();
@@ -62,6 +76,9 @@ export async function buscarDadosEmpresaBrapi(ticker: string): Promise<Resultado
       descricao: perfil.longBusinessSummary ?? null,
     };
   } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      return { erro: `brapi.dev demorou demais para responder por ${ticker} (mais de 8s) — tente novamente.` };
+    }
     return { erro: e instanceof Error ? e.message : `Erro desconhecido ao buscar dados cadastrais de ${ticker}.` };
   }
 }
@@ -81,9 +98,11 @@ export async function buscarDadosEmpresaYahoo(ticker: string): Promise<Resultado
   const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=assetProfile,quoteType`;
 
   try {
+    // Timeout de 8s — mesmo motivo do buscarDadosEmpresaBrapi acima.
     const resposta = await fetch(url, {
       cache: "no-store",
       headers: { "User-Agent": USER_AGENT_NAVEGADOR, Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!resposta.ok) {
@@ -110,6 +129,9 @@ export async function buscarDadosEmpresaYahoo(ticker: string): Promise<Resultado
       descricao: perfil.longBusinessSummary ?? null,
     };
   } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") {
+      return { erro: `Yahoo Finance demorou demais para responder por ${symbol} (mais de 8s) — tente novamente.` };
+    }
     return { erro: e instanceof Error ? e.message : `Erro desconhecido ao buscar dados cadastrais de ${symbol}.` };
   }
 }

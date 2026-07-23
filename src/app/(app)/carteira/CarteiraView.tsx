@@ -5,6 +5,7 @@ import type { LivroRazao } from "@/lib/carteira/actions";
 import { obterPosicaoConsolidada, type PosicaoConsolidada } from "@/lib/carteira/posicao";
 import LivroRazaoView, { type AtivoOpcao } from "./LivroRazaoView";
 import PosicaoView from "./PosicaoView";
+import { useToast } from "@/components/ToastProvider";
 
 const ABAS = [
   { id: "posicao", label: "Posição" },
@@ -31,10 +32,18 @@ export default function CarteiraView({
 }) {
   const [aba, setAba] = useState<AbaId>("posicao");
   const [posicao, setPosicao] = useState(posicaoInicial);
+  const toast = useToast();
 
+  // try/catch + toast (docs/MAPA-DE-DADOS.md §8.59) — mesmo motivo do fix em
+  // AtivosView.tsx/ProventosView.tsx: sem isso, falha no refetch pós-mutação
+  // (disparado pelo Livro-razão) atualizava a Posição em silêncio.
   const atualizarPosicao = async () => {
-    const nova = await obterPosicaoConsolidada(null);
-    setPosicao(nova);
+    try {
+      const nova = await obterPosicaoConsolidada(null);
+      setPosicao(nova);
+    } catch {
+      toast.error("Não foi possível atualizar a posição. Tente novamente.");
+    }
   };
 
   return (

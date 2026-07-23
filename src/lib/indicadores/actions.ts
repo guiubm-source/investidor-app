@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type {
   DecisaoSelicForm,
@@ -86,6 +87,18 @@ import {
 } from "./dolar-estatisticas";
 
 export type AcaoResultado = { error?: string };
+
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.59 (2026-07-22) — mesmo bug de cache de rota já
+ * corrigido em lib/carteira/actions.ts e lib/proventos/actions.ts: sem
+ * `revalidatePath`, quem navega para `/indicadores` por link (sem F5) depois
+ * de editar Selic/IPCA/Fluxo estrangeiro em outra aba continua vendo o
+ * snapshot de ANTES da gravação. A sub-aba Indicadores em si sempre mostra
+ * certo porque refaz o fetch on-demand, sem depender desse cache de rota.
+ */
+function revalidarRotasAfetadas() {
+  revalidatePath("/indicadores");
+}
 
 type Tendencia = "alta" | "queda" | "estavel" | null;
 
@@ -185,6 +198,7 @@ export async function lancarDecisaoSelic(input: DecisaoSelicForm): Promise<AcaoR
   const { error } = await supabase.from("indicador_selic_reunioes").update(payload).eq("id", input.reuniao_id);
 
   if (error) return { error: "Não foi possível registrar a decisão do Copom." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -207,6 +221,7 @@ export async function editarReuniaoSelic(input: SelicReuniaoEditForm): Promise<A
     .eq("id", input.id);
 
   if (error) return { error: "Não foi possível salvar. Confira se a data ou o número da reunião não estão duplicados." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -227,6 +242,7 @@ export async function criarReuniaoSelic(input: NovaReuniaoSelicForm): Promise<Ac
   });
 
   if (error) return { error: "Não foi possível criar a reunião. Confira se a data ou o número não estão duplicados." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -234,6 +250,7 @@ export async function excluirReuniaoSelic(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
   const { error } = await supabase.from("indicador_selic_reunioes").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir a reunião." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -242,6 +259,7 @@ export async function excluirReunioesSelic(ids: string[]): Promise<AcaoResultado
   const supabase = await createClient();
   const { error } = await supabase.from("indicador_selic_reunioes").delete().in("id", ids);
   if (error) return { error: "Não foi possível excluir as reuniões selecionadas." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -312,6 +330,7 @@ export async function importarHistoricoSelic(input: ImportarSelicForm): Promise<
     return { error: errosGravacao[0] ?? "Não foi possível importar nenhuma linha.", avisos: errosGravacao };
   }
 
+  revalidarRotasAfetadas();
   return { importados, avisos: errosGravacao.length > 0 ? errosGravacao : undefined };
 }
 
@@ -560,6 +579,7 @@ export async function criarIpcaCompetencia(input: IpcaCompetenciaForm): Promise<
   );
 
   if (error) return { error: "Não foi possível registrar a competência do IPCA." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -590,6 +610,7 @@ export async function editarIpcaCompetencia(id: string, input: IpcaCompetenciaFo
     .eq("id", id);
 
   if (error) return { error: "Não foi possível salvar. Confira se a competência não está duplicada." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -597,6 +618,7 @@ export async function excluirIpcaCompetencia(id: string): Promise<AcaoResultado>
   const supabase = await createClient();
   const { error } = await supabase.from("indicador_ipca_mensal").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o lançamento." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -605,6 +627,7 @@ export async function excluirIpcaCompetencias(ids: string[]): Promise<AcaoResult
   const supabase = await createClient();
   const { error } = await supabase.from("indicador_ipca_mensal").delete().in("id", ids);
   if (error) return { error: "Não foi possível excluir as competências selecionadas." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -680,6 +703,7 @@ export async function importarHistoricoIpca(input: ImportarIpcaForm): Promise<Im
     return { error: errosGravacao[0] ?? "Não foi possível importar nenhuma linha.", avisos: errosGravacao };
   }
 
+  revalidarRotasAfetadas();
   return { importados, avisos: errosGravacao.length > 0 ? errosGravacao : undefined };
 }
 
@@ -972,6 +996,7 @@ export async function criarFluxoEstrangeiroMensal(input: FluxoEstrangeiroMensalF
     .upsert({ ano_mes: input.ano_mes, saldo_liquido: input.saldo_liquido }, { onConflict: "ano_mes" });
 
   if (error) return { error: "Não foi possível registrar o fluxo do mês." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -979,6 +1004,7 @@ export async function excluirFluxoEstrangeiroMensal(id: string): Promise<AcaoRes
   const supabase = await createClient();
   const { error } = await supabase.from("indicador_fluxo_estrangeiro_mensal").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o lançamento." };
+  revalidarRotasAfetadas();
   return {};
 }
 

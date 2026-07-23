@@ -27,6 +27,7 @@ import type { ProventoForm } from "./schema";
 import { TIPOS_PROVENTO } from "./schema";
 import { obterAtivosComPosicao } from "@/lib/ativos/actions";
 import { ORDEM_GRUPOS, LABEL_GRUPO, grupoDoAtivo, type GrupoPosicao } from "@/lib/carteira/grupo-classificacao";
+import { buscarTodasLinhas } from "@/lib/supabase/paginacao";
 
 /**
  * Ver docs/MAPA-DE-DADOS.md §8.31 (2026-07-21) — bug "Dividendos não
@@ -155,17 +156,21 @@ export async function obterLivroProventos(): Promise<LivroProventos> {
   } = await supabase.auth.getUser();
   if (!user) return livroVazio();
 
-  const [proventosRes, posicoes] = await Promise.all([
-    supabase
-      .from("proventos")
-      .select(
-        "id, ativo_id, tipo, data_com, data_pagamento, quantidade, valor_por_cota, valor_total, moeda, cambio, imposto_retido, pais_fonte, fonte_pagadora_identificador, ativos(ticker)"
-      )
-      .eq("profile_id", user.id),
+  // Paginado (docs/MAPA-DE-DADOS.md §8.59) — sem isso, um histórico de
+  // proventos com mais de 1000 lançamentos perderia o restante em silêncio
+  // (teto de linhas por página do PostgREST).
+  const [proventosRaw, posicoes] = await Promise.all([
+    buscarTodasLinhas((inicio, fim) =>
+      supabase
+        .from("proventos")
+        .select(
+          "id, ativo_id, tipo, data_com, data_pagamento, quantidade, valor_por_cota, valor_total, moeda, cambio, imposto_retido, pais_fonte, fonte_pagadora_identificador, ativos(ticker)"
+        )
+        .eq("profile_id", user.id)
+        .range(inicio, fim)
+    ),
     obterAtivosComPosicao(),
   ]);
-
-  if (proventosRes.error) throw new Error(`obterLivroProventos: falha ao ler proventos — ${proventosRes.error.message}`);
 
   const grupoPorAtivo = new Map<string, GrupoPosicao>(
     posicoes.map((a) => [a.id, grupoDoAtivo(a.tipo, a.subtipoRendaFixa, a.subtipoInternacional)])
@@ -173,7 +178,7 @@ export async function obterLivroProventos(): Promise<LivroProventos> {
 
   const hojeStr = new Date().toISOString().slice(0, 10);
 
-  const lancamentos: LancamentoProvento[] = (proventosRes.data ?? [])
+  const lancamentos: LancamentoProvento[] = (proventosRaw ?? [])
     .map((p) => {
       const ativo = Array.isArray(p.ativos) ? p.ativos[0] : p.ativos;
       const dataPagamento = p.data_pagamento as string;

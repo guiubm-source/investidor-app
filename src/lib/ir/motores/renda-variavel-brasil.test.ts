@@ -71,6 +71,33 @@ describe("apurarRendaVariavelBrasil", () => {
     expect(fev.impostoDevido!.toNumber()).toBeCloseTo(300); // 2000 * 0.15
   });
 
+  it("prejuízo em dezembro abate lucro de janeiro do ano seguinte (compensação atravessa o ano-calendário)", () => {
+    // Ver docs/MAPA-DE-DADOS.md §8.59 (2026-07-22) — regressão pro bug já
+    // corrigido na tarefa #108: a ordenação de meses usa comparação de string
+    // sobre `anoMes` no formato "AAAA-MM" (zero-padded), que só é
+    // cronologicamente correta se a virada de ano for testada explicitamente
+    // (ex.: sem isso, um bug de ordenação por "MM" isolado, ignorando o ano,
+    // passaria despercebido pelos outros testes desta suíte).
+    const ativos: AtivoParaApuracaoRendaVariavel[] = [
+      {
+        ativoId: "a1",
+        ativoTicker: "PETR4",
+        tipoRegime: "acao_fundo",
+        vendas: [
+          venda({ transacaoId: "v1", anoMes: "2025-12", vendaTotalBruta: new Decimal(30000), resultadoRealizado: new Decimal(-1500) }),
+          venda({ transacaoId: "v2", anoMes: "2026-01", vendaTotalBruta: new Decimal(30000), resultadoRealizado: new Decimal(4000) }),
+        ],
+      },
+    ];
+    const r = apurarRendaVariavelBrasil(ativos, parametros);
+    const dez = r.mensal.find((l) => l.anoMes === "2025-12" && l.grupo === "acao_swing")!;
+    const jan = r.mensal.find((l) => l.anoMes === "2026-01" && l.grupo === "acao_swing")!;
+    expect(dez.impostoDevido).toBeNull(); // mês de prejuízo não gera imposto
+    expect(jan.prejuizoAnteriorAplicado.toNumber()).toBe(1500);
+    expect(jan.baseCalculo.toNumber()).toBe(2500); // 4000 - 1500
+    expect(jan.impostoDevido!.toNumber()).toBeCloseTo(375); // 2500 * 0.15
+  });
+
   it("day trade não classificado (statusDayTrade pendente): fato pendente não entra no cálculo", () => {
     const ativos: AtivoParaApuracaoRendaVariavel[] = [
       {

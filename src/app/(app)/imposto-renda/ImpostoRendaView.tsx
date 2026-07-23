@@ -217,10 +217,10 @@ export default function ImpostoRendaView({
               <div key={r.categoria} className="card p-3">
                 <p className="text-xs text-faint mb-1">
                   {r.categoriaLabel}
-                  {r.origemMotor === "novo_fase4" && (
+                  {r.origemMotor !== "legado" && (
                     <span
                       className="ml-2 inline-block rounded-full bg-accent/10 text-accent px-2 py-0.5 text-[10px] align-middle"
-                      title="Calculado pelo motor novo (ledger fiscal + classificação de day trade reais) — ainda em validação, confira com um contador."
+                      title="Calculado pelo motor novo — ainda em validação, confira com um contador."
                     >
                       em validação
                     </span>
@@ -276,7 +276,7 @@ export default function ImpostoRendaView({
             <span className="text-ink">{formatarMes(l.anoMes)}</span>
             <span className="text-muted truncate">
               {l.categoriaLabel}
-              {l.origemMotor === "novo_fase4" && (
+              {l.origemMotor !== "legado" && (
                 <span
                   className="ml-1 inline-block rounded-full bg-accent/10 text-accent px-1.5 py-0.5 text-[9px] align-middle"
                   title="Calculado pelo motor novo — ainda em validação, confira com um contador."

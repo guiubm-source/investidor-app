@@ -6,6 +6,7 @@ import {
   aplicarTransacaoNaPosicao,
   ordenarTransacoes,
   precoMedioDoEstado,
+  calcularRetornoSimplesAcumulado,
   type TransacaoCalc,
 } from "./posicao-calculo";
 import type { TipoAtivo } from "./actions";
@@ -178,15 +179,13 @@ export async function obterRentabilidadeHistoricaAtivo(ativoId: string): Promise
     const valorPosicao = estado.quantidade * p.preco;
     const valorAplicado = estado.quantidade * custoMedio;
 
-    // "Retorno simples acumulado" (mesma fórmula da Carteira, ver §8.15):
-    // soma o que já foi embolsado em vendas parciais/totais ao que ainda
-    // está de pé, sobre tudo que já foi pago em compras até aqui.
-    // Ver §8.28: usa `totalVendidoLiquido` (principal + lucro), não
-    // `lucroRealizado` (só lucro) — mesma correção aplicada em toda a app.
-    const rentabilidadePct =
-      estado.totalInvestidoBruto > 0
-        ? ((valorPosicao + estado.totalVendidoLiquido) / estado.totalInvestidoBruto - 1) * 100
-        : null;
+    // "Retorno simples acumulado" (mesma fórmula da Carteira, ver §8.15,
+    // §8.28, §8.59 — fórmula única em posicao-calculo.ts).
+    const { pct: rentabilidadePct } = calcularRetornoSimplesAcumulado(
+      valorPosicao,
+      estado.totalVendidoLiquido,
+      estado.totalInvestidoBruto
+    );
 
     pontos.push({
       data: p.data,
@@ -285,12 +284,13 @@ export async function obterEvolucaoCarteira(): Promise<PontoEvolucaoCarteira[]> 
         totalInvestidoBrutoTotal += p.totalInvestidoBruto;
       }
     }
-    // Ver §8.28 — totalVendidoLiquido, não lucroRealizado (mesma correção
-    // aplicada por ativo, agora agregada em nível de carteira).
-    const rentabilidadePct =
-      totalInvestidoBrutoTotal > 0
-        ? ((valorTotal + totalVendidoLiquidoTotal) / totalInvestidoBrutoTotal - 1) * 100
-        : null;
+    // Ver §8.28, §8.59 — totalVendidoLiquido, não lucroRealizado (mesma
+    // correção aplicada por ativo, agora agregada em nível de carteira).
+    const { pct: rentabilidadePct } = calcularRetornoSimplesAcumulado(
+      valorTotal,
+      totalVendidoLiquidoTotal,
+      totalInvestidoBrutoTotal
+    );
     resultado.push({ data, valorTotal, rentabilidadePct });
   }
 

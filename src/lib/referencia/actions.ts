@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { BacenDiretorForm, BrasilPresidenteForm, MetaInflacaoForm, PesoIpcaGrupoForm } from "./schema";
 
@@ -11,6 +12,19 @@ export type AcaoResultado = { error?: string };
  * qualquer usuário autenticado lê e escreve o mesmo cadastro. Cadastrado em
  * Configurações, consumido pela aba Indicadores (filtros de mandato).
  */
+
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.59 (2026-07-22) — mesmo bug de cache de rota já
+ * corrigido em lib/carteira/actions.ts e lib/proventos/actions.ts: sem
+ * `revalidatePath`, quem edita Diretoria do Bacen/Presidentes/Pesos do
+ * IPCA/Metas de Inflação em `/configuracoes` e navega por link até
+ * `/indicadores` (sem F5) continua vendo o snapshot de ANTES da gravação —
+ * essas telas leem exatamente os mesmos dados compartilhados.
+ */
+function revalidarRotasAfetadas() {
+  revalidatePath("/configuracoes");
+  revalidatePath("/indicadores");
+}
 
 // ---------------------------------------------------------------------------
 // Diretoria do Bacen
@@ -64,6 +78,7 @@ export async function criarDiretorBacen(input: BacenDiretorForm): Promise<AcaoRe
   });
 
   if (error) return { error: "Não foi possível cadastrar o diretor." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -88,6 +103,7 @@ export async function editarDiretorBacen(id: string, input: BacenDiretorForm): P
     .eq("id", id);
 
   if (error) return { error: "Não foi possível salvar as alterações." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -95,6 +111,7 @@ export async function excluirDiretorBacen(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
   const { error } = await supabase.from("bacen_diretoria").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o registro." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -138,6 +155,7 @@ export async function criarPresidenteBrasil(input: BrasilPresidenteForm): Promis
   });
 
   if (error) return { error: "Não foi possível cadastrar o presidente." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -158,6 +176,7 @@ export async function editarPresidenteBrasil(id: string, input: BrasilPresidente
     .eq("id", id);
 
   if (error) return { error: "Não foi possível salvar as alterações." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -165,6 +184,7 @@ export async function excluirPresidenteBrasil(id: string): Promise<AcaoResultado
   const supabase = await createClient();
   const { error } = await supabase.from("brasil_presidentes").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o registro." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -231,6 +251,7 @@ export async function criarPesoIpca(input: PesoIpcaGrupoForm): Promise<AcaoResul
   });
 
   if (error) return { error: "Não foi possível cadastrar o peso." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -253,6 +274,7 @@ export async function editarPesoIpca(id: string, input: PesoIpcaGrupoForm): Prom
     .eq("id", id);
 
   if (error) return { error: "Não foi possível salvar as alterações." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -260,6 +282,7 @@ export async function excluirPesoIpca(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
   const { error } = await supabase.from("peso_ipca_grupo").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o registro." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -311,6 +334,7 @@ export async function criarMetaInflacao(input: MetaInflacaoForm): Promise<AcaoRe
   });
 
   if (error) return { error: "Não foi possível cadastrar a meta." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -333,6 +357,7 @@ export async function editarMetaInflacao(id: string, input: MetaInflacaoForm): P
     .eq("id", id);
 
   if (error) return { error: "Não foi possível salvar as alterações." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -340,5 +365,6 @@ export async function excluirMetaInflacao(id: string): Promise<AcaoResultado> {
   const supabase = await createClient();
   const { error } = await supabase.from("meta_inflacao").delete().eq("id", id);
   if (error) return { error: "Não foi possível excluir o registro." };
+  revalidarRotasAfetadas();
   return {};
 }

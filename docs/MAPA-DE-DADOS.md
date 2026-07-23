@@ -7099,6 +7099,570 @@ um ativo nacional e um internacional, editar manualmente um campo, conferir
 que PETR3 e PETR4 (se ambos existirem na carteira) compartilham a mesma
 empresa depois de buscar os dois, e alternar o toggle da Posição.
 
+### 8.57 Identidade visual e redesenho de UI — estudo dos modelos de referência (2026-07-22)
+
+**Status: estudo/diagnóstico, nenhuma decisão tomada, nenhum código mudado.**
+O Guilherme trouxe 8 componentes/telas de referência (React/Tailwind, a
+maioria no padrão shadcn) e pediu análise + insights antes de qualquer
+mudança — próximo passo é aguardar o próximo comando dele (que pode ser
+"gere modelos pra eu escolher" e/ou uma rodada de perguntas 1 a 1, conforme
+o protocolo). Esta seção registra o que foi estudado, pra não perder o
+raciocínio entre sessões.
+
+**Os 8 modelos e o que cada um ensina:**
+
+1. **Crypto stats card** (shadcn, `bg-card`/`text-card-foreground`) — market
+   cap + sparkline com gradiente + barra de dominância segmentada + lista
+   de moedas com logo/preço/variação num card só. Ensina: empilhar
+   "resumo → gráfico → breakdown → lista" num único card compacto.
+2. **Bonuses/Incentives card** (arco de pontos animado, framer-motion) —
+   visual mais "produto consumer" que "dashboard financeiro"; decorativo
+   antes de informativo. Ensina: uso de motion pra dar vida a um número
+   total, mas é o menos aplicável ao nosso domínio (informação densa
+   importa mais que ornamento aqui).
+3. **Prediction market card** (tema vívido verde/vermelho, tags de status,
+   timer, botões de ação primários lado a lado) — ensina: como comunicar
+   dois lados de uma decisão (sim/não, aqui seria "dentro/fora da faixa",
+   "comprado/vendido") com cor e peso visual fortes, e como um par de CTAs
+   grandes lado a lado converte melhor que um botão só.
+4. **Stock trends carousel** (logo + ticker + preço + variação, scroll
+   horizontal) — o mais diretamente reaproveitável: é quase literalmente
+   uma reformulação do que Posição/Ativos já fazem em lista vertical.
+5. **Spatial product showcase** (dark, glow radial, tipografia grande
+   dramática, toggle pill, barras de progresso com ícone) — o mais distante
+   esteticamente; é linguagem de vitrine de produto/hardware, não de
+   dashboard financeiro. Ensina: se quisermos um momento "hero" (ex. tela
+   de login, ou um resumo de patrimônio em destaque), esse tipo de
+   composição (glow + título grande) pode funcionar pontualmente, mas não
+   como padrão de tela cheia de dados.
+6. **Balance card com barra segmentada** (dark zinc-900, `%` por segmento
+   embaixo da barra) — o mais parecido com algo que JÁ existe no app: é
+   essencialmente uma versão mais polida do nosso `DesvioBar`/barra de
+   dominância da Alocação. Comparação direta possível.
+7. **Stacked bar chart com tooltip rico** (Recharts, breakdown + total no
+   tooltip) — tecnicamente o mais próximo de nós: já usamos Recharts
+   (gráfico do Dólar, ver §8.10/8.19). Ensina principalmente sobre
+   qualidade de tooltip (breakdown por série + total, ícone de cor por
+   série) — hoje nossos tooltips (onde existem) são mais simples.
+8. **meusdividendos.com** (site real do mesmo nicho: ações/FIIs/dividendos/
+   carteiras) — de longe a referência mais relevante, por ser concorrente
+   direto, não só um componente solto. Traz: barra de ticker ao vivo no
+   topo (índices/moedas/Selic/IPCA rolando), busca global de ativo no
+   header, nav por abas horizontal, "Radar de investimentos" (ranking/score
+   combinando valor+qualidade+renda+risco, com card por ativo mostrando
+   margem/DY/ROE), um "mapa do radar" (scatter/radar chart 2D posicionando
+   ativos por eixos Valor×Renda com "força" pro centro), e telas de
+   composição/evolução com donut de alocação + barras de proventos ao
+   longo do tempo.
+
+**Diagnóstico do estado atual do app (grounded no código, não por
+memória):** tema já é escuro (`globals.css` — fundo `#0e1512`, superfícies
+`#141b18`/`#1b241f`, acento verde `#1f8f5c`), então a direção "dark" de
+6/7 dos modelos já é compatível. Mas o resto é bem mais cru: (a) zero
+biblioteca de componentes — não há shadcn/ui, nem `components.json`, nem
+`lib/utils.ts` com `cn()`, nem `lucide-react`, nem `framer-motion`, nem
+`clsx`/`tailwind-merge`/`class-variance-authority` no `package.json` — tudo
+é `className` manual + classes utilitárias próprias (`.card`, `.btn`,
+`.input` em `globals.css`); (b) ícones da Sidebar são paths SVG escritos à
+mão num dicionário (`Sidebar.tsx`), não uma lib de ícones; (c) o Dashboard
+(`dashboard/page.tsx`) hoje é só um card de saudação + um gráfico de
+evolução do patrimônio — nenhum KPI card, nenhum resumo rápido tipo os
+modelos 1 ou 8; (d) `DesvioBar.tsx` (usado em Alocação e na página do
+Ativo) já é conceitualmente parecido com o modelo 6 (barra segmentada com
+números embaixo), mas visualmente mais simples (sem gradiente, sem
+ícones, cores só verde/vermelho binárias); (e) gráficos hoje são um mix:
+`SerieLinhaChart` é SVG próprio feito à mão (ver §8.15/decisão de não usar
+biblioteca em alguns lugares), enquanto Indicadores (Dólar) já usa Recharts
+com tooltip (§8.19) — inconsistência entre abas; (f) não há busca global,
+não há ticker tape, o header de cada página é só um `<h1>`/breadcrumb
+simples.
+
+**Lacuna técnica importante:** os 8 snippets de referência pressupõem a
+estrutura shadcn/ui (`@/components/ui/button`, `@/components/ui/card`,
+`cn()` de `@/lib/utils`, tokens CSS `--primary`/`--card`/
+`--muted-foreground`/`--chart-1`/`--chart-2`, mais `lucide-react` e
+`framer-motion`). Nenhum desses componentes cola no projeto como está hoje
+sem adaptação — não é "copiar e colar", é reescrever usando nossos tokens
+(`--color-accent`, `--color-surface`, `--color-muted` etc.) ou migrar o
+projeto pra rodar shadcn de verdade (o que facilitaria MUITO reaproveitar
+peças prontas no futuro, mas é uma decisão de arquitetura, não só de
+estilo — precisa entrar na rodada de perguntas quando o Guilherme retomar).
+
+**Ideias/insights por área (ainda sugestões, não decisões):**
+- *Dashboard/home:* hoje é o ponto mais fraco do app (só saudação + 1
+  gráfico). É onde os modelos 1, 7 e 8 mais se aplicam: uma fileira de
+  KPI cards (patrimônio total, variação hoje, proventos do mês, desvio da
+  Alocação) cada um com uma mini-sparkline, no estilo do modelo 7, mais um
+  bloco de composição (donut Macro/Classe, como no modelo 8) substituindo
+  o card de saudação isolado.
+- *Header/navegação:* considerar uma barra de indicadores ao vivo (estilo
+  ticker do modelo 8) usando dados que JÁ temos — Selic, IPCA, Dólar (aba
+  Indicadores) — e busca global de ativo (já temos `obterAtivosComPosicao`
+  como fonte, só falta UI); daria ao app uma sensação de "terminal" bem
+  mais forte que o `<h1>` simples de hoje.
+- *Cards de KPI/resumo:* padronizar um componente `KpiCard` (valor grande +
+  variação colorida + sparkline opcional), reaproveitável no Dashboard, na
+  Posição (resumo total) e na página do Ativo (métricas de posição) — hoje
+  cada tela desenha esse tipo de bloco à mão de um jeito ligeiramente
+  diferente (`Metrica`/`MetricaPendente` em `AtivoDetalheView.tsx`,
+  `ResumoTotal` em `PosicaoView.tsx`, o card de saudação do Dashboard).
+- *Gráficos:* decidir entre "tudo em Recharts" (unifica visual, tooltip
+  rico como o modelo 7, mas todo `SerieLinhaChart`/gráfico SVG próprio
+  precisaria ser migrado) vs. manter o SVG próprio só onde já funciona bem
+  e for mais leve — hoje já convivem os dois approaches (decisão histórica
+  documentada em §8.19), o que gera inconsistência visual entre abas.
+- *Barra de desvio/alocação:* `DesvioBar` e a barra de dominância da
+  Alocação são boas candidatas a ganhar o tratamento do modelo 6 (gradiente
+  sutil, ícone, número mais expressivo) sem mudar a lógica por trás.
+- *Radar/score de ativos (modelo 8):* é a ideia mais nova, sem equivalente
+  hoje no app — um score combinando indicadores que já calculamos no
+  checklist (`lib/ativos/checklist-estatisticas.ts`: P/L, ROE, DY, P/VP
+  etc.) poderia virar um "Radar" próprio, mas é uma FEATURE nova (não só
+  redesign visual) — bom candidato a discutir separadamente, com pergunta
+  de escopo própria, não misturado na rodada de identidade visual.
+- *Iconografia:* migrar os paths SVG manuais da Sidebar (e de outros
+  lugares) pra uma lib de ícones (`lucide-react`, já usado em vários dos
+  modelos) reduziria manutenção e destravaria consistência visual —
+  decisão de baixo risco, alto ganho, independente da discussão maior de
+  shadcn.
+- *Motion:* framer-motion aparece em 2 dos 8 modelos (sparkline "desenhando",
+  arco animado) — pode valer a pena adotar em microinterações pontuais
+  (números que sobem ao carregar, barra de desvio que anima), mas com
+  moderação: o app é de dados financeiros sérios, não um app consumer —
+  animação decorativa demais (como o modelo 2) provavelmente foge do tom.
+
+**Prioridade se fosse decidir hoje (opinião, não decisão):** 1) resolver a
+lacuna técnica primeiro (shadcn + tokens ou não) porque isso muda o custo
+de tudo o mais; 2) Dashboard como primeira tela a redesenhar (maior
+gap de valor visível); 3) componente `KpiCard` compartilhado; 4) unificar
+estratégia de gráficos; 5) ticker/busca no header; 6) Radar de ativos como
+iniciativa separada (feature nova, não redesign).
+
+### 8.58 Estudo completo do meusdividendos.com — todas as abas (2026-07-22)
+
+**Status: estudo/diagnóstico, nenhuma decisão tomada, nenhum código mudado.**
+Continuação do §8.57 — ali só a home tinha sido vista; aqui foram lidas (via
+fetch direto, sem JS, conteúdo renderizado no servidor) as 7 abas do menu
+mais uma página de ativo individual: `/agenda-dividendos`,
+`/ranking-dividendos`, `/radar`, `/carteiras`, `/news`, `/comunidade`,
+`/smartfolio` e `/acao/PETR4`. Registro aqui o que cada uma faz, não só o
+visual — o pedido foi aprender "todas as funções e todas as abas".
+
+**Header/navegação (padrão em todas as páginas):**
+Busca global de ativo com atalho de teclado `/` (autofoco no campo);
+ticker de mercado ao vivo no topo (mostra "Carregando snapshot do
+mercado…" antes de hidratar — ou seja, é client-side, dado vem depois);
+breadcrumb (Início > Seção > Página) em toda página interna; menu de
+Aparência com 3 controles independentes — tema (Claro/Escuro), **esquema
+de cores incluindo modo Daltonismo** (acessibilidade cromática real, não
+só claro/escuro), e tamanho de fonte. Isso é mais robusto que o toggle
+único que cogitamos para o nosso app.
+
+**Agenda de Dividendos** (`/agenda-dividendos`): calendário mensal
+navegável (mês anterior/próximo + atalho "Hoje" + pills dos 12 meses),
+toggle Brasil/EUA, filtro por classe (Ações/FII/ETF/BDR), filtro Data
+com/Pagamento, busca por código do ativo. Lista dia a dia; quando um dia
+tem muitos eventos, corta em poucos + rótulo tipo "+9 +5 +-1" (contagem
+por tipo) com botão "Esconder"/expandir. Resumo do mês no rodapé
+("73 ações têm proventos… 81 pagamentos e 21 datas com") e FAQ em
+acordeão. É essencialmente nossa aba Proventos (grade mensal) só que
+agregada para o mercado inteiro, não só a carteira do usuário.
+
+**Ranking de Dividendos** (`/ranking-dividendos`): seletor de ano,
+toggle Brasil/EUA, tabs de classe de ativo. Tabela Top 100: #, Ativo
+(ticker+nome+link), Rent. YTD, **DY do ano em destaque (negrito)**,
+p.p. vs ano anterior, Total pago no ano. Badges "Líder"/"Vice"/"Top 3"
+nas 3 primeiras posições — toque editorial simples que dá leveza a uma
+tabela densa.
+
+**Radar de Investimentos** (`/radar`) — a peça central e mais sofisticada
+do site, e a que mais foge do escopo do nosso app hoje:
+- Filtros: Classe (Todos/Ações/FIIs), **Tese** (Oportunidade/Valor/Renda/
+  Qualidade/Risco — cada uma com tooltip explicando o critério: "desconto
+  contra fundamentos e múltiplos", "yield com sustentabilidade" etc.), DY
+  mínimo, setor (ações) ou segmento (FIIs), botão "Aplicar filtros".
+- **"Mapa do radar"**: gráfico de dispersão/radar plotando até 50 ativos
+  ao mesmo tempo, eixos rotulados QUALIDADE/RENDA/RISCO/VALOR — cada
+  ativo é um ponto cujo ângulo indica qual pilar é mais forte e a
+  distância ao centro indica o score total (quanto mais perto do centro,
+  maior o score); cor/intensidade por faixa (Forte/Bom/Neutro). É a
+  visualização mais original do site — não existe equivalente hoje no
+  nosso app nem nos 7 modelos de referência anteriores.
+- **Tabela "Top 100 ativos"**, ordenável por qualquer pilar: rank, ativo
+  (ticker+nome+setor), Score consolidado com badge Forte/Bom/Neutro,
+  os 4 sub-scores (Valor/Renda/Qualidade/Risco), e uma **"Leitura"
+  gerada automaticamente em texto** ("Destaque por margem de segurança
+  de 109,8%, ROE de 24,7%, DY de 9,7%") — transforma número em frase,
+  reduz a carga de interpretar a tabela. Export CSV + copiar link.
+- Isso confirma o que o §8.57 já sinalizou: é **feature nova** (motor de
+  score fundamentalista comparável entre ativos), não um redesign de
+  algo que já existe no nosso app — reaproveitaria os indicadores que já
+  calculamos em `lib/ativos/checklist-estatisticas.ts`, mas precisa de um
+  motor de pontuação e normalização novo.
+
+**Carteiras teóricas** (`/carteiras`): backtest de 5 anos de uma carteira
+hipotética montada com os 10 melhores ativos de cada tese do Radar,
+rebalanceada mensalmente. Estrutura: bloco de risco (concentração via
+índice HHI, maior posição, volatilidade ponderada, DY ponderado — com
+**alerta textual automático** tipo "Volatilidade elevada" quando o número
+foge do esperado); bloco de resumo (rentabilidade total, CAGR, proventos
+recebidos, lucro realizado, comparação lado a lado com IBOV/CDI/IFIX no
+mesmo período); gráfico de rentabilidade histórica (base 100) com toggle
+de benchmark; proventos mensais em barra; **donut de alocação em dois
+anéis** (interno = classe, externo = setor); tabela de proventos por
+mês/ano; tabela de posição atual (peso/qtde/preço médio/última/resultado/
+proventos); histórico completo de movimentações agrupado por mês/ano.
+FAQ extenso — vale destacar que reconhecem abertamente o **viés de
+sobrevivência** nos anos iniciais do backtest (ativos escolhidos "já
+sabendo o que deu certo"), uma transparência que vale de exemplo se
+fizermos qualquer simulação/backtest no futuro. Também é feature nova,
+não redesign — mistura Radar + o conceito de carteira-modelo, que não
+existe no nosso app.
+
+**Notícias** (`/news`): central editorial simples — cards com categoria,
+data, imagem, resumo de 2-3 linhas; sidebar com "ativos em destaque"
+(tickers mais citados) e nuvem de tags; paginação (9 páginas). Conteúdo é
+factual/informativo (anúncios de dividendos), não análise opinativa.
+
+**Comunidade** (`/comunidade`): feed estilo fórum/rede social — tabs de
+ordenação (Recentes/Mais votados/Em alta), categorias (Análises/Dúvidas/
+Dividendos/Notícias/Operações/Sugestões), avatar com inicial, menção de
+ativo como chip clicável "$TICKER", contagem de votos e comentários,
+respostas oficiais da conta "Suporte" aparecem embutidas no próprio post,
+selo "Beta" em alguns usuários (parecem ser testers do produto pago),
+ranking "Usuários notáveis" (posts·reputação) e "ativos em destaque"
+lateral. Na prática funciona como um canal de suporte/feedback disfarçado
+de comunidade — boa parte dos posts lidos são bugs reportados ou dúvidas
+de uso, respondidos publicamente pelo time. Não é prioridade para nós
+(não temos base de usuários para isso ainda), mas é uma ideia válida para
+o futuro: um canal de feedback público reduz repetição de suporte.
+
+**Smartfolio** (`/smartfolio`): não é uma aba de conteúdo, é a **landing
+page comercial** do produto pago de carteira (o equivalente ao nosso app
+inteiro). Estrutura: pills de funcionalidade (Carteira/Proventos/
+Operação/Impostos/Comunicados/Importação), seção "por quê" com ícones,
+detalhamento por área (Patrimônio e desempenho; Composição e Evolução —
+com o destaque "arraste para o lado e visualize sua alocação em qualquer
+momento histórico", ou seja, a composição tem uma dimensão temporal
+navegável, não é só uma foto do momento atual; Históricos e relatórios —
+mapa de calor mensal de compras/vendas; Outros recursos: Importações,
+Layout personalizável, Apuração de impostos, Extrato IR, Inbox resumido,
+Agenda de dividendos) e por fim 4 planos (Free/Básico/Pro/Beta) com
+checklist de recursos por plano. Não se aplica ao redesign — é modelo de
+negócio, não interface — mas duas ideias soltas valem nota: (1) "arraste
+e veja a composição em qualquer momento histórico" é uma forma elegante
+de dar profundidade temporal a um donut de composição, algo que a nossa
+Alocação/Posição hoje só mostra no presente; (2) "Inbox resumido" de
+fatos relevantes é próximo do que já cogitamos como ideia solta em
+Indicadores/Ativo (avisos), mas nunca formalizamos.
+
+**Página de ativo individual** (`/acao/PETR4`) — a página mais profunda
+do site e a mais próxima da nossa página de Ativo:
+- Cabeçalho: ticker + nome + setor, e uma **linha de badges qualitativos
+  gerados automaticamente** ("Muito rentável", "Endividam. confortável",
+  "Dividendos muito sustentáveis", "Preço atrativo") — tradução de números
+  em rótulos de leitura rápida, sem o usuário precisar interpretar
+  indicador nenhum.
+- Faixa de estatísticas-chave: cotação + variação + faixa de 52 semanas;
+  **Score do Ativo** (0-10, com rótulo tipo "Regular"); Margem de
+  Segurança % + preço justo; Beta. Segunda faixa: Lucro líq., Margem
+  líq., P/L, Payout, P/VP, Dív.Líq./EBITDA — cada card é **âncora
+  clicável** que rola até a seção detalhada correspondente.
+- DY em destaque com selo de sequência ("8 anos seguidos" pagando).
+- Mini-calendário de 12 meses (abreviados) linkando pra Agenda.
+- **Índice de 24 seções** agrupado em 6 categorias (Essencial,
+  Rendimentos, Mercado, Ferramentas, Fundamentos, Informações
+  relevantes) com um botão "Expandir visão completa/Recolher visão
+  completa" — GUI de sumário para uma página muito longa.
+- Seção **Score** (0-10): decompõe em 5 pilares (Rentabilidade,
+  Endividamento, Eficiência, Crescimento, Valuation), cada um com peso
+  máximo 2.0, métrica-chave e **frase interpretativa** ("ROE médio na
+  faixa de empresas-referência (15–20%)"). Aviso explícito: "nota gerada
+  de forma 100% mecânica… não é recomendação de investimento".
+- Seção **Preço Justo**: 3 métodos lado a lado (Graham, Bazin, Múltiplo
+  Histórico), cada um mostrando a fórmula usada, o preço resultante, a
+  margem de segurança e uma frase de quando o método funciona melhor —
+  e o consenso é a média simples dos 3.
+- Depois: Resumo financeiro, Histórico de Dividendos (gráfico valor+DY),
+  Rentabilidade Anual (valorização vs DY), Sustentabilidade dos
+  Dividendos (score à parte), Consistência (streak de pagamentos), Mapa
+  de Calor de Dividendos (tabela ano×mês — o mesmo padrão visual que já
+  cogitamos ter em Proventos), Cotação Histórica (preço vs preço+dividendo
+  reinvestido, com tabela de retorno em 1/3/5/10 anos e "Tudo"), Tabela
+  de Rentabilidade Mensal (sazonalidade), Eventos Corporativos,
+  Análise de Risco (volatilidade, drawdown, Sharpe, Beta, VaR 95%),
+  **Calculadora de Aporte** (simulador de "o que teria acontecido se
+  eu tivesse investido X todo mês"), Indicadores, DuPont e ROIC, DRE,
+  Balanço, Fluxo de Caixa, DVA, Diluição/Recompra de ações, **Peers**
+  (comparação com até 5 ações do mesmo setor, destacando quem está
+  acima/abaixo da mediana), Cadastro (dados CVM oficiais), FAQ.
+- Muita coisa aqui (DRE/Balanço/Fluxo de Caixa/DVA de 5 anos, Score,
+  Preço Justo, Peers) é **funcionalidade nova**, não redesign — o nosso
+  checklist de `lib/ativos/checklist-estatisticas.ts` cobre parte disso
+  (fundamentos básicos), mas não tem preço justo, score agregado nem
+  comparação com peers. Registro só como mapa do território; não é
+  pedido de escopo.
+
+**Amarração com o resto do estudo (§8.57):** nada aqui muda a análise
+técnica já feita (gap de shadcn/tokens, zero biblioteca de componentes,
+ícones SVG à mão, Dashboard mínimo) — essa parte do diagnóstico continua
+valendo. O que este estudo mais profundo confirma é a separação entre
+**redesign** (layout, cards, gráficos, tipografia — aplicável a telas que
+já existem no nosso app: Dashboard, Alocação, Posição, Ativo) e
+**features novas inspiradas no concorrente** (Radar/score de ativos,
+Carteiras-modelo/backtest, Ranking de dividendos do mercado, Notícias,
+Comunidade) — que são iniciativas de produto separadas, com escopo,
+fonte de dados e esforço próprios, e não devem ser misturadas na mesma
+decisão de redesign visual.
+
+Aguardando o próximo comando antes de qualquer mockup, pergunta de
+escopo ou mudança de código — segue valendo a instrução original de que
+esta fase é só aquisição de conhecimento.
+
+### 8.59 Varredura completa de segurança e qualidade (2026-07-22)
+
+**Status: diagnóstico apenas — nenhum código mudado ainda.** A pedido do
+Guilherme antes de uma pausa, rodei 5 auditorias em paralelo (subagentes
+só-leitura) cobrindo: segurança/infra, motor fiscal de IR, Carteira/
+Posição/Alocação/Proventos, Indicadores + integrações externas, e
+frontend/UX geral — incluindo uma varredura total (não por amostra) do
+bug recorrente de `export const` em arquivo `"use server"` (já causou 2
+quebras de build reais antes). Dois achados críticos foram
+re-verificados manualmente por mim antes de entrar aqui (grep direto no
+código, não só confiança no relatório do subagente).
+
+**Verificado sem problema (vale registrar o que já está sólido, não só
+o que falta):** RLS habilitado nas 31 tabelas do schema; nenhum segredo
+hardcoded no repositório; rotas de cron falham fechado se `CRON_SECRET`
+não bate; `src/proxy.ts` protege 1:1 todas as rotas do grupo `(app)`;
+nenhuma das 3 regressões históricas de Posição (§8.26-28) reapareceu;
+eventos societários (bonificação/desdobramento) propagados corretamente
+em todos os read-paths, inclusive nos blocos novos (`gruposPorAlocacao`);
+DARF (mínimo R$10, arredondamento) e isenção de R$20k/mês corretos;
+suíte de 58 testes do IR passando; e a varredura total de `export const`
+em arquivo `"use server"` não achou nenhuma violação nova nos 19
+arquivos reais do projeto (confirmado por 2 subagentes independentes,
+em módulos diferentes).
+
+**CRÍTICO**
+
+1. **Motor fiscal duplicado (IR):** `src/lib/ir/actions.ts` mantém um
+   motor legado inteiro em `number` nativo (`apurarVendasDoAtivo`,
+   `obterRelatorioIR` — linhas 144-702) que ainda governa a **tela
+   principal** de Imposto de Renda para renda fixa e exterior (nunca
+   migraram pro motor novo em Decimal). O motor novo e correto
+   (`motores/renda-fixa-brasil.ts`, `motores/exterior-lei-14754.ts`) só
+   alimenta o PDF exportado. Confirmado por leitura direta: `actions.ts`
+   só importa **tipos** desses motores, nunca as funções. Resultado:
+   valor mostrado na tela pode divergir do valor no PDF pra renda
+   fixa/exterior — dois "fatos fiscais" diferentes sem aviso ao usuário.
+   Mesmo ações/FII caem de volta nesse motor legado sempre que a versão
+   de regra do ano estiver incompleta (estado real do sistema, não
+   hipotético).
+2. **Sem paginação em Livro-razão e Proventos:** `obterLivroRazao`
+   (`src/lib/carteira/actions.ts`) e `obterLivroProventos`
+   (`src/lib/proventos/actions.ts`) buscam todas as linhas sem
+   `.range()`/`.limit()` — confirmado por grep direto (zero ocorrências).
+   Isso é inconsistente com o resto do projeto, que já usa paginação em
+   lote em `lib/ir/consultas/*` justamente porque o PostgREST corta
+   silenciosamente acima do limite padrão de linhas. Um usuário com
+   histórico grande perde lançamentos sem nenhum erro — dado errado, não
+   só lento.
+
+**IMPORTANTE**
+
+- Tabelas de indicadores compartilhados (Selic/IPCA/Dólar/Fluxo
+  Estrangeiro/Diretoria Bacen/Presidentes) usam policy
+  `auth.role() = 'authenticated'` — qualquer conta nova (cadastro é
+  aberto, sem allowlist) pode escrever/apagar esse dado compartilhado.
+- Cadastro (`src/app/cadastro/actions.ts`) vaza enumeração de conta
+  ("já existe conta com esse email") — inconsistente com o cuidado já
+  tomado em esqueci-senha/login (mensagens genéricas de propósito).
+- Falta `schema.safeParse()` na maioria dos módulos de Server Action —
+  só `lib/ir/actions.ts` valida input no servidor; os demais só validam
+  no client via `zodResolver`, então uma chamada direta à Server Action
+  (bypassando o form) confia só nas `CHECK constraints` do Postgres.
+- Troca de senha (`configuracoes/actions.ts: trocarSenha`) não exige
+  reautenticação — sessão sequestrada pode trocar a senha e travar o
+  dono de fora permanentemente.
+- Segredo de cron aceito via `?secret=` na URL além de header — fica
+  exposto em logs/histórico.
+- Retenção na fonte (dedo-duro 0,005%/1%) não implementada em nenhum
+  motor de IR — DARF mostrado é valor bruto, sem abater retenção já
+  feita pela corretora (dívida técnica já conhecida, reforçando aqui).
+- Compensação de prejuízo entre anos: lógica correta e sem regressão,
+  mas sem teste dedicado no motor mais usado (`renda-variavel-brasil`) —
+  só o motor de exterior e o dashboard têm caso de teste cruzando ano.
+- Fórmula de retorno acumulado duplicada em 3 arquivos (`posicao.ts`,
+  `ativos/actions.ts`, `preco-historico.ts`) — hoje consistente, mas é
+  exatamente o padrão de cópia que já gerou o bug do §8.28 antes.
+- Nenhum timeout configurado nas chamadas `fetch` externas (Yahoo,
+  brapi.dev, Bacen) — API lenta pode estourar o tempo de execução da
+  function no meio de um lote.
+- Sem lock server-side no botão "Atualizar cotações" — cliques
+  concorrentes/múltiplas abas disparam chamadas duplicadas às APIs
+  externas (idempotente, mas desperdiça chamadas e aproxima de rate
+  limit).
+- Dados desatualizados continuam silenciosos na UI (pendência já
+  conhecida, §8.17/§8.49) — sem indicador de "atualizado há X dias".
+- Nenhum `error.tsx`/`loading.tsx`/`Suspense` em todo o `src/app` — erro
+  cai no handler genérico do Next em vez de uma tela da marca do app.
+- O padrão "erro visível em vez de silêncio" (bug #159, corrigido no
+  fetch inicial) não foi replicado no refetch client-side pós-mutação em
+  `AtivosView.tsx`, `ProventosView.tsx`, `CarteiraView.tsx` — regressão
+  parcial do próprio bug corrigido antes (comparar com `AlocacaoView.tsx`,
+  que faz certo).
+- Botão "Remover" classificação no Ativo (`AtivoDetalheView.tsx`) sem
+  `ConfirmModal` e sem checar erro do resultado — único ponto destrutivo
+  inconsistente nesse arquivo.
+- `revalidatePath` ausente em 3 módulos inteiros de mutação (`lib/
+  alocacao/actions.ts`, `lib/indicadores/actions.ts`,
+  `lib/referencia/actions.ts`, ~53 funções no total) — cache do Next pode
+  ficar desatualizado ao navegar entre rotas por link em vez de refetch
+  direto na própria tela.
+
+**MENOR** (hardening/consistência, sem urgência): `Number()` prematuro
+na borda do ledger fiscal antes de virar `Decimal` (risco baixo, dado
+cabe em `double` hoje); mensagem de erro do brapi.dev sempre sugere
+"verifique o token" mesmo quando o erro é outro; upsert de empresa em
+duas etapas sem transação (erro visível se a 2ª falhar, não é
+silencioso); Livro-razão sem `overflow-x-auto` (as outras tabelas densas
+têm); formatadores de moeda/data/pct duplicados em ~25 arquivos
+(já era #126, escopo agora confirmado); Sidebar sem drawer dedicado pra
+mobile (não quebra, só não é otimizada).
+
+Nenhuma correção foi implementada nesta rodada — é levantamento pra
+priorização. Lista de prioridade sugerida (opinião, não decisão): (1) os
+2 críticos (motor fiscal duplicado + paginação faltando); (2) segurança
+de escrita nas tabelas compartilhadas + falta de validação server-side,
+por serem simples de corrigir e de risco real; (3) os demais itens
+importantes, na ordem que fizer mais sentido pro Guilherme.
+
+#### Execução das correções (2026-07-22)
+
+A pedido do Guilherme ("EXECUTE TODAS"), as correções abaixo foram
+implementadas nesta mesma sessão, verificadas com `tsc --noEmit` +
+`npx vitest run` (59/59 testes) + checagem de integridade de arquivo
+(`wc -l -c` + contagem de bytes nulos) depois de cada lote de edição,
+sem quebrar nenhuma regressão histórica (§8.26-28, §8.31 etc.).
+
+**CRÍTICO — corrigidos:**
+
+1. **Motor fiscal duplicado (IR).** `obterRelatorioIR`
+   (`src/lib/ir/actions.ts`) agora chama `apurarRendaFixaBrasilDoUsuario`
+   (fase 6) e `apurarGanhoCapitalExteriorDoUsuario` (fase 7) — mesmo
+   padrão de substituição gradual já usado na fase 4b para renda
+   variável: se a versão de regra vigente existir, as linhas
+   `renda_fixa_tributavel`/`renda_fixa_isenta`/`internacional` calculadas
+   pelo motor legado em `number` são substituídas pelas do motor novo em
+   `Decimal`, com fallback gracioso pro legado se a fundação de regras
+   estiver incompleta. Efeito mais importante: a categoria
+   `internacional` corrige um bug de cálculo real, não só de arquitetura
+   — o motor legado somava `preco_unitario`/`custos` em USD como se já
+   estivessem em reais (nunca lia `transacoes.cambio`/`moeda`); o motor
+   novo converte evento a evento pelo câmbio de cada operação
+   (`consultas/exterior.ts`). Como o motor novo de exterior apura só por
+   ANO (Lei 14.754, sem granularidade mensal), as linhas mensais
+   informativas de "internacional" foram removidas em vez de continuar
+   mostrando a soma na moeda errada — nunca aproximamos valor fiscal
+   (§8.32.31). O tipo `origemMotor` (`LinhaMensal`/`ResumoAnualCategoria`)
+   ganhou os valores `"novo_fase6"`/`"novo_fase7"` (além de
+   `"novo_fase4"`/`"legado"` já existentes); o selo "em validação" na UI
+   (`ImpostoRendaView.tsx`) passou a aparecer pra qualquer origem
+   diferente de `"legado"`, com tooltip genérico (antes citava
+   especificamente "classificação de day trade", que só se aplica à
+   renda variável).
+2. **Sem paginação em Livro-razão e Proventos.** `obterLivroRazao`
+   (`lib/carteira/actions.ts`) e `obterLivroProventos`
+   (`lib/proventos/actions.ts`) agora paginam via um novo helper
+   compartilhado `src/lib/supabase/paginacao.ts`
+   (`buscarTodasLinhas`, loop de `.range()` em lotes de 1000), o mesmo
+   padrão que `lib/ir/consultas/*` já usava — elimina o corte silencioso
+   do PostgREST acima do limite padrão de linhas.
+
+**IMPORTANTE — corrigidos:**
+
+- Cadastro (`src/app/cadastro/actions.ts`): mensagem de erro de conta
+  duplicada trocada por uma genérica, fechando a enumeração de conta.
+- Fórmula de "retorno simples acumulado" extraída pra uma única função
+  (`calcularRetornoSimplesAcumulado`, `lib/ativos/posicao-calculo.ts`),
+  removendo a duplicação em `posicao.ts`/`ativos/actions.ts`/
+  `preco-historico.ts` (mesmo padrão de cópia que já causou o bug do
+  §8.28).
+- Timeout de 8-10s (`AbortSignal.timeout`) adicionado em todas as
+  chamadas `fetch` externas sem timeout: Yahoo Finance
+  (`yahoo-finance.ts`), brapi.dev (`empresas.ts`) e Bacen
+  (`api/cron/dolar/route.ts`), com mensagens de erro diferenciadas por
+  tipo de falha (timeout vs. HTTP 401/403/404 vs. genérico).
+- Refetch client-side pós-mutação em `AtivosView.tsx`,
+  `ProventosView.tsx` e `CarteiraView.tsx` agora envolvido em try/catch +
+  toast de erro — mesmo padrão que `AlocacaoView.tsx` já usava; sem
+  isso, uma falha de rede/RLS no refetch deixava a lista desatualizada
+  em silêncio.
+- Botão "Remover" classificação (`AtivoDetalheView.tsx`) agora abre um
+  `ConfirmModal` (mesmo padrão do botão "Excluir" no mesmo arquivo) e
+  checa `resultado.error` antes de considerar sucesso.
+- `revalidatePath` adicionado a todas as ~30 funções de mutação de
+  `lib/alocacao/actions.ts`, `lib/indicadores/actions.ts` e
+  `lib/referencia/actions.ts` (cada arquivo ganhou seu próprio helper
+  `revalidarRotasAfetadas()`, mesmo padrão já usado em
+  `lib/carteira/actions.ts`/`lib/proventos/actions.ts`) — cobre
+  `/alocacao`, `/ativos`, `/indicadores` e `/configuracoes`.
+- Teste de regressão explícito para compensação de prejuízo atravessando
+  o ano-calendário no motor mais usado
+  (`renda-variavel-brasil.test.ts` — dezembro de um ano abatendo lucro de
+  janeiro do ano seguinte); antes só o motor de exterior e o dashboard
+  tinham esse caso coberto.
+- `overflow-x-auto` adicionado à tabela densa do Livro-razão
+  (`LivroRazaoView.tsx`), mesmo padrão já usado em
+  `PosicaoView.tsx`/`ProventosView.tsx`.
+- Mensagem de erro do brapi.dev (`empresas.ts`) diferenciada por status
+  HTTP (401/403 → problema de token; 404 → ticker não encontrado; outro
+  → genérico) em vez de sempre sugerir "verifique o token".
+- `error.tsx` e `loading.tsx` criados em `src/app/(app)/` — antes um
+  erro não tratado em qualquer aba autenticada caía no handler genérico
+  do Next em vez de uma tela com a identidade visual do app; a
+  navegação entre abas também não tinha nenhum indicador de
+  carregamento via Suspense.
+
+**Deliberadamente NÃO implementados nesta rodada** (são decisão de
+produto/arquitetura, não bug — ficam pro Guilherme escolher o caminho
+antes de codar, conforme a seção 1 deste documento):
+
+- Retenção na fonte (dedo-duro 0,005%/1%) nos motores de IR — feature
+  nova, não correção.
+- Política de RLS mais restrita nas tabelas de indicadores
+  compartilhados (`auth.role() = 'authenticated'` hoje permite qualquer
+  conta escrever) — precisa decidir entre write só via service role,
+  claim de admin customizada, ou restringir a um `profile_id` dono.
+  Continua exatamente como o item já listado em "IMPORTANTE" acima.
+- Reautenticação antes de trocar senha
+  (`configuracoes/actions.ts: trocarSenha`) — precisa desenhar o fluxo
+  de reauth do Supabase.
+- Lock distribuído no botão "Atualizar cotações" — precisa de tabela/
+  design novo (hoje é idempotente, só desperdiça chamada).
+- Indicador de "atualizado há X dias" na UI — trabalho de design, não
+  bug (dado já vem correto, só falta o indicador).
+- Centralização de formatadores duplicados em `lib/format.ts` (~25
+  arquivos) — refactor mecânico grande, item de backlog pré-existente
+  (#126), mantido como está por ora.
+- `Number()` prematuro na borda do ledger fiscal antes de `Decimal` —
+  risco baixo hoje (cabe em `double`), mas mexe no ledger fiscal
+  principal; melhor com uma sessão dedicada e testes extras, não como
+  parte de um lote grande de fixes.
+- Upsert de empresa em duas etapas sem transação/RPC — já era prioridade
+  baixa no relatório original; erro já é visível se a 2ª etapa falhar,
+  não é um bug silencioso.
+- Sidebar sem drawer dedicado pra mobile — o próprio relatório original
+  já classificou como "próximo passo de design", não bug.
+- `schema.safeParse()` server-side ausente na maioria dos módulos (só
+  `lib/ir/actions.ts` valida hoje) — escopo grande (quase todos os
+  módulos de Server Action), risco de regressão alto se feito às pressas
+  num lote; recomendo tratar como projeto à parte.
+- Segredo de cron aceito via `?secret=` na URL além de header — mudança
+  de contrato de infraestrutura (quem/o que chama a rota de cron
+  precisaria ser atualizado junto), fora do escopo de um fix de código.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

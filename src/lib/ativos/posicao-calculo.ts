@@ -189,3 +189,33 @@ export function ordenarTransacoes<T extends { data: string; createdAt: string }>
     return a.createdAt < b.createdAt ? -1 : 1;
   });
 }
+
+/**
+ * "Retorno simples acumulado" — fórmula única (ver §8.28, correção
+ * 2026-07-20): usa `totalVendidoLiquido` (dinheiro TOTAL já embolsado em
+ * vendas — principal + lucro), nunca `lucroRealizado` isolado (só a fatia de
+ * lucro), porque isso descartava o principal devolvido em qualquer venda
+ * parcial anterior — subestimando (às vezes catastroficamente) o retorno de
+ * ativos com esse histórico.
+ *
+ * Extraída em 2026-07-22 (docs/MAPA-DE-DADOS.md §8.59): a mesma fórmula
+ * estava copiada em 6 lugares (posicao.ts x3, ativos/actions.ts,
+ * preco-historico.ts x2) — cópia-e-cola, não uma função compartilhada.
+ * Qualquer correção futura que só tocasse alguns dos 6 regrediria os outros
+ * em silêncio (foi assim que o bug do §8.28 nasceu). Devolve
+ * `{ valor, pct }`, ambos `null` quando não há base de investimento
+ * (`totalInvestidoBruto <= 0`) — cabe ao chamador decidir se prefere `0` em
+ * vez de `null` nesse caso (alguns agregados de grupo/carteira preferiam
+ * `0`; ver comentário nos pontos de chamada).
+ */
+export function calcularRetornoSimplesAcumulado(
+  valorAtual: number,
+  totalVendidoLiquido: number,
+  totalInvestidoBruto: number
+): { valor: number | null; pct: number | null } {
+  if (totalInvestidoBruto <= 0) return { valor: null, pct: null };
+  return {
+    valor: valorAtual + totalVendidoLiquido - totalInvestidoBruto,
+    pct: ((valorAtual + totalVendidoLiquido) / totalInvestidoBruto - 1) * 100,
+  };
+}

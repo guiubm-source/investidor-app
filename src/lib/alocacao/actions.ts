@@ -1,10 +1,25 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { ClasseForm, MacroForm, SetorForm } from "./schema";
 import { obterAtivosComPosicao, type TipoAtivo } from "@/lib/ativos/actions";
 
 export type AcaoResultado = { error?: string };
+
+/**
+ * Ver docs/MAPA-DE-DADOS.md §8.59 (2026-07-22) — mesmo bug de cache de rota já
+ * corrigido em lib/carteira/actions.ts e lib/proventos/actions.ts: sem
+ * `revalidatePath`, quem navega para `/alocacao` ou `/ativos` por link (sem
+ * F5) depois de criar/editar/mover/excluir Macro/Classe/Setor continua vendo
+ * o snapshot de ANTES da gravação — `/ativos` mostra `classeNome`/`setorNome`
+ * lidos das mesmas tabelas. A própria aba Alocação sempre mostra certo
+ * porque refaz o fetch on-demand (`atualizar()`), sem depender desse cache.
+ */
+function revalidarRotasAfetadas() {
+  revalidatePath("/alocacao");
+  revalidatePath("/ativos");
+}
 
 /**
  * Campos de peso comuns a todo nó da árvore (Macro/Classe/Setor/Ativo) desde
@@ -305,6 +320,7 @@ export async function criarMacro(input: MacroForm): Promise<AcaoResultado & { id
     if (error.code === "23505") return { error: "Já existe um Macro com esse nome." };
     return { error: "Não foi possível criar o Macro." };
   }
+  revalidarRotasAfetadas();
   return { id: data.id };
 }
 
@@ -332,6 +348,7 @@ export async function editarMacro(id: string, input: MacroForm): Promise<AcaoRes
     if (error.code === "23505") return { error: "Já existe um Macro com esse nome." };
     return { error: "Não foi possível salvar o Macro." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -349,6 +366,7 @@ export async function excluirMacro(id: string): Promise<AcaoResultado> {
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível excluir o Macro." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -413,6 +431,7 @@ export async function criarClasse(macroId: string, input: ClasseForm): Promise<A
     if (error.code === "23505") return { error: "Já existe uma classe com esse nome nesse Macro." };
     return { error: "Não foi possível criar a classe." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -448,6 +467,7 @@ export async function editarClasse(id: string, input: ClasseForm): Promise<AcaoR
     if (error.code === "23505") return { error: "Já existe uma classe com esse nome nesse Macro." };
     return { error: "Não foi possível salvar a classe." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -465,6 +485,7 @@ export async function excluirClasse(id: string): Promise<AcaoResultado> {
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível excluir a classe." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -496,6 +517,7 @@ export async function criarSetor(classeId: string, input: SetorForm): Promise<Ac
     if (error.code === "23505") return { error: "Já existe um setor com esse nome nessa classe." };
     return { error: "Não foi possível criar o setor." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -531,6 +553,7 @@ export async function editarSetor(id: string, input: SetorForm): Promise<AcaoRes
     if (error.code === "23505") return { error: "Já existe um setor com esse nome nessa classe." };
     return { error: "Não foi possível salvar o setor." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -548,6 +571,7 @@ export async function excluirSetor(id: string): Promise<AcaoResultado> {
     .eq("profile_id", user.id);
 
   if (error) return { error: "Não foi possível excluir o setor." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -610,6 +634,7 @@ async function moverOrdem(
     .eq("profile_id", user.id);
   if (err2) return { error: "Não foi possível reordenar." };
 
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -684,6 +709,7 @@ export async function moverClasseParaMacro(classeId: string, novoMacroId: string
     if (error.code === "23505") return { error: "Já existe uma classe com esse nome nesse Macro." };
     return { error: "Não foi possível mover a classe." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -740,6 +766,7 @@ export async function moverSetorParaClasse(setorId: string, novaClasseId: string
     if (error.code === "23505") return { error: "Já existe um setor com esse nome nessa classe." };
     return { error: "Não foi possível mover o setor." };
   }
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -809,6 +836,7 @@ export async function excluirMacroComOpcao(
 
   const { error } = await supabase.from("alocacao_macros").delete().eq("id", id).eq("profile_id", user.id);
   if (error) return { error: "Não foi possível excluir o Macro." };
+  revalidarRotasAfetadas();
   return {};
 }
 
@@ -867,6 +895,7 @@ export async function excluirClasseComOpcao(
 
   const { error } = await supabase.from("alocacao_classes").delete().eq("id", id).eq("profile_id", user.id);
   if (error) return { error: "Não foi possível excluir a classe." };
+  revalidarRotasAfetadas();
   return {};
 }
 

@@ -96,9 +96,16 @@ export default function ProventosView({
   const [filtroStatus, setFiltroStatus] = useState<FiltroStatus>("todos");
   const toast = useToast();
 
+  // try/catch + toast (docs/MAPA-DE-DADOS.md §8.59) — mesmo motivo do fix em
+  // AtivosView.tsx: sem isso, falha no refetch pós-mutação atualizava a
+  // lista em silêncio.
   const atualizar = async () => {
-    const novo = await obterLivroProventos();
-    setLivro(novo);
+    try {
+      const novo = await obterLivroProventos();
+      setLivro(novo);
+    } catch {
+      toast.error("Não foi possível atualizar os proventos. Tente novamente.");
+    }
   };
 
   const alternarSelecao = (id: string) => {

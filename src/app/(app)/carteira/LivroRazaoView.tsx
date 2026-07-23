@@ -372,6 +372,11 @@ export default function LivroRazaoView({
       )}
 
       <div className="card overflow-hidden">
+       {/* overflow-x-auto + min-w (docs/MAPA-DE-DADOS.md §8.59) — mesmo
+           tratamento que Posição/Proventos já tinham, faltava só aqui;
+           sem isso essa grade densa vazava/espremia em tela estreita. */}
+       <div className="overflow-x-auto">
+       <div className="min-w-[880px]">
         <div className="grid grid-cols-[24px_90px_1fr_80px_100px_100px_1fr_110px] gap-2 px-4 py-2 text-xs text-faint border-b border-border items-center">
           <input
             type="checkbox"
@@ -459,6 +464,8 @@ export default function LivroRazaoView({
             </div>
           )
         )}
+       </div>
+       </div>
       </div>
 
       {excluindoId && (

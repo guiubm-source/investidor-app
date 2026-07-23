@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { CorretoraForm, TransacaoForm } from "./schema";
 import { obterQuantidadeDisponivelEmData } from "@/lib/ativos/actions";
+import { buscarTodasLinhas } from "@/lib/supabase/paginacao";
 
 /**
  * Ver docs/MAPA-DE-DADOS.md §8.31 (2026-07-21) — mesmo bug de cache de rota
@@ -93,13 +94,19 @@ export async function obterLivroRazao(): Promise<LivroRazao> {
 
   if (!user) return { lancamentos: [], corretoras: [] };
 
-  const [{ data: transacoesRaw }, { data: corretorasRaw }] = await Promise.all([
-    supabase
-      .from("transacoes")
-      .select(
-        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, cambio, moeda, horario_negociacao, numero_nota, numero_ordem, mercado, corretagem, emolumentos, taxa_liquidacao, outras_taxas, ativos(ticker), corretoras(nome)"
-      )
-      .eq("profile_id", user.id),
+  // Paginado (docs/MAPA-DE-DADOS.md §8.59) — sem isso, um Livro-razão com
+  // mais de 1000 lançamentos perderia o restante em silêncio (teto de
+  // linhas por página do PostgREST).
+  const [transacoesRaw, { data: corretorasRaw }] = await Promise.all([
+    buscarTodasLinhas((inicio, fim) =>
+      supabase
+        .from("transacoes")
+        .select(
+          "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, cambio, moeda, horario_negociacao, numero_nota, numero_ordem, mercado, corretagem, emolumentos, taxa_liquidacao, outras_taxas, ativos(ticker), corretoras(nome)"
+        )
+        .eq("profile_id", user.id)
+        .range(inicio, fim)
+    ),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
   ]);
 
