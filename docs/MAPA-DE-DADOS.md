@@ -8060,8 +8060,43 @@ Configurações, Comparar.
 **Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK nos 2
 arquivos.
 
-**Próximas telas da fila:** Indicadores, Imposto de Renda, Configurações,
-Comparar.
+**4) Indicadores (`IndicadoresView.tsx` + `AbaDolar.tsx` + `AbaSelic.tsx` +
+`AbaIpca.tsx`) — feito:**
+
+- Padrão consistente em todos os cards de estatística ("hero numbers"):
+  `text-lg`/`text-sm`→`text-2xl`. Isso cobre a Visão Geral, o card "Último
+  saldo líquido" do Fluxo estrangeiro, os 12 cards do Dólar, os 6 da Selic
+  e os 6 do IPCA.
+- Grades de cards fixas com contagem exata redimensionadas pra caber numa
+  linha só em 1600px: Dólar (12 cards) `lg:grid-cols-6` (2 linhas de 6, era
+  4 linhas de 3); Selic (6 cards) e IPCA (6 cards) `lg:grid-cols-6` (1
+  linha só, era 2 linhas de 3). A Visão Geral e o card do Fluxo estrangeiro
+  não têm contagem fixa conhecida em tempo de build — mantidos como
+  estavam pra não deixar colunas vazias se o painel tiver menos itens.
+- Tabela "Histórico diário" do Dólar (3 colunas: Data/Cotação/Variação) —
+  tabela nativa simples, sem risco — `text-xs`→`text-sm`.
+- Painéis de correlação/impacto por grupo do IPCA (`grid-cols-2
+  md:grid-cols-3`, texto corrido, não é grade de colunas fixas)
+  `text-xs`→`text-sm`.
+- Lista "Saldo líquido mensal" do Fluxo estrangeiro (`grid-cols-[1fr_1fr_60px]`)
+  — mesmo tratamento já usado em Ativos/Alocação: coluna do botão alargada
+  (`60px`→`70px`) e fonte `text-xs`→`text-sm`, já que o conteúdo é curto
+  (mês + moeda formatada) e cabe com folga.
+- Tabela de reuniões do COPOM na Selic (`grid-cols-[28px_70px_100px_70px_70px_90px_90px_180px]`,
+  8 colunas fixas em pixel) — **mesma categoria de risco do Livro-razão**:
+  só as larguras foram alargadas (`32/80/110/80/80/100/100/200px`), fonte
+  mantida em `text-xs`.
+- **Ficaram de fora (mesma categoria "planilha densa"):** o heatmap de
+  grupos × competências do IPCA (`Heatmap`, uma coluna por mês, pode ter
+  dezenas) e a tabela de histórico de competências do IPCA (Competência +
+  Geral + N grupos + Divulgação + ações) — ambas tabelas nativas mas com
+  contagem de colunas variável/alta, mesmo motivo de cautela do Livro-razão
+  e Resultados trimestrais.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK nos 4
+arquivos.
+
+**Próximas telas da fila:** Imposto de Renda, Configurações, Comparar.
 
 ## 9. Convenções a preservar
 

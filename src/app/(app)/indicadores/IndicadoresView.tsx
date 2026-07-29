@@ -135,7 +135,7 @@ function AbaVisaoGeral({ visaoGeral }: { visaoGeral: VisaoGeralView }) {
         {visaoGeral.painel.map((item) => (
           <div key={item.label} className="card p-3">
             <p className="text-xs text-faint">{item.label}</p>
-            <p className="text-lg font-medium text-ink flex items-center gap-1.5">
+            <p className="text-2xl font-medium text-ink flex items-center gap-1.5">
               {item.valor} <SetaTendencia tendencia={item.tendencia} />
             </p>
           </div>
@@ -144,7 +144,7 @@ function AbaVisaoGeral({ visaoGeral }: { visaoGeral: VisaoGeralView }) {
 
       <div className="card p-4">
         <p className="text-xs text-faint mb-2">Leitura combinada</p>
-        <p className="text-sm text-ink leading-relaxed">{visaoGeral.leitura}</p>
+        <p className="text-base text-ink leading-relaxed">{visaoGeral.leitura}</p>
       </div>
     </div>
   );
@@ -180,7 +180,7 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
     <div className="space-y-4">
       <div className="card p-3 w-fit">
         <p className="text-xs text-faint">Último saldo líquido</p>
-        <p className="text-lg font-medium text-ink flex items-center gap-1.5">
+        <p className="text-2xl font-medium text-ink flex items-center gap-1.5">
           {fluxo.ultimo ? formatarMoeda(fluxo.ultimo.saldoLiquido) : "—"}
           <SetaTendencia tendencia={fluxo.tendencia} />
         </p>
@@ -216,7 +216,7 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
             </div>
           </form>
         )}
-        <div className="grid grid-cols-[1fr_1fr_60px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+        <div className="grid grid-cols-[1fr_1fr_70px] gap-2 px-4 py-2 text-sm text-faint border-b border-border">
           <span>Mês</span>
           <span className="text-right">Saldo</span>
           <span></span>
@@ -225,7 +225,7 @@ function AbaFluxo({ fluxo, onAtualizar }: { fluxo: FluxoEstrangeiroView; onAtual
         {fluxo.mensal.map((f) => (
           <div
             key={f.id}
-            className="grid grid-cols-[1fr_1fr_60px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0"
+            className="grid grid-cols-[1fr_1fr_70px] gap-2 items-center px-4 py-2 text-sm border-b border-border last:border-0"
           >
             <span className="text-ink">{f.anoMes}</span>
             <span className="text-right text-ink">{formatarMoeda(f.saldoLiquido)}</span>

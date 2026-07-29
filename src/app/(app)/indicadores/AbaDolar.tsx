@@ -79,37 +79,40 @@ function BlocoCards({ dolar, onAtualizar }: { dolar: DolarView; onAtualizar: () 
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      {/* Escala 1920x1080 (§8.67): lg:grid-cols-6 — 12 cards fixos, 6 cabem
+          numa linha só sem sobra em 1600px, ficando em 2 linhas de 6 em vez
+          de 4 linhas de 3. */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="card p-3">
           <p className="text-xs text-faint">Cotação atual</p>
-          <p className="text-lg font-medium text-ink">{dolar.ultimo ? `R$ ${dolar.ultimo.cotacao.toFixed(4)}` : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.ultimo ? `R$ ${dolar.ultimo.cotacao.toFixed(4)}` : "—"}</p>
           <p className="text-xs text-faint">{dolar.ultimo ? formatarData(dolar.ultimo.data) : "Sem dado"}</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Variação diária</p>
-          <p className="text-lg font-medium text-ink">{formatarPct(dolar.variacaoDiaria)}</p>
+          <p className="text-2xl font-medium text-ink">{formatarPct(dolar.variacaoDiaria)}</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Variação mensal</p>
-          <p className="text-lg font-medium text-ink">{formatarPct(dolar.variacaoMensal)}</p>
+          <p className="text-2xl font-medium text-ink">{formatarPct(dolar.variacaoMensal)}</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Variação anual</p>
-          <p className="text-lg font-medium text-ink">{formatarPct(dolar.variacaoAnual)}</p>
+          <p className="text-2xl font-medium text-ink">{formatarPct(dolar.variacaoAnual)}</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Tendência</p>
-          <p className="text-lg font-medium text-ink">{dolar.tendencia ? TENDENCIA_LABEL[dolar.tendencia] : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.tendencia ? TENDENCIA_LABEL[dolar.tendencia] : "—"}</p>
           <p className="text-xs text-faint">Média móvel de 20 × 200 dias</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Máxima histórica</p>
-          <p className="text-lg font-medium text-ink">
+          <p className="text-2xl font-medium text-ink">
             {dolar.maximoHistorico ? `R$ ${dolar.maximoHistorico.valor.toFixed(4)}` : "—"}
           </p>
           <p className="text-xs text-faint">
@@ -120,7 +123,7 @@ function BlocoCards({ dolar, onAtualizar }: { dolar: DolarView; onAtualizar: () 
 
         <div className="card p-3">
           <p className="text-xs text-faint">Mínima histórica</p>
-          <p className="text-lg font-medium text-ink">
+          <p className="text-2xl font-medium text-ink">
             {dolar.minimoHistorico ? `R$ ${dolar.minimoHistorico.valor.toFixed(4)}` : "—"}
           </p>
           <p className="text-xs text-faint">
@@ -131,19 +134,19 @@ function BlocoCards({ dolar, onAtualizar }: { dolar: DolarView; onAtualizar: () 
 
         <div className="card p-3">
           <p className="text-xs text-faint">Máxima (12 meses)</p>
-          <p className="text-lg font-medium text-ink">{dolar.maximo12m ? `R$ ${dolar.maximo12m.valor.toFixed(4)}` : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.maximo12m ? `R$ ${dolar.maximo12m.valor.toFixed(4)}` : "—"}</p>
           <p className="text-xs text-faint">{dolar.maximo12m ? formatarData(dolar.maximo12m.data) : "—"}</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Mínima (12 meses)</p>
-          <p className="text-lg font-medium text-ink">{dolar.minimo12m ? `R$ ${dolar.minimo12m.valor.toFixed(4)}` : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.minimo12m ? `R$ ${dolar.minimo12m.valor.toFixed(4)}` : "—"}</p>
           <p className="text-xs text-faint">{dolar.minimo12m ? formatarData(dolar.minimo12m.data) : "—"}</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Média histórica</p>
-          <p className="text-lg font-medium text-ink">{dolar.mediaHistorica !== null ? `R$ ${dolar.mediaHistorica.toFixed(4)}` : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.mediaHistorica !== null ? `R$ ${dolar.mediaHistorica.toFixed(4)}` : "—"}</p>
           <p className="text-xs text-faint">
             {dolar.distanciaMediaPct !== null && `${formatarPct(dolar.distanciaMediaPct)} vs. cotação atual`}
           </p>
@@ -151,13 +154,13 @@ function BlocoCards({ dolar, onAtualizar }: { dolar: DolarView; onAtualizar: () 
 
         <div className="card p-3">
           <p className="text-xs text-faint">Volatilidade (30 dias)</p>
-          <p className="text-lg font-medium text-ink">{dolar.volatilidadeAtual !== null ? `${dolar.volatilidadeAtual.toFixed(2)}%` : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.volatilidadeAtual !== null ? `${dolar.volatilidadeAtual.toFixed(2)}%` : "—"}</p>
           <p className="text-xs text-faint">Desvio padrão da variação diária</p>
         </div>
 
         <div className="card p-3">
           <p className="text-xs text-faint">Volatilidade histórica</p>
-          <p className="text-lg font-medium text-ink">
+          <p className="text-2xl font-medium text-ink">
             {dolar.volatilidadeHistorica !== null ? `${dolar.volatilidadeHistorica.toFixed(2)}%` : "—"}
           </p>
           <p className="text-xs text-faint">Desde o início do histórico carregado</p>
@@ -393,12 +396,12 @@ function BlocoRelacoesMacro({ dolar }: { dolar: DolarView }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="rounded-md bg-surface-2 border border-border px-4 py-3">
           <p className="text-xs text-faint">Dólar × Selic</p>
-          <p className="text-lg font-medium text-ink">{dolar.correlacaoSelic !== null ? dolar.correlacaoSelic.toFixed(2) : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.correlacaoSelic !== null ? dolar.correlacaoSelic.toFixed(2) : "—"}</p>
           <p className="text-xs text-faint">Correlação {interpretarCorrelacao(dolar.correlacaoSelic)}</p>
         </div>
         <div className="rounded-md bg-surface-2 border border-border px-4 py-3">
           <p className="text-xs text-faint">Dólar × IPCA</p>
-          <p className="text-lg font-medium text-ink">{dolar.correlacaoIpca !== null ? dolar.correlacaoIpca.toFixed(2) : "—"}</p>
+          <p className="text-2xl font-medium text-ink">{dolar.correlacaoIpca !== null ? dolar.correlacaoIpca.toFixed(2) : "—"}</p>
           <p className="text-xs text-faint">Correlação {interpretarCorrelacao(dolar.correlacaoIpca)}</p>
         </div>
       </div>
@@ -466,7 +469,7 @@ function BlocoHistorico({ dolar }: { dolar: DolarView }) {
       </div>
 
       <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-sm">
           <thead className="sticky top-0 bg-surface">
             <tr className="text-faint border-b border-border">
               <th className="px-4 py-2 text-left">Data</th>

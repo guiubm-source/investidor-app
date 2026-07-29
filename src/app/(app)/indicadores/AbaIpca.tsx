@@ -102,10 +102,11 @@ export default function AbaIpca({ ipca, onAtualizar }: { ipca: IpcaView; onAtual
 
 function BlocoCards({ ipca }: { ipca: IpcaView }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+    // Escala 1920x1080 (§8.67): lg:grid-cols-6 — 6 cards fixos numa linha só.
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <div className="card p-3">
         <p className="text-xs text-faint">IPCA do mês</p>
-        <p className="text-lg font-medium text-ink">
+        <p className="text-2xl font-medium text-ink">
           {ipca.ultimaCompetencia?.geral != null ? `${ipca.ultimaCompetencia.geral.toFixed(2)}%` : "—"}
         </p>
         <p className="text-xs text-faint">
@@ -115,7 +116,7 @@ function BlocoCards({ ipca }: { ipca: IpcaView }) {
 
       <div className="card p-3">
         <p className="text-xs text-faint">Acumulado no ano</p>
-        <p className="text-lg font-medium text-ink">
+        <p className="text-2xl font-medium text-ink">
           {ipca.acumuladoAno.valor != null ? `${ipca.acumuladoAno.valor.toFixed(2)}%` : "—"}
         </p>
         <p className="text-xs text-faint">{ipca.acumuladoAno.meses} mês(es) considerados</p>
@@ -123,7 +124,7 @@ function BlocoCards({ ipca }: { ipca: IpcaView }) {
 
       <div className="card p-3">
         <p className="text-xs text-faint">Acumulado 12 meses</p>
-        <p className="text-lg font-medium text-ink">
+        <p className="text-2xl font-medium text-ink">
           {ipca.acumulado12m.valor != null ? `${ipca.acumulado12m.valor.toFixed(2)}%` : "—"}
         </p>
         <p className="text-xs text-faint">
@@ -135,7 +136,7 @@ function BlocoCards({ ipca }: { ipca: IpcaView }) {
         <p className="text-xs text-faint">Situação da meta</p>
         {ipca.metaVigente ? (
           <>
-            <p className="text-lg font-medium text-ink">
+            <p className="text-2xl font-medium text-ink">
               {ipca.situacaoBanda ? SITUACAO_LABEL[ipca.situacaoBanda] : "—"}
             </p>
             <p className="text-xs text-faint">
@@ -150,7 +151,7 @@ function BlocoCards({ ipca }: { ipca: IpcaView }) {
 
       <div className="card p-3">
         <p className="text-xs text-faint">Distância da meta</p>
-        <p className="text-lg font-medium text-ink">
+        <p className="text-2xl font-medium text-ink">
           {ipca.distanciaMeta != null
             ? `${ipca.distanciaMeta > 0 ? "+" : ""}${ipca.distanciaMeta.toFixed(2)} p.p.`
             : "—"}
@@ -159,7 +160,7 @@ function BlocoCards({ ipca }: { ipca: IpcaView }) {
 
       <div className="card p-3">
         <p className="text-xs text-faint">Tendência inflacionária</p>
-        <p className="text-lg font-medium text-ink">{ipca.tendencia ? TENDENCIA_LABEL[ipca.tendencia] : "—"}</p>
+        <p className="text-2xl font-medium text-ink">{ipca.tendencia ? TENDENCIA_LABEL[ipca.tendencia] : "—"}</p>
         <p className="text-xs text-faint">Média móvel 3m × 6m</p>
       </div>
 
@@ -1050,7 +1051,7 @@ function StatsResumoIpca({ ipca }: { ipca: IpcaView }) {
       {correlacoesOrdenadas.length > 0 && (
         <div>
           <p className="text-xs text-faint mb-2">Correlação de cada grupo com o IPCA geral</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
             {correlacoesOrdenadas.map((c) => (
               <p key={c.grupo} className="text-ink">
                 {labelGrupo(c.grupo)}: <span className="text-muted">{c.correlacao!.toFixed(2)}</span>
@@ -1063,7 +1064,7 @@ function StatsResumoIpca({ ipca }: { ipca: IpcaView }) {
       {ipca.impactoHistoricoGrupos.length > 0 && (
         <div>
           <p className="text-xs text-faint mb-2">Impacto acumulado por grupo (histórico)</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
             {ipca.impactoHistoricoGrupos.map((g) => (
               <p key={g.grupo} className="text-ink">
                 {labelGrupo(g.grupo)}: <span className="text-muted">{g.impactoAcumulado.toFixed(2)} p.p.</span>

@@ -83,10 +83,12 @@ export default function AbaSelic({
 
 function BlocoCards({ selic }: { selic: SelicView }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+    // Escala 1920x1080 (§8.67): lg:grid-cols-6 — 6 cards fixos cabem numa
+    // linha só em 1600px (2 linhas de 3 antes).
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <div className="card p-3">
         <p className="text-xs text-faint">Taxa Selic vigente</p>
-        <p className="text-lg font-medium text-ink">
+        <p className="text-2xl font-medium text-ink">
           {selic.ultimaTaxa !== null ? `${selic.ultimaTaxa.toFixed(2)}% a.a.` : "—"}
         </p>
         <p className="text-xs text-faint">
@@ -98,7 +100,7 @@ function BlocoCards({ selic }: { selic: SelicView }) {
         <p className="text-xs text-faint">Última decisão</p>
         {selic.ultimaDecisao ? (
           <>
-            <p className="text-lg font-medium text-ink">
+            <p className="text-2xl font-medium text-ink">
               {SETA_DECISAO[selic.ultimaDecisao.tipo]} {LABEL_DECISAO[selic.ultimaDecisao.tipo]}
             </p>
             <p className="text-xs text-faint">
@@ -114,7 +116,7 @@ function BlocoCards({ selic }: { selic: SelicView }) {
       <div className="card p-3">
         <p className="text-xs text-faint">Decisões consecutivas</p>
         {selic.decisoesConsecutivas ? (
-          <p className="text-lg font-medium text-ink">
+          <p className="text-2xl font-medium text-ink">
             {selic.decisoesConsecutivas.quantidade}{" "}
             {selic.decisoesConsecutivas.quantidade === 1
               ? LABEL_DECISAO[selic.decisoesConsecutivas.tipo].toLowerCase()
@@ -128,7 +130,7 @@ function BlocoCards({ selic }: { selic: SelicView }) {
 
       <div className="card p-3">
         <p className="text-xs text-faint">Tempo da taxa atual</p>
-        <p className="text-lg font-medium text-ink">
+        <p className="text-2xl font-medium text-ink">
           {selic.diasVigente !== null ? `há ${selic.diasVigente} dias` : "—"}
         </p>
       </div>
@@ -543,7 +545,7 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
         </div>
       )}
 
-      <div className="grid grid-cols-[28px_70px_100px_70px_70px_90px_90px_180px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+      <div className="grid grid-cols-[32px_80px_110px_80px_80px_100px_100px_200px] gap-3 px-4 py-2 text-xs text-faint border-b border-border">
         <span></span>
         <span>Reunião</span>
         <span>Data</span>
@@ -558,7 +560,7 @@ function BlocoHistorico({ selic, onAtualizar }: { selic: SelicView; onAtualizar:
 
       {filtradas.map((r) => (
         <div key={r.id}>
-          <div className="grid grid-cols-[28px_70px_100px_70px_70px_90px_90px_180px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0">
+          <div className="grid grid-cols-[32px_80px_110px_80px_80px_100px_100px_200px] gap-3 items-center px-4 py-2 text-xs border-b border-border last:border-0">
             <input type="checkbox" checked={selecionados.has(r.id)} onChange={() => alternarSelecao(r.id)} />
             <span className="text-ink">{r.numeroReuniao ? `${r.numeroReuniao}ª` : "—"}</span>
             <span className="text-ink">{formatarData(r.dataInicio)}</span>
