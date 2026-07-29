@@ -161,7 +161,7 @@ function LinhaItem({
   onExcluir: () => void;
 }) {
   return (
-    <div className="grid grid-cols-[80px_1fr_100px_120px_120px_90px] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0">
+    <div className="grid grid-cols-[90px_1fr_110px_130px_130px_100px] gap-3 items-center px-4 py-2 text-xs border-b border-border last:border-0">
       <span className="text-muted">
         {item.grupo}-{item.codigo}
       </span>
@@ -252,7 +252,7 @@ export default function BensDireitosView({
           )}
         </div>
 
-        <div className="grid grid-cols-[80px_1fr_100px_120px_120px_90px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+        <div className="grid grid-cols-[90px_1fr_110px_130px_130px_100px] gap-3 px-4 py-2 text-xs text-faint border-b border-border">
           <span>Grupo</span>
           <span>Nome</span>
           <span>Local</span>

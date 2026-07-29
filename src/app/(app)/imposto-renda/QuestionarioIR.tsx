@@ -82,7 +82,7 @@ export default function QuestionarioIR({ declaracaoId, valoresIniciais, onSalvo 
   return (
     <form onSubmit={onSubmit} className="card p-5 space-y-6">
       <div>
-        <h3 className="text-sm font-medium text-ink mb-1">Questionário inicial</h3>
+        <h3 className="text-base font-medium text-ink mb-1">Questionário inicial</h3>
         <p className="text-xs text-faint">
           Estas respostas definem quais partes da declaração fazem sentido pro seu caso. Nenhuma resposta bloqueia o
           uso do app — perfis fora do escopo desta primeira versão (dependentes, declaração conjunta, trust, entidade

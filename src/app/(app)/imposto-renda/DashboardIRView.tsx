@@ -19,7 +19,7 @@ function CardValor({ titulo, card }: { titulo: string; card: CardValorUI }) {
     <div className="card p-3">
       <p className="text-xs text-faint mb-1">{titulo}</p>
       {card.status === "disponivel" ? (
-        <p className="text-lg text-ink">{formatarMoeda(card.valor ?? 0)}</p>
+        <p className="text-2xl text-ink">{formatarMoeda(card.valor ?? 0)}</p>
       ) : (
         <p className="text-xs text-faint italic" title={card.motivo ?? undefined}>
           Não disponível ainda
@@ -100,7 +100,7 @@ export default function DashboardIRView({
             {dashboard.cards.prejuizoPorGrupo.map((p: PrejuizoGrupoUI) => (
               <div key={p.grupo} className="card p-3">
                 <p className="text-xs text-faint mb-1">{p.label}</p>
-                <p className="text-lg text-danger">{formatarMoeda(p.saldo)}</p>
+                <p className="text-2xl text-danger">{formatarMoeda(p.saldo)}</p>
               </div>
             ))}
           </div>

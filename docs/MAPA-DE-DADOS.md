@@ -8096,7 +8096,25 @@ arquivos.
 **Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK nos 4
 arquivos.
 
-**Próximas telas da fila:** Imposto de Renda, Configurações, Comparar.
+**5) Imposto de Renda (`DashboardIRView.tsx` + `ImpostoRendaView.tsx` +
+`BensDireitosView.tsx` + `QuestionarioIR.tsx`) — feito:**
+
+- Cards de valor do Dashboard fiscal (`CardValor`, cards de prejuízo por
+  grupo): `text-lg`→`text-2xl`, mesmo padrão "hero number".
+- Cabeçalhos "Perfil fiscal" e "Questionário inicial": `text-sm`→`text-base`.
+- Sub-métricas dentro de cada card de "Resumo anual por categoria"
+  (Vendas/Lucro líquido/Imposto devido, 3 por card): `text-xs`→`text-sm` —
+  não viraram `text-2xl` porque são 3 métricas compartilhando um card
+  pequeno (mesmo caso do Checklist do Ativo), não um número isolado.
+- **Duas grades fixas em pixel (mesma categoria do Livro-razão), só
+  alargadas, fonte mantida:** detalhe mês a mês do Relatório (8 colunas,
+  `70/1fr/90/90/90/60/90/1fr`→`80/1fr/100/100/100/70/100/1fr`) e a lista de
+  Bens e Direitos (6 colunas, `80/1fr/100/120/120/90`→`90/1fr/110/130/130/100`).
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK nos 4
+arquivos.
+
+**Próximas telas da fila:** Configurações, Comparar.
 
 ## 9. Convenções a preservar
 

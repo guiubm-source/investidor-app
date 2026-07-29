@@ -51,7 +51,7 @@ function CardPerfilFiscal({
   return (
     <div className="card p-4 space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-ink">Perfil fiscal</p>
+        <p className="text-base font-medium text-ink">Perfil fiscal</p>
         <button onClick={onRefazer} className="text-xs text-accent hover:underline">
           Refazer questionário
         </button>
@@ -226,7 +226,7 @@ export default function ImpostoRendaView({
                     </span>
                   )}
                 </p>
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="grid grid-cols-3 gap-2 text-sm">
                   <div>
                     <p className="text-faint">Vendas</p>
                     <p className="text-ink">{formatarMoeda(r.vendaTotal)}</p>
@@ -255,7 +255,7 @@ export default function ImpostoRendaView({
         <div className="px-4 py-2 border-b border-border">
           <p className="text-xs text-faint">Detalhe mês a mês</p>
         </div>
-        <div className="grid grid-cols-[70px_1fr_90px_90px_90px_60px_90px_1fr] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+        <div className="grid grid-cols-[80px_1fr_100px_100px_100px_70px_100px_1fr] gap-3 px-4 py-2 text-xs text-faint border-b border-border">
           <span>Mês</span>
           <span>Categoria</span>
           <span className="text-right">Vendas</span>
@@ -269,7 +269,7 @@ export default function ImpostoRendaView({
         {relatorio.mensal.map((l, i) => (
           <div
             key={`${l.anoMes}-${l.categoria}-${i}`}
-            className={`grid grid-cols-[70px_1fr_90px_90px_90px_60px_90px_1fr] gap-2 items-center px-4 py-2 text-xs border-b border-border last:border-0 ${
+            className={`grid grid-cols-[80px_1fr_100px_100px_100px_70px_100px_1fr] gap-3 items-center px-4 py-2 text-xs border-b border-border last:border-0 ${
               l.pendente ? "bg-danger-soft" : ""
             }`}
           >
