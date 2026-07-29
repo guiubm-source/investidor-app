@@ -26,8 +26,12 @@ export default async function AtivoDetalhePage({ params }: { params: Promise<{ i
   if (!ativo) notFound();
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-4xl mx-auto">
+    // Escala 1920x1080 (§8.61, 2026-07-29): container trocado de max-w-4xl
+    // (896px) pra max-w-[1600px] — mesmo padrão já aplicado na Carteira
+    // (§8.60), mantendo coluna única (decisão do Guilherme: não reestruturar
+    // em duas colunas, só alargar + aumentar tipografia/gráfico).
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto">
         <AtivoDetalheView
           ativoInicial={ativo}
           classesSetores={classesSetores}

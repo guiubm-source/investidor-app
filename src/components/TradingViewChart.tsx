@@ -44,10 +44,15 @@ export default function TradingViewChart({ symbol }: { symbol: string }) {
   }, [symbol]);
 
   return (
+    // Altura 900px (§8.61, 2026-07-29; era 640px) — pedido explícito do
+    // Guilherme de ampliar a área do gráfico na revisão 1920x1080 da aba
+    // Ativo. autosize:true no widget já preenche 100% do container, então
+    // só a altura fixa aqui (e a largura do container-pai, ver page.tsx)
+    // determinam o tamanho renderizado.
     <div
       className="tradingview-widget-container rounded-md overflow-hidden border border-border"
       ref={containerRef}
-      style={{ height: 640 }}
+      style={{ height: 900 }}
     />
   );
 }

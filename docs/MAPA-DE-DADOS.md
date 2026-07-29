@@ -7826,6 +7826,79 @@ de produto ou mudanças de risco/escopo maior):**
 - Migrar `preco-historico.ts` (série "Evolução do patrimônio" do
   Dashboard) pro XIRR — escopo de Dashboard, não de Carteira.
 
+### 8.61 Escala 1920x1080 — aba Ativo (2026-07-29)
+
+**Contexto:** seguindo a mesma revisão iniciada em §8.60, o Guilherme pediu
+pra expandir o dimensionamento 1920x1080 pro resto do app, começando pela
+página do Ativo (`/ativos/[id]`) — que ainda usava o container estreito
+original — e ampliar especificamente a área do gráfico TradingView. Por
+instrução explícita dele ("atue como especialista, analise... e me traga
+perguntas antes de codar"), essa rodada seguiu o processo completo: análise
+da estrutura atual → proposta → perguntas sequenciais (uma por vez, regra
+da seção 1) → só então execução. Duas decisões de produto foram resolvidas
+antes de codar:
+
+1. **Estrutura da página:** hoje todo card (Gráfico, Classificação, Posição,
+   Empresa, Rentabilidade histórica, Checklist, Transações, Proventos) é
+   empilhado em coluna única. Cogitei reestruturar em duas colunas
+   (gráfico/histórico largos à esquerda + Empresa/Classificação/Posição como
+   sidebar compacta à direita) vs. manter coluna única só alargando
+   container/tipografia (mesmo padrão da Carteira, §8.60). **Guilherme optou
+   por manter coluna única alargada** — decisão que evita uma reestruturação
+   maior sem verificação visual em ambiente sem browser.
+2. **Altura do gráfico:** entre 900px, 760px ou altura dinâmica em `vh`,
+   Guilherme escolheu **900px fixo** (era 640px).
+
+**O que mudou:**
+
+- `src/app/(app)/ativos/[id]/page.tsx`: container `max-w-4xl` (896px) →
+  `max-w-[1600px]`, `px-6`→`px-10` — mesmo valor de largura já usado na
+  Carteira, pra manter um único "container largo" padrão no app (facilita
+  qualquer ajuste futuro de largura ser feito num lugar conceitual só).
+- `src/components/TradingViewChart.tsx`: altura fixa do container
+  `style={{ height: 640 }}` → `900`. O widget já usa `autosize: true`, então
+  só a altura fixa aqui e a largura do container-pai determinam o tamanho
+  renderizado — não há outro lugar que precise mudar pra isso.
+- `src/app/(app)/ativos/[id]/AtivoDetalheView.tsx`:
+  - Título do ativo (ticker) `text-2xl`→`text-3xl`, subtítulo
+    `text-sm`→`text-base` (mesmo salto do título da Carteira).
+  - Todos os cabeçalhos de seção (`h2`, ex.: "Gráfico", "Classificação",
+    "Posição", "Empresa", "Resultados trimestrais", "Painel de
+    monitoramento") `text-sm`→`text-base`.
+  - Grades de métricas compactas (`Metrica`) ganharam mais colunas no
+    breakpoint `lg` pra aproveitar a largura maior do container, além do
+    salto `text-xs`→`text-sm`: Posição (7 métricas) `lg:grid-cols-7`;
+    Checklist Ações (12 métricas) `lg:grid-cols-6`; Checklist FIIs (7
+    métricas) `lg:grid-cols-7`.
+  - Listas de Transações e Proventos (linhas `flex`, não grid de largura
+    fixa) `text-xs`→`text-sm` — seguras de aumentar porque não têm colunas
+    de largura fixa em pixel (diferente da tabela de Resultados
+    trimestrais, ver decisão de escopo abaixo).
+
+**Deliberadamente fora do escopo desta rodada:**
+
+- Tabela de "Resultados trimestrais" (`SecaoResultadosTrimestrais`) — grade
+  densa com até 10 colunas fixas via `<table>`, mesmo tipo de risco já
+  documentado pro Livro-razão em §8.60 (fonte maior sem recalibrar larguras
+  arrisca overflow que não dá pra verificar visualmente neste ambiente sem
+  browser). Já tem `overflow-x-auto`, então funciona, só não foi
+  redimensionada.
+- Mini-gráficos do "Painel de monitoramento" (`MiniLineChart`) — mantidos no
+  tamanho atual (`grid-cols-2 md:grid-cols-4`), são widgets pequenos por
+  design, não blocos de texto/dados que se beneficiem de mais largura.
+  Reestruturação em duas colunas do restante do app (fora da Ativo) —
+  Guilherme decidiu que o resto do app segue o mesmo dimensionamento de
+  container/tipografia da Carteira/Ativo (coluna única alargada), página a
+  página, com checkpoint de revisão entre cada uma antes de eu seguir pra
+  próxima.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e contagem de bytes nulos
+nos 3 arquivos editados sem sinal de corrupção.
+
+**Arquivos alterados:** `src/app/(app)/ativos/[id]/page.tsx`,
+`src/components/TradingViewChart.tsx`,
+`src/app/(app)/ativos/[id]/AtivoDetalheView.tsx`.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

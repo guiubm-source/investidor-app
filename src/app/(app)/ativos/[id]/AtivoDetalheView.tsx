@@ -261,8 +261,10 @@ export default function AtivoDetalheView({
         ) : (
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-2xl font-medium text-ink">{ativo.ticker}</h1>
-              <p className="text-sm text-muted">
+              {/* Escala 1920x1080 (§8.61): text-2xl→text-3xl e text-sm→text-base,
+                  mesmo salto usado no título da Carteira (§8.60). */}
+              <h1 className="text-3xl font-medium text-ink">{ativo.ticker}</h1>
+              <p className="text-base text-muted">
                 {rotuloTipo(ativo.tipo)}
                 {ativo.nome && ` · ${ativo.nome}`}
               </p>
@@ -350,7 +352,7 @@ export default function AtivoDetalheView({
         <>
           <div className="card p-5">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-medium text-ink">Gráfico</h2>
+              <h2 className="text-base font-medium text-ink">Gráfico</h2>
               {editandoSimbolo ? (
                 <FormSimbolo
                   valorInicial={ativo.simboloTradingviewManual ? ativo.simboloTradingview : ""}
@@ -377,7 +379,7 @@ export default function AtivoDetalheView({
           </div>
 
           <div className="card p-5">
-            <h2 className="text-sm font-medium text-ink mb-3">Classificação</h2>
+            <h2 className="text-base font-medium text-ink mb-3">Classificação</h2>
             {editandoClassificacao ? (
               <FormClassificacao
                 classesSetores={classesSetores}
@@ -440,7 +442,7 @@ export default function AtivoDetalheView({
           </div>
 
           <div className="card p-5">
-            <h2 className="text-sm font-medium text-ink mb-3">Posição</h2>
+            <h2 className="text-base font-medium text-ink mb-3">Posição</h2>
 
             {!precoDefinido && (
               <div className="rounded-md bg-surface-2 border border-border px-3 py-2 mb-3 text-xs text-muted">
@@ -449,7 +451,10 @@ export default function AtivoDetalheView({
               </div>
             )}
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-3">
+            {/* Escala 1920x1080 (§8.61): lg:grid-cols-7 aproveita a largura
+                maior do container pra caber as 7 métricas numa linha só;
+                text-xs→text-sm acompanha o resto da página. */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-sm mb-3">
               <Metrica label="Quantidade" valor={ativo.quantidade.toLocaleString("pt-BR")} />
               <Metrica label="Preço médio" valor={formatarMoeda(ativo.precoMedio)} />
               <Metrica label="Valor aplicado" valor={formatarMoeda(ativo.valorAplicado)} />
@@ -528,7 +533,7 @@ export default function AtivoDetalheView({
 
           {ativo.transacoes.length > 0 && (
             <div className="card p-5">
-              <h2 className="text-sm font-medium text-ink mb-1">Rentabilidade histórica</h2>
+              <h2 className="text-base font-medium text-ink mb-1">Rentabilidade histórica</h2>
               <p className="text-xs text-faint mb-3">
                 Retorno acumulado dia a dia (posição ainda em carteira + lucro já realizado em vendas
                 parciais, sobre tudo que já foi investido em compras) — vai da primeira negociação até a
@@ -552,7 +557,7 @@ export default function AtivoDetalheView({
 
           <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-medium text-ink">Transações</h2>
+              <h2 className="text-base font-medium text-ink">Transações</h2>
               {!addTransacao && (
                 <button onClick={() => setAddTransacao(true)} className="text-xs text-faint hover:text-ink">
                   + Registrar transação
@@ -583,7 +588,7 @@ export default function AtivoDetalheView({
                 {ativo.transacoes.map((t) => (
                   <div
                     key={t.id}
-                    className="flex items-center justify-between text-xs bg-surface-2 rounded-md px-3 py-2"
+                    className="flex items-center justify-between text-sm bg-surface-2 rounded-md px-3 py-2"
                   >
                     <span className={corTipoTransacaoAtivo(t.tipo)}>{labelTipoTransacaoAtivo(t.tipo)}</span>
                     <span className="text-muted">{formatarData(t.data)}</span>
@@ -625,7 +630,7 @@ export default function AtivoDetalheView({
 
           <div className="card p-5">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-medium text-ink">Proventos</h2>
+              <h2 className="text-base font-medium text-ink">Proventos</h2>
               <Link href="/proventos" className="text-xs text-faint hover:text-ink">
                 Cadastrar na aba Proventos →
               </Link>
@@ -638,7 +643,7 @@ export default function AtivoDetalheView({
                 {ativo.proventos.map((p) => (
                   <div
                     key={p.id}
-                    className="flex items-center justify-between text-xs bg-surface-2 rounded-md px-3 py-2"
+                    className="flex items-center justify-between text-sm bg-surface-2 rounded-md px-3 py-2"
                   >
                     <span className="text-muted">{rotuloProvento(p.tipo)}</span>
                     <span className="text-muted">{formatarData(p.data)}</span>
@@ -721,7 +726,7 @@ function SecaoChecklist({
   return (
     <div className="card p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-medium text-ink">
+        <h2 className="text-base font-medium text-ink">
           Checklist comparativo {checklist.grupo === "acoes" ? "— Ações/ETF" : "— FIIs"}
         </h2>
         <Link
@@ -740,7 +745,7 @@ function SecaoChecklist({
       )}
 
       {checklist.grupo === "acoes" && checklist.checklistAcao && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-sm mb-4">
           <Metrica label="P/L" valor={formatarRatio(checklist.checklistAcao.pl)} />
           <Metrica label="PEG Ratio" valor={formatarRatio(checklist.checklistAcao.pegRatio)} />
           <Metrica label="P/VP" valor={formatarRatio(checklist.checklistAcao.pvp)} />
@@ -758,7 +763,7 @@ function SecaoChecklist({
       )}
 
       {checklist.grupo === "fiis" && checklist.checklistFii && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-sm mb-4">
           <Metrica label="P/VP" valor={formatarRatio(checklist.checklistFii.pvp)} />
           <Metrica label="Nº Negócios/mês" valor={formatarNumero(checklist.checklistFii.numeroNegociosMes, 0)} />
           <Metrica label="Vacância Financeira" valor={formatarPct(checklist.checklistFii.vacanciaFinanceiraPct)} />
@@ -881,7 +886,7 @@ function SecaoResultadosTrimestrais({
   return (
     <div className="card p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-medium text-ink">Resultados trimestrais</h2>
+        <h2 className="text-base font-medium text-ink">Resultados trimestrais</h2>
         {editando === null && (
           <button onClick={() => setEditando("novo")} className="text-xs text-faint hover:text-ink">
             + Lançar trimestre
@@ -1084,7 +1089,7 @@ function PainelMonitoramento({
 
   return (
     <div className="card p-5">
-      <h2 className="text-sm font-medium text-ink mb-1">Painel de monitoramento</h2>
+      <h2 className="text-base font-medium text-ink mb-1">Painel de monitoramento</h2>
       <p className="text-xs text-muted mb-3">
         Evolução dos índices independentes de preço + insights automáticos gerados a partir do histórico
         lançado (sequências de alta/baixa e recordes). P/L, P/VP, PEG Ratio e Dividend Yield ficam de
@@ -1364,7 +1369,7 @@ function CartaoEmpresa({
   return (
     <div className="card p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-medium text-ink">Empresa</h2>
+        <h2 className="text-base font-medium text-ink">Empresa</h2>
         {!editando && (
           <div className="flex gap-3">
             <button disabled={buscando} onClick={buscar} className="text-xs text-accent hover:underline disabled:opacity-50">
