@@ -318,7 +318,7 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
         atualizandoCotacoes={atualizandoCotacoes}
       />
 
-      <div className="flex items-center gap-2 text-xs">
+      <div className="flex items-center gap-2 text-sm">
         <span className="text-faint">Agrupar:</span>
         <div className="inline-flex rounded-md border border-border overflow-hidden">
           <button
@@ -340,7 +340,15 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
         </div>
       </div>
 
-      <div className="space-y-3">
+      {/*
+       * Skeleton/loading (§8.60): antes desta correção, trocar de corretora
+       * no filtro não dava NENHUMA pista visual de que algo estava
+       * carregando (só o <select> ficava desabilitado) — a lista inteira
+       * parecia travada por um instante. `transition-opacity` + `animate-pulse`
+       * dão feedback imediato sem esconder o conteúdo anterior (evita "flash"
+       * de tela vazia).
+       */}
+      <div className={`space-y-3 transition-opacity duration-200 ${carregando ? "opacity-50 animate-pulse pointer-events-none" : ""}`}>
         {gruposExibidos.map((grupo) => {
           const colapsado = colapsados.has(grupo.chave);
           const sort = sortPorGrupo[grupo.chave] ?? null;
@@ -362,18 +370,18 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
           const ativosPagina = ativosOrdenados.slice(inicio, inicio + linhasPagina);
 
           return (
-            <div key={grupo.chave} className="card overflow-hidden">
+            <div key={grupo.chave} className="card card-interactive overflow-hidden">
               <button
                 onClick={() => toggleGrupo(grupo.chave)}
-                className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left"
+                className="w-full flex items-center justify-between gap-3 px-4 py-3.5 hover:bg-surface-2 transition-colors text-left"
               >
                 <div className="flex items-center gap-2">
-                  <span className={`text-faint text-xs transition-transform ${colapsado ? "" : "rotate-90"}`}>▶</span>
-                  <span className="text-sm font-medium text-ink">{grupo.label}</span>
-                  <span className="text-xs text-faint">{grupo.ativos.length} ativo{grupo.ativos.length !== 1 ? "s" : ""}</span>
+                  <span className={`text-faint text-xs transition-transform duration-200 ${colapsado ? "" : "rotate-90"}`}>▶</span>
+                  <span className="text-base font-medium text-ink">{grupo.label}</span>
+                  <span className="text-sm text-faint">{grupo.ativos.length} ativo{grupo.ativos.length !== 1 ? "s" : ""}</span>
                   {grupo.semPrecoCount > 0 && (
                     <span
-                      className="text-[10px] text-faint border border-border rounded-full px-1.5 py-0.5"
+                      className="text-xs text-faint border border-border rounded-full px-1.5 py-0.5"
                       title="Preço atual nunca foi definido pra este(s) ativo(s) — valores ficam como “—” até você definir."
                     >
                       ⚠ {grupo.semPrecoCount} sem preço
@@ -381,33 +389,43 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                   )}
                 </div>
 
-                <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-5 text-sm">
                   <div className="text-right hidden sm:block">
-                    <p className="text-faint">Hoje</p>
+                    <p className="text-faint text-xs">Hoje</p>
                     <p className={classeSinal(grupo.variacaoHojePct)}>
                       {formatarMoeda(grupo.variacaoHojeValor)} ({formatarPct(grupo.variacaoHojePct)})
                     </p>
                   </div>
                   <div className="text-right hidden md:block">
-                    <p className="text-faint">Total</p>
+                    <p className="text-faint text-xs">Total</p>
                     <p className={classeSinal(grupo.variacaoTotalPct)}>
                       {formatarMoeda(grupo.variacaoTotalValor)} ({formatarPct(grupo.variacaoTotalPct)})
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-faint">Patrimônio</p>
-                    <p className="text-ink">{formatarMoeda(grupo.patrimonioAtual)}</p>
+                    <p className="text-faint text-xs">Patrimônio</p>
+                    <p className="text-ink font-medium">{formatarMoeda(grupo.patrimonioAtual)}</p>
                   </div>
-                  <span className="rounded-full bg-accent/15 text-accent px-2 py-1 font-medium whitespace-nowrap">
+                  <span className="rounded-full bg-accent/15 text-accent px-2.5 py-1 font-medium whitespace-nowrap">
                     {grupo.pctNaCarteira.toFixed(1)}% da carteira
                   </span>
                 </div>
               </button>
 
-              {!colapsado && (
-                <>
+              {/*
+               * Expand/collapse ANIMADO (§8.60) — truque de CSS grid
+               * (`grid-template-rows: 0fr` → `1fr`) em vez do corte
+               * instantâneo de antes (`{!colapsado && (...)}`, que
+               * desmontava o conteúdo). Precisa manter o conteúdo sempre
+               * montado (senão não há altura pra animar de/pra) — aceitável
+               * aqui porque cada grupo já pagina no máximo 100 linhas.
+               */}
+              <div
+                className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${colapsado ? "grid-rows-[0fr]" : "grid-rows-[1fr]"}`}
+              >
+                <div className="overflow-hidden">
                   <div className="overflow-x-auto">
-                    <table className="w-full text-xs whitespace-nowrap">
+                    <table className="w-full text-sm whitespace-nowrap">
                       <thead>
                         <tr className="text-faint text-left border-b border-t border-border">
                           <ColunaOrdenavel label="Ativo" sortKey="ticker" sort={sort} onClick={() => alternarSort(grupo.chave, "ticker")} />
@@ -537,8 +555,8 @@ export default function PosicaoView({ posicaoInicial }: { posicaoInicial: Posica
                       </div>
                     )}
                   </div>
-                </>
-              )}
+                </div>
+              </div>
             </div>
           );
         })}
@@ -573,27 +591,29 @@ function SecaoAtivosEncerrados({
   const totalContribuicao = ativos.reduce((s, a) => s + a.contribuicaoTotal, 0);
 
   return (
-    <div className="card overflow-hidden">
+    <div className="card card-interactive overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left"
+        className="w-full flex items-center justify-between gap-3 px-4 py-3.5 hover:bg-surface-2 transition-colors text-left"
       >
         <div className="flex items-center gap-2">
-          <span className={`text-faint text-xs transition-transform ${colapsado ? "" : "rotate-90"}`}>▶</span>
-          <span className="text-sm font-medium text-ink">Ativos encerrados</span>
-          <span className="text-xs text-faint">
+          <span className={`text-faint text-xs transition-transform duration-200 ${colapsado ? "" : "rotate-90"}`}>▶</span>
+          <span className="text-base font-medium text-ink">Ativos encerrados</span>
+          <span className="text-sm text-faint">
             {ativos.length} ativo{ativos.length !== 1 ? "s" : ""}
           </span>
         </div>
-        <div className="text-right text-xs">
-          <p className="text-faint">Contribuição total ao patrimônio</p>
+        <div className="text-right text-sm">
+          <p className="text-faint text-xs">Contribuição total ao patrimônio</p>
           <p className={classeSinal(totalContribuicao)}>{formatarMoeda(totalContribuicao)}</p>
         </div>
       </button>
 
-      {!colapsado && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs whitespace-nowrap">
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${colapsado ? "grid-rows-[0fr]" : "grid-rows-[1fr]"}`}
+      >
+        <div className="overflow-hidden overflow-x-auto">
+          <table className="w-full text-sm whitespace-nowrap">
             <thead>
               <tr className="text-faint text-left border-b border-t border-border">
                 <th className="py-2 pl-4 pr-3">Ativo</th>
@@ -640,7 +660,7 @@ function SecaoAtivosEncerrados({
             </tbody>
           </table>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -673,32 +693,38 @@ function ColunaOrdenavel({
 
 function ResumoTotal({ posicao }: { posicao: PosicaoConsolidada }) {
   return (
-    <div className="card p-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+    <div className="card card-interactive p-6">
+      {/* Escala 1920x1080 (§8.60): números principais viraram "hero KPI"
+       * (text-2xl) em vez de text-sm — eram do mesmo tamanho que o texto
+       * comum da tabela, sem hierarquia visual nenhuma pro dado mais
+       * importante da tela. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
         <div>
-          <p className="text-faint">Patrimônio total</p>
-          <p className="text-ink text-sm font-medium">{formatarMoeda(posicao.totalCarteira)}</p>
+          <p className="text-faint text-sm mb-1">Patrimônio total</p>
+          <p className="text-ink text-2xl font-medium">{formatarMoeda(posicao.totalCarteira)}</p>
         </div>
         <div>
-          <p className="text-faint">Variação hoje</p>
-          <p className={`text-sm font-medium ${classeSinal(posicao.variacaoHojePct)}`}>
-            {formatarMoeda(posicao.variacaoHojeValor)} ({formatarPct(posicao.variacaoHojePct)})
+          <p className="text-faint text-sm mb-1">Variação hoje</p>
+          <p className={`text-2xl font-medium ${classeSinal(posicao.variacaoHojePct)}`}>
+            {formatarMoeda(posicao.variacaoHojeValor)}
           </p>
+          <p className={`text-sm ${classeSinal(posicao.variacaoHojePct)}`}>{formatarPct(posicao.variacaoHojePct)}</p>
         </div>
         <div>
-          <p className="text-faint">Variação total</p>
-          <p className={`text-sm font-medium ${classeSinal(posicao.variacaoTotalPct)}`}>
-            {formatarMoeda(posicao.variacaoTotalValor)} ({formatarPct(posicao.variacaoTotalPct)})
+          <p className="text-faint text-sm mb-1">Variação total</p>
+          <p className={`text-2xl font-medium ${classeSinal(posicao.variacaoTotalPct)}`}>
+            {formatarMoeda(posicao.variacaoTotalValor)}
           </p>
+          <p className={`text-sm ${classeSinal(posicao.variacaoTotalPct)}`}>{formatarPct(posicao.variacaoTotalPct)}</p>
         </div>
         <div>
-          <p className="text-faint">Classes na carteira</p>
-          <p className="text-ink text-sm font-medium">{posicao.grupos.length}</p>
+          <p className="text-faint text-sm mb-1">Classes na carteira</p>
+          <p className="text-ink text-2xl font-medium">{posicao.grupos.length}</p>
         </div>
       </div>
 
       {posicao.ativosSemPrecoCount > 0 && (
-        <p className="text-[10px] text-faint mt-3 pt-3 border-t border-border">
+        <p className="text-xs text-faint mt-4 pt-4 border-t border-border">
           ⚠ {posicao.ativosSemPrecoCount} ativo{posicao.ativosSemPrecoCount !== 1 ? "s" : ""} em carteira sem preço
           atual definido — contam como R$ 0,00 de patrimônio nos totais acima (subestimando o valor real da
           carteira) até você definir o preço na página de cada ativo.
@@ -729,7 +755,7 @@ function FiltroECsv({
         value={corretoraFiltro}
         onChange={(e) => onFiltroChange(e.target.value)}
         disabled={carregando || posicao.corretoras.length === 0}
-        className="input w-auto text-xs"
+        className="input w-auto text-sm"
       >
         <option value="">Todas as corretoras/bancos</option>
         {posicao.corretoras.map((c) => (
@@ -743,12 +769,12 @@ function FiltroECsv({
         <button
           onClick={onAtualizarCotacoes}
           disabled={atualizandoCotacoes}
-          className="btn btn-secondary text-xs py-1 px-3 disabled:opacity-60"
+          className="btn btn-secondary text-sm py-1.5 px-3 disabled:opacity-60"
           title="Busca a cotação mais recente (Yahoo Finance) de todos os ativos com cotação automática e atualiza o histórico usado pela Variação hoje."
         >
           {atualizandoCotacoes ? "Atualizando..." : "Atualizar cotações"}
         </button>
-        <button onClick={() => exportarCsv(posicao)} className="text-xs text-accent hover:underline whitespace-nowrap">
+        <button onClick={() => exportarCsv(posicao)} className="text-sm text-accent hover:underline whitespace-nowrap">
           Exportar CSV
         </button>
       </div>

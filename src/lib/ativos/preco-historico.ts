@@ -70,7 +70,7 @@ async function obterTransacoesOrdenadas(profileId: string, ativoId: string) {
   const supabase = await createClient();
   const { data } = await supabase
     .from("transacoes")
-    .select("tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at")
+    .select("tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, horario_negociacao")
     .eq("profile_id", profileId)
     .eq("ativo_id", ativoId);
 
@@ -88,6 +88,7 @@ async function obterTransacoesOrdenadas(profileId: string, ativoId: string) {
     fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
     valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
     createdAt: t.created_at as string,
+    horarioNegociacao: t.horario_negociacao as string | null,
   }));
 
   return ordenarTransacoes(transacoes);

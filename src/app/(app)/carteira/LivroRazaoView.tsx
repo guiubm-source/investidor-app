@@ -334,24 +334,27 @@ export default function LivroRazaoView({
         </div>
       )}
 
+      {/* Escala 1920x1080 + elevação (§8.60): mesma linguagem visual da
+       * Posição — números principais em text-2xl (eram text-lg) e
+       * `card-interactive` pro hover sutil. */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <div className="card p-3">
-          <p className="text-xs text-faint">Comprado{filtroAtivo ? " (filtrado)" : ""}</p>
-          <p className="text-lg font-medium text-success">{formatarMoeda(totalFiltrado.compra)}</p>
+        <div className="card card-interactive p-4">
+          <p className="text-sm text-faint mb-1">Comprado{filtroAtivo ? " (filtrado)" : ""}</p>
+          <p className="text-2xl font-medium text-success">{formatarMoeda(totalFiltrado.compra)}</p>
         </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint">Vendido{filtroAtivo ? " (filtrado)" : ""}</p>
-          <p className="text-lg font-medium text-danger">{formatarMoeda(totalFiltrado.venda)}</p>
+        <div className="card card-interactive p-4">
+          <p className="text-sm text-faint mb-1">Vendido{filtroAtivo ? " (filtrado)" : ""}</p>
+          <p className="text-2xl font-medium text-danger">{formatarMoeda(totalFiltrado.venda)}</p>
         </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint">Aporte líquido (compra − venda){filtroAtivo ? " (filtrado)" : ""}</p>
-          <p className="text-lg font-medium text-ink">{formatarMoeda(totalFiltrado.liquido)}</p>
+        <div className="card card-interactive p-4">
+          <p className="text-sm text-faint mb-1">Aporte líquido (compra − venda){filtroAtivo ? " (filtrado)" : ""}</p>
+          <p className="text-2xl font-medium text-ink">{formatarMoeda(totalFiltrado.liquido)}</p>
         </div>
-        <div className="card p-3">
-          <p className="text-xs text-faint" title="Venda − custo médio ponderado, sempre com o histórico completo do ativo (não só o período filtrado)">
+        <div className="card card-interactive p-4">
+          <p className="text-sm text-faint mb-1" title="Venda − custo médio ponderado, sempre com o histórico completo do ativo (não só o período filtrado)">
             Lucro realizado{filtroAtivo ? " (ativos do filtro)" : ""}
           </p>
-          <p className={`text-lg font-medium ${lucroRealizadoFiltrado >= 0 ? "text-success" : "text-danger"}`}>
+          <p className={`text-2xl font-medium ${lucroRealizadoFiltrado >= 0 ? "text-success" : "text-danger"}`}>
             {formatarMoeda(lucroRealizadoFiltrado)}
           </p>
         </div>
@@ -371,7 +374,18 @@ export default function LivroRazaoView({
         </div>
       )}
 
-      <div className="card overflow-hidden">
+      {/*
+       * Nota (§8.60): a grade de transações abaixo usa colunas de largura
+       * FIXA em pixel (grid-cols-[24px_90px_1fr_80px_100px_100px_1fr_110px])
+       * calibradas pra `text-xs` — deliberadamente NÃO aumentada de escala
+       * aqui (diferente da Posição) porque bumping a fonte sem também
+       * recalibrar as larguras arrisca texto cortado/quebrado em colunas
+       * estreitas (90px/80px/100px) sem poder verificar visualmente no
+       * ambiente onde este código foi escrito. Só a elevação (`card-interactive`)
+       * foi aplicada, que é puramente cosmética (sombra/borda no hover) e
+       * não afeta layout de texto.
+       */}
+      <div className="card card-interactive overflow-hidden">
        {/* overflow-x-auto + min-w (docs/MAPA-DE-DADOS.md §8.59) — mesmo
            tratamento que Posição/Proventos já tinham, faltava só aqui;
            sem isso essa grade densa vazava/espremia em tela estreita. */}

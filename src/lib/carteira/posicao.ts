@@ -21,12 +21,48 @@ import {
   calcularPosicao,
   ordenarTransacoes,
   calcularRetornoSimplesAcumulado,
+  calcularXIRR,
+  construirFluxosCaixaXIRR,
   type TransacaoCalc,
+  type FluxoCaixaXIRR,
 } from "@/lib/ativos/posicao-calculo";
 import { TIPOS_COTACAO_AUTOMATICA } from "@/lib/ativos/yahoo-finance";
 import type { TipoAtivo } from "@/lib/ativos/actions";
 import type { Corretora } from "./actions";
 import { ORDEM_GRUPOS, LABEL_GRUPO, grupoDoAtivo, type GrupoPosicao } from "./grupo-classificacao";
+import { buscarTodasLinhas } from "@/lib/supabase/paginacao";
+import { obterCotacoesDolar, taxaMaisRecenteAte, converterCamposMonetariosParaBRL } from "@/lib/ativos/cambio";
+
+/**
+ * Câmbio (§8.60, correção 2026-07-23): antes desta correção, esta consulta
+ * nunca lia `transacoes.moeda`/`.cambio` nem convertia `ativos.preco_atual`
+ * de ativos internacionais — uma transação lançada em USD (campo "Moeda" nos
+ * Detalhes fiscais do formulário) entrava direto na soma de patrimônio como
+ * se USD = BRL, e o preço de mercado de ativos internacionais (sempre em USD
+ * quando vem do Yahoo Finance — ver `TIPOS_COTACAO_AUTOMATICA`/`yahoo-finance.ts`)
+ * também nunca era convertido. Ambos misturavam dólar com real na mesma soma
+ * (patrimonioAtual/totalCarteira). Helpers (`obterCotacoesDolar`/
+ * `taxaMaisRecenteAte`/`converterCamposMonetariosParaBRL`) vivem em
+ * `lib/ativos/cambio.ts` — mesma correção aplicada aqui e em
+ * `lib/ativos/actions.ts#obterAtivosComPosicao`, fonte única. A correção:
+ * 1) Cada transação com `moeda === 'USD'` tem `preco_unitario`/`custos`
+ *    convertidos pra BRL pelo `cambio` da PRÓPRIA transação (histórico,
+ *    fiel ao dia do negócio); se `cambio` estiver ausente, cai pra cotação
+ *    diária mais recente ANTES/NA data da transação (`indicador_dolar_diario`,
+ *    mesma tabela que já alimenta a sub-aba Dólar de Indicadores); se nem
+ *    isso existir, mantém sem converter (mesmo comportamento de antes da
+ *    correção — nunca pior do que já era).
+ * 2) `preco_atual` de ativos `tipo === 'internacional'` com cotação vinda do
+ *    Yahoo (`preco_fonte === 'yahoo_finance'`) é convertido pela cotação
+ *    mais recente ATÉ HOJE. Preço manual (`preco_fonte === 'manual'` ou
+ *    nunca definido) fica como está — não há como saber com certeza em que
+ *    moeda o usuário digitou nesse caso, ver comentário mais abaixo.
+ * 3) A MESMA cotação de hoje (`taxaHoje`) é usada tanto pro preço de hoje
+ *    quanto pro preço "anterior" (variação hoje) — simplificação deliberada:
+ *    a variação % fica exata (o câmbio se cancela na divisão), só a
+ *    variação em R$ absoluto ganha uma aproximação pequena (ignora o
+ *    movimento cambial entre ontem e hoje, não o movimento do preço em si).
+ */
 
 // NÃO reexportar `GrupoPosicao` daqui, nem como `export type` — build real do
 // Next/Turbopack (2026-07-20, ver §8.19/§8.21) quebrou com "Export
@@ -284,19 +320,42 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
   };
   if (!user) return vazio;
 
-  const [ativosRes, transacoesRes, corretorasRes, proventosRes] = await Promise.all([
+  const [ativosRes, transacoesTodas, corretorasRes, proventosRes, pontosCambio] = await Promise.all([
     supabase
       .from("ativos")
       .select(
-        "id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual, preco_atualizado_em, setor_id, setor:alocacao_setores(id, nome, ordem, classe:alocacao_classes(id, nome, ordem, macro:alocacao_macros(id, nome, ordem)))"
+        "id, ticker, nome, tipo, subtipo_renda_fixa, subtipo_internacional, preco_atual, preco_atualizado_em, preco_fonte, setor_id, setor:alocacao_setores(id, nome, ordem, classe:alocacao_classes(id, nome, ordem, macro:alocacao_macros(id, nome, ordem)))"
       )
       .eq("profile_id", user.id),
-    supabase
-      .from("transacoes")
-      .select(
-        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at"
-      )
-      .eq("profile_id", user.id),
+    // Ver docs/MAPA-DE-DADOS.md §8.60 (2026-07-23): esta query não paginava —
+    // acima de ~1000 lançamentos (teto do PostgREST, `db-max-rows`) a Posição
+    // passava a ignorar o resto em silêncio, mesma classe de bug já corrigida
+    // em Livro-razão/Proventos (§8.59). `moeda`/`cambio`/`horario_negociacao`
+    // são as 3 colunas novas desta correção (câmbio + ordem intradiária).
+    buscarTodasLinhas<{
+      id: string;
+      ativo_id: string;
+      corretora_id: string | null;
+      tipo: string;
+      data: string;
+      quantidade: number | null;
+      preco_unitario: number | null;
+      custos: number | null;
+      fator_proporcao: number | null;
+      valor_capitalizado: number | null;
+      created_at: string;
+      moeda: string | null;
+      cambio: number | null;
+      horario_negociacao: string | null;
+    }>((inicio, fim) =>
+      supabase
+        .from("transacoes")
+        .select(
+          "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, moeda, cambio, horario_negociacao"
+        )
+        .eq("profile_id", user.id)
+        .range(inicio, fim)
+    ),
     supabase.from("corretoras").select("id, nome").eq("profile_id", user.id).order("nome"),
     // Exceção deliberada à regra "Posição não lê proventos" (§8.16): usada
     // pra "Dividendos" tanto nas posições abertas (coluna por ativo, ver
@@ -305,20 +364,25 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     // essa coluna soma TUDO que o ativo já pagou, independente do filtro de
     // corretora selecionado.
     supabase.from("proventos").select("ativo_id, valor_total").eq("profile_id", user.id),
+    // Câmbio (§8.60) — ver comentário no topo do arquivo.
+    obterCotacoesDolar(),
   ]);
 
   // Ver docs/MAPA-DE-DADOS.md §8.17: sem isso, uma coluna faltando no banco
   // (ex.: migração não rodada) fazia a Posição virar "carteira vazia" sem
   // nenhuma pista da causa real — agora o erro do Postgrest sobe pra tela
-  // de erro do Next em vez de sumir em silêncio.
+  // de erro do Next em vez de sumir em silêncio. `transacoesTodas` e
+  // `pontosCambio` não precisam de checagem aqui — `buscarTodasLinhas` já
+  // lança exceção internamente em caso de erro do Postgrest.
   if (ativosRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler ativos — ${ativosRes.error.message}`);
-  if (transacoesRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler transações — ${transacoesRes.error.message}`);
   if (corretorasRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler corretoras — ${corretorasRes.error.message}`);
   if (proventosRes.error) throw new Error(`obterPosicaoConsolidada: falha ao ler proventos — ${proventosRes.error.message}`);
 
   const ativos = ativosRes.data ?? [];
-  const todasTransacoes = transacoesRes.data ?? [];
+  const todasTransacoes = transacoesTodas;
   const corretoras = corretorasRes.data ?? [];
+  const hojeStr = new Date().toISOString().slice(0, 10);
+  const taxaHoje = taxaMaisRecenteAte(pontosCambio, hojeStr);
 
   // Classificação Macro›Classe›Setor de cada ativo (fase 4, §8.56) — mesma
   // fonte única já usada pela Alocação (`ativos.setor_id`), só relida aqui
@@ -385,6 +449,15 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     totalVendidoLiquido: number;
     primeiraCompra: string | null;
     ultimaVenda: string | null;
+    /** Fluxos de caixa (compra/venda, já convertidos pra BRL) — insumo do XIRR (§8.60). */
+    fluxosCaixa: FluxoCaixaXIRR[];
+    /**
+     * `true` quando `precoAtual` (acima) foi convertido de USD pra BRL —
+     * repassado pra "variação hoje" poder aplicar a MESMA conversão no
+     * "preço anterior" (mesma fonte Yahoo, mesma moeda), ver comentário no
+     * topo do arquivo (§8.60, item 3).
+     */
+    precoAtualConvertidoDeUsd: boolean;
   };
 
   const todasAsPosicoes: PosicaoBase[] = ativos.map((ativo) => {
@@ -395,20 +468,33 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     // receber os campos.
     const transacoesDoAtivo: (TransacaoCalc & { createdAt: string })[] = transacoesFiltradas
       .filter((t) => t.ativo_id === ativo.id)
-      .map((t) => ({
-        tipo: t.tipo as TransacaoCalc["tipo"],
-        data: t.data as string,
-        quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
-        precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
-        custos: t.custos !== null ? Number(t.custos) : null,
-        fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
-        valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
-        createdAt: t.created_at as string,
-      }));
+      .map((t) => {
+        const base = {
+          tipo: t.tipo as TransacaoCalc["tipo"],
+          data: t.data as string,
+          quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
+          precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
+          custos: t.custos !== null ? Number(t.custos) : null,
+        };
+        // Câmbio (§8.60): converte pra BRL quando a transação foi lançada em
+        // USD — ver comentário no topo do arquivo.
+        const convertido =
+          t.moeda === "USD"
+            ? converterCamposMonetariosParaBRL(base, t.cambio !== null ? Number(t.cambio) : null, pontosCambio)
+            : base;
+        return {
+          ...convertido,
+          fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
+          valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
+          createdAt: t.created_at as string,
+          horarioNegociacao: t.horario_negociacao,
+        };
+      });
 
     const ordenadas = ordenarTransacoes(transacoesDoAtivo);
     const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto, totalVendidoLiquido } =
       calcularPosicao(ordenadas);
+    const fluxosCaixa = construirFluxosCaixaXIRR(ordenadas);
 
     // Ver docs/MAPA-DE-DADOS.md §8.25 — só usado pela seção "Ativos
     // encerrados" (coluna "Período"), não afeta nenhum outro cálculo.
@@ -417,6 +503,14 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     const primeiraCompra = datasCompra.length > 0 ? datasCompra.reduce((a, b) => (a < b ? a : b)) : null;
     const ultimaVenda = datasVenda.length > 0 ? datasVenda.reduce((a, b) => (a > b ? a : b)) : null;
 
+    // Câmbio (§8.60): preço de mercado de ativo internacional cotado
+    // automaticamente vem do Yahoo Finance em USD (nunca convertido antes
+    // desta correção) — ver comentário no topo do arquivo. Preço manual
+    // (`preco_fonte !== 'yahoo_finance'`) fica como está.
+    const precoAtualUsdParaBrl =
+      ativo.tipo === "internacional" && ativo.preco_fonte === "yahoo_finance" && taxaHoje !== null;
+    const precoAtual = precoAtualUsdParaBrl ? Number(ativo.preco_atual) * taxaHoje! : Number(ativo.preco_atual);
+
     return {
       ativoId: ativo.id,
       ticker: ativo.ticker,
@@ -424,7 +518,7 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       tipo: ativo.tipo as TipoAtivo,
       subtipoRendaFixa: ativo.subtipo_renda_fixa,
       subtipoInternacional: ativo.subtipo_internacional,
-      precoAtual: Number(ativo.preco_atual),
+      precoAtual,
       precoDefinido: ativo.preco_atualizado_em !== null,
       quantidade,
       precoMedio,
@@ -433,6 +527,8 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
       totalVendidoLiquido,
       primeiraCompra,
       ultimaVenda,
+      fluxosCaixa,
+      precoAtualConvertidoDeUsd: precoAtualUsdParaBrl,
     };
   });
 
@@ -465,9 +561,14 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     const patrimonioAtual = p.quantidade * p.precoAtual;
     const diferenca = p.precoAtual - p.precoMedio;
 
-    const precoAnterior = TIPOS_COTACAO_AUTOMATICA.includes(p.tipo)
+    const precoAnteriorBruto = TIPOS_COTACAO_AUTOMATICA.includes(p.tipo)
       ? precosAnterioresMercado.get(`${p.tipo}:${p.ticker}`)
       : precosAnterioresManuais.get(p.ativoId);
+    // Câmbio (§8.60, item 3): mesma conversão do preço de hoje, pra não
+    // misturar USD (preço anterior, também vindo do Yahoo) com BRL
+    // (preço atual já convertido) na mesma subtração.
+    const precoAnterior =
+      p.precoAtualConvertidoDeUsd && precoAnteriorBruto !== undefined ? precoAnteriorBruto * taxaHoje! : precoAnteriorBruto;
 
     // "Hoje" é sempre `preco_atual` (mesma fonte do Patrimônio atual, ver
     // comentário em obterPrecoAnteriorMercado) — só falta o "ontem".
@@ -479,12 +580,18 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     }
 
     // Ver §8.28 (correção 2026-07-20) e §8.59 (extração 2026-07-22) —
-    // "retorno simples acumulado", fórmula única em posicao-calculo.ts.
-    const { valor: variacaoTotalValor, pct: variacaoTotalPct } = calcularRetornoSimplesAcumulado(
+    // "retorno simples acumulado" pro R$ (continua correto, é só aritmética
+    // de caixa). Ver §8.60 (2026-07-23): o `%` agora vem do XIRR, não mais
+    // desta fórmula (ver comentário em calcularRetornoSimplesAcumulado).
+    const { valor: variacaoTotalValor } = calcularRetornoSimplesAcumulado(
       patrimonioAtual,
       p.totalVendidoLiquido,
       p.totalInvestidoBruto
     );
+    const variacaoTotalPct =
+      patrimonioAtual !== 0 || p.fluxosCaixa.length > 0
+        ? calcularXIRR([...p.fluxosCaixa, { data: hojeStr, valor: patrimonioAtual }])
+        : null;
 
     // Ver §8.27 (correção 2026-07-20) — preço médio ajustado (informal, não
     // afeta IR): custo RESIDUAL das cotas que ainda estão em carteira
@@ -561,15 +668,17 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     // §8.59 — totalVendidoLiquido, não lucroRealizado). `?? 0` preserva o
     // comportamento original deste agregado (valor 0 quando não há base de
     // investimento, diferente do `null` por ativo individual).
-    const somaVendidoLiquido = posicoesBase
-      .filter((p) => ativosDoGrupo.some((a) => a.ativoId === p.ativoId))
-      .reduce((s, p) => s + p.totalVendidoLiquido, 0);
-    const somaInvestidoBruto = posicoesBase
-      .filter((p) => ativosDoGrupo.some((a) => a.ativoId === p.ativoId))
-      .reduce((s, p) => s + p.totalInvestidoBruto, 0);
+    const posicoesDoGrupo = posicoesBase.filter((p) => ativosDoGrupo.some((a) => a.ativoId === p.ativoId));
+    const somaVendidoLiquido = posicoesDoGrupo.reduce((s, p) => s + p.totalVendidoLiquido, 0);
+    const somaInvestidoBruto = posicoesDoGrupo.reduce((s, p) => s + p.totalInvestidoBruto, 0);
     const retornoGrupo = calcularRetornoSimplesAcumulado(patrimonioGrupo, somaVendidoLiquido, somaInvestidoBruto);
     const variacaoTotalValor = retornoGrupo.valor ?? 0;
-    const variacaoTotalPct = retornoGrupo.pct;
+    // Ver §8.60: `%` do grupo agora é o XIRR combinado dos fluxos de TODOS
+    // os ativos do grupo, mais um único fluxo final com o patrimônio de
+    // hoje do grupo somado (mesma convenção do XIRR por ativo, acima).
+    const fluxosGrupo = posicoesDoGrupo.flatMap((p) => p.fluxosCaixa);
+    const variacaoTotalPct =
+      fluxosGrupo.length > 0 ? calcularXIRR([...fluxosGrupo, { data: hojeStr, valor: patrimonioGrupo }]) : null;
 
     return {
       grupo,
@@ -641,18 +750,20 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
     }
     const variacaoHojePctAlocacao = somaOntemAlocacao > 0 ? (somaHojeAlocacao / somaOntemAlocacao) * 100 : null;
 
-    const somaVendidoLiquidoAlocacao = posicoesBase
-      .filter((p) => ativosDoGrupoOriginais.some((a) => a.ativoId === p.ativoId))
-      .reduce((s, p) => s + p.totalVendidoLiquido, 0);
-    const somaInvestidoBrutoAlocacao = posicoesBase
-      .filter((p) => ativosDoGrupoOriginais.some((a) => a.ativoId === p.ativoId))
-      .reduce((s, p) => s + p.totalInvestidoBruto, 0);
-    const variacaoTotalValorAlocacao =
-      somaInvestidoBrutoAlocacao > 0 ? patrimonioGrupo + somaVendidoLiquidoAlocacao - somaInvestidoBrutoAlocacao : 0;
+    // Ver §8.60 (2026-07-23): este bloco tinha a MESMA fórmula de "retorno
+    // simples acumulado" copiada inline (não chamava `calcularRetornoSimplesAcumulado`,
+    // apesar do comentário de extração em §8.59 dizer que os 6 lugares
+    // tinham sido unificados — este era um 7º lugar que passou batido).
+    // Agora chama a função compartilhada pro R$ e o XIRR pro %, igual aos
+    // outros agregados desta tela.
+    const posicoesDoGrupoAlocacao = posicoesBase.filter((p) => ativosDoGrupoOriginais.some((a) => a.ativoId === p.ativoId));
+    const somaVendidoLiquidoAlocacao = posicoesDoGrupoAlocacao.reduce((s, p) => s + p.totalVendidoLiquido, 0);
+    const somaInvestidoBrutoAlocacao = posicoesDoGrupoAlocacao.reduce((s, p) => s + p.totalInvestidoBruto, 0);
+    const retornoAlocacao = calcularRetornoSimplesAcumulado(patrimonioGrupo, somaVendidoLiquidoAlocacao, somaInvestidoBrutoAlocacao);
+    const variacaoTotalValorAlocacao = retornoAlocacao.valor ?? 0;
+    const fluxosAlocacao = posicoesDoGrupoAlocacao.flatMap((p) => p.fluxosCaixa);
     const variacaoTotalPctAlocacao =
-      somaInvestidoBrutoAlocacao > 0
-        ? ((patrimonioGrupo + somaVendidoLiquidoAlocacao) / somaInvestidoBrutoAlocacao - 1) * 100
-        : null;
+      fluxosAlocacao.length > 0 ? calcularXIRR([...fluxosAlocacao, { data: hojeStr, valor: patrimonioGrupo }]) : null;
 
     return {
       chave,
@@ -682,7 +793,11 @@ export async function obterPosicaoConsolidada(corretoraId?: string | null): Prom
   const totalInvestidoBruto = posicoesBase.reduce((s, p) => s + p.totalInvestidoBruto, 0);
   const retornoTotalCarteira = calcularRetornoSimplesAcumulado(totalCarteira, totalVendidoLiquido, totalInvestidoBruto);
   const totalVariacaoTotalValor = retornoTotalCarteira.valor ?? 0;
-  const totalVariacaoTotalPct = retornoTotalCarteira.pct;
+  // Ver §8.60: `%` do total da carteira também vem do XIRR combinado de
+  // TODOS os fluxos de caixa de todos os ativos em posição.
+  const fluxosTotais = posicoesBase.flatMap((p) => p.fluxosCaixa);
+  const totalVariacaoTotalPct =
+    fluxosTotais.length > 0 ? calcularXIRR([...fluxosTotais, { data: hojeStr, valor: totalCarteira }]) : null;
 
   // Ver docs/MAPA-DE-DADOS.md §8.25 — "Ativos encerrados": ordenado por data
   // da última venda mais recente primeiro (linha do tempo de saídas).

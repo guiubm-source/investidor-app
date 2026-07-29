@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { buscarTodasLinhas } from "@/lib/supabase/paginacao";
 import { buscarCotacaoYahoo, deriveYahooSymbol, TIPOS_COTACAO_AUTOMATICA } from "./yahoo-finance";
 import { atualizarTodasCotacoes, type ResultadoAtualizacaoCotacoes } from "./atualizar-cotacoes";
 import {
@@ -31,8 +32,11 @@ import {
   calcularPosicao,
   ordenarTransacoes,
   calcularRetornoSimplesAcumulado,
+  calcularXIRR,
+  construirFluxosCaixaXIRR,
   type TransacaoCalc,
 } from "./posicao-calculo";
+import { obterCotacoesDolar, taxaMaisRecenteAte, converterCamposMonetariosParaBRL } from "./cambio";
 
 export type AcaoResultado = { error?: string };
 
@@ -177,7 +181,7 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
   // na conta, então fica de fora da soma aqui (aparece só na aba Proventos).
   const hojeStr = new Date().toISOString().slice(0, 10);
 
-  const [ativosRes, transacoesRes, proventosRes] = await Promise.all([
+  const [ativosRes, transacoes, proventosRes, pontosCambio] = await Promise.all([
     supabase
       .from("ativos")
       .select(
@@ -185,17 +189,42 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       )
       .eq("profile_id", user.id)
       .order("ticker"),
-    supabase
-      .from("transacoes")
-      .select(
-        "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, corretoras(nome)"
-      )
-      .eq("profile_id", user.id),
+    // Ver docs/MAPA-DE-DADOS.md §8.60 (2026-07-23): mesmo bug de paginação já
+    // corrigido em Livro-razão/Proventos/`lib/carteira/posicao.ts` (§8.59) —
+    // esta query, usada por Ativos/Alocação/Carteira, também não paginava.
+    // `moeda`/`cambio`/`horario_negociacao` são as 3 colunas novas do câmbio
+    // + ordem intradiária (mesma correção de `lib/carteira/posicao.ts`).
+    buscarTodasLinhas<{
+      id: string;
+      ativo_id: string;
+      corretora_id: string | null;
+      tipo: string;
+      data: string;
+      quantidade: number | null;
+      preco_unitario: number | null;
+      custos: number | null;
+      fator_proporcao: number | null;
+      valor_capitalizado: number | null;
+      created_at: string;
+      moeda: string | null;
+      cambio: number | null;
+      horario_negociacao: string | null;
+      corretoras: { nome: string | null } | { nome: string | null }[] | null;
+    }>((inicio, fim) =>
+      supabase
+        .from("transacoes")
+        .select(
+          "id, ativo_id, corretora_id, tipo, data, quantidade, preco_unitario, custos, fator_proporcao, valor_capitalizado, created_at, moeda, cambio, horario_negociacao, corretoras(nome)"
+        )
+        .eq("profile_id", user.id)
+        .range(inicio, fim)
+    ),
     supabase
       .from("proventos")
       .select("id, ativo_id, tipo, data:data_pagamento, valor_total")
       .eq("profile_id", user.id)
       .lte("data_pagamento", hojeStr),
+    obterCotacoesDolar(),
   ]);
 
   // Ver docs/MAPA-DE-DADOS.md §8.17: sem isso, uma coluna faltando no banco
@@ -203,13 +232,16 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
   // Posição/Alocação/lista de Ativos ficavam vazias sem nenhuma pista da
   // causa. Agora o erro do Postgrest é jogado pra cima (Next mostra a tela
   // de erro em vez de uma tela vazia) e fica no log do servidor.
+  // `transacoes`/`pontosCambio` não precisam de checagem — `buscarTodasLinhas`
+  // já lança exceção internamente em caso de erro do Postgrest.
   if (ativosRes.error) throw new Error(`obterAtivosComPosicao: falha ao ler ativos — ${ativosRes.error.message}`);
-  if (transacoesRes.error) throw new Error(`obterAtivosComPosicao: falha ao ler transações — ${transacoesRes.error.message}`);
   if (proventosRes.error) throw new Error(`obterAtivosComPosicao: falha ao ler proventos — ${proventosRes.error.message}`);
 
   const ativos = ativosRes.data ?? [];
-  const transacoes = transacoesRes.data ?? [];
   const proventos = proventosRes.data ?? [];
+  // `hojeStr` já existe acima (filtro de proventos) — reaproveitado aqui
+  // pra achar a cotação do dólar mais recente até hoje (§8.60).
+  const taxaHoje = taxaMaisRecenteAte(pontosCambio, hojeStr);
 
   return ativos.map((ativo) => {
     const setor = Array.isArray(ativo.setor) ? ativo.setor[0] : ativo.setor;
@@ -238,15 +270,25 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
       .filter((t) => t.ativo_id === ativo.id)
       .map((t) => {
         const corretora = Array.isArray(t.corretoras) ? t.corretoras[0] : t.corretoras;
-        return {
+        const base = {
           tipo: t.tipo as TransacaoCalc["tipo"],
           data: t.data as string,
           quantidade: t.quantidade !== null ? Number(t.quantidade) : null,
           precoUnitario: t.preco_unitario !== null ? Number(t.preco_unitario) : null,
           custos: t.custos !== null ? Number(t.custos) : null,
+        };
+        // Câmbio (§8.60): converte pra BRL quando a transação foi lançada em
+        // USD — ver lib/ativos/cambio.ts.
+        const convertido =
+          t.moeda === "USD"
+            ? converterCamposMonetariosParaBRL(base, t.cambio !== null ? Number(t.cambio) : null, pontosCambio)
+            : base;
+        return {
+          ...convertido,
           fatorProporcao: t.fator_proporcao !== null ? Number(t.fator_proporcao) : null,
           valorCapitalizado: t.valor_capitalizado !== null ? Number(t.valor_capitalizado) : null,
           createdAt: t.created_at as string,
+          horarioNegociacao: t.horario_negociacao,
           _id: t.id as string,
           _corretoraId: t.corretora_id as string | null,
           _corretoraNome: corretora?.nome ?? null,
@@ -256,24 +298,29 @@ export async function obterAtivosComPosicao(): Promise<AtivoResumo[]> {
     const transacoesOrdenadas = ordenarTransacoes(transacoesDoAtivo);
     const { quantidade, precoMedio, lucroRealizado, totalInvestidoBruto, totalVendidoLiquido } =
       calcularPosicao(transacoesOrdenadas);
+    const fluxosCaixa = construirFluxosCaixaXIRR(transacoesOrdenadas);
 
     const proventosDoAtivo = proventos.filter((p) => p.ativo_id === ativo.id);
     const proventosRecebidos = proventosDoAtivo.reduce((s, p) => s + Number(p.valor_total), 0);
 
-    const precoAtual = Number(ativo.preco_atual);
+    // Câmbio (§8.60): preço de mercado de ativo internacional cotado
+    // automaticamente vem do Yahoo Finance em USD (nunca convertido antes
+    // desta correção) — ver lib/ativos/cambio.ts. Preço manual
+    // (`preco_fonte !== 'yahoo_finance'`) fica como está.
+    const precoAtualUsdParaBrl = ativo.tipo === "internacional" && ativo.preco_fonte === "yahoo_finance" && taxaHoje !== null;
+    const precoAtual = precoAtualUsdParaBrl ? Number(ativo.preco_atual) * taxaHoje! : Number(ativo.preco_atual);
     const valorAplicado = quantidade * precoMedio;
     const valorAtual = quantidade * precoAtual;
     const lucroNaoRealizado = valorAtual - valorAplicado;
     const lucroNaoRealizadoPct = valorAplicado > 0 ? (lucroNaoRealizado / valorAplicado) * 100 : 0;
 
-    // "Retorno simples acumulado" — mesma fórmula da rentabilidade histórica
-    // (§8.15), unificada aqui pro "hoje" (ver §8.16 e §8.28/§8.59 —
-    // fórmula única em posicao-calculo.ts).
-    const { valor: rentabilidadeTotalValor, pct: rentabilidadeTotalPct } = calcularRetornoSimplesAcumulado(
-      valorAtual,
-      totalVendidoLiquido,
-      totalInvestidoBruto
-    );
+    // "Retorno simples acumulado" pro R$ — mesma fórmula da rentabilidade
+    // histórica (§8.15), unificada aqui pro "hoje" (ver §8.16 e §8.28/§8.59).
+    // Ver §8.60 (2026-07-23): o `%` agora vem do XIRR, não mais desta
+    // fórmula (mesma correção de lib/carteira/posicao.ts).
+    const { valor: rentabilidadeTotalValor } = calcularRetornoSimplesAcumulado(valorAtual, totalVendidoLiquido, totalInvestidoBruto);
+    const rentabilidadeTotalPct =
+      fluxosCaixa.length > 0 ? calcularXIRR([...fluxosCaixa, { data: hojeStr, valor: valorAtual }]) : null;
 
     return {
       id: ativo.id,

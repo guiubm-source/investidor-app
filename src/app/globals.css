@@ -41,6 +41,21 @@ body {
     border-radius: 10px;
   }
 
+  /*
+   * Elevação sutil para cards clicáveis/expansíveis (§8.60, 2026-07-23) —
+   * classe opt-in ADICIONAL ao `.card` (nunca substitui), pra não alterar o
+   * visual de cards não-interativos no resto do app (formulários, etc.).
+   * Usada por enquanto só na Posição (grupos colapsáveis, Ativos
+   * encerrados) — ver PosicaoView.tsx.
+   */
+  .card-interactive {
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .card-interactive:hover {
+    border-color: var(--color-border-strong);
+    box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.45);
+  }
+
   .label {
     display: block;
     font-size: 13px;

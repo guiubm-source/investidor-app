@@ -7663,6 +7663,169 @@ antes de codar, conforme a seção 1 deste documento):
   de contrato de infraestrutura (quem/o que chama a rota de cron
   precisaria ser atualizado junto), fora do escopo de um fix de código.
 
+### 8.60 Revisão focada: aba Carteira — escala 1920x1080 + correções de cálculo + cards/animação (2026-07-23)
+
+**Contexto:** o Guilherme pediu uma revisão da aba Carteira "como usuário"
+(sub-abas Posição + Livro-razão), cobrindo 3 eixos ao mesmo tempo: (1)
+aumentar a escala do layout pra uma tela desktop 1920x1080, (2) corrigir
+cálculos incorretos encontrados, (3) melhorar cards/animações. Antes de
+codar, resolvi uma ambiguidade de produto genuína via pergunta única (regra
+da seção 1): a fórmula de "retorno total" (%) seria substituída por XIRR
+(Money-Weighted Return) em vez de TWR (Time-Weighted Return) — decisão do
+Guilherme, ver "Correção 3" abaixo.
+
+**1) Escala 1920x1080** — `src/app/(app)/carteira/page.tsx`: container
+trocado de `max-w-5xl` (1024px) pra `max-w-[1600px]` (`px-6`→`px-10`), título
+`text-2xl`→`text-3xl`. Em `PosicaoView.tsx`: tabelas `text-xs`→`text-sm`,
+títulos de grupo `text-sm`→`text-base`, números principais do `ResumoTotal`
+viraram "hero KPI" (`text-sm`→`text-2xl`). Em `LivroRazaoView.tsx`: os 4
+cards de resumo (Comprado/Vendido/Aporte líquido/Lucro realizado) também
+viraram `text-2xl`. **Deliberadamente NÃO escalada:** a grade densa de
+transações do Livro-razão (`grid-cols-[24px_90px_1fr_80px_100px_100px_1fr_110px]`)
+— colunas de largura fixa em pixel calibradas pra `text-xs`; aumentar a
+fonte sem recalibrar as larguras arriscava texto cortado/quebrado em colunas
+estreitas (80-100px) sem poder verificar visualmente no ambiente onde este
+código foi escrito (sandbox sem browser). Fica como próximo passo, com
+verificação visual (screenshot) antes de aplicar.
+
+**2) Correções de cálculo — 4 bugs confirmados:**
+
+1. **Câmbio de ativos internacionais ignorado** (o mais severo). Nem
+   `lib/carteira/posicao.ts` nem `lib/ativos/actions.ts#obterAtivosComPosicao`
+   liam `transacoes.moeda`/`.cambio`, nem convertiam `ativos.preco_atual` —
+   uma transação lançada em USD (campo "Moeda" nos Detalhes fiscais do
+   formulário, só aparece pra `tipo === 'internacional'`) entrava direto na
+   soma de patrimônio/carteira como se USD = BRL, e o preço de mercado
+   desses ativos (sempre em USD quando vem do Yahoo Finance) nunca era
+   convertido. Corrigido em `src/lib/ativos/cambio.ts` (módulo novo,
+   compartilhado pelos dois arquivos — mesmo espírito de `posicao-calculo.ts`,
+   fonte única): `converterCamposMonetariosParaBRL` converte
+   `preco_unitario`/`custos` de cada transação em USD usando o `cambio` da
+   PRÓPRIA transação (ou, se ausente, a cotação diária mais recente até
+   aquela data em `indicador_dolar_diario`); `preco_atual` de ativo
+   internacional com `preco_fonte === 'yahoo_finance'` é convertido pela
+   cotação de HOJE. A mesma cotação de hoje é usada tanto pro preço atual
+   quanto pro preço anterior (variação hoje) — simplificação deliberada: a
+   variação % fica exata (câmbio se cancela na divisão), só a variação em
+   R$ absoluto ganha uma aproximação pequena (ignora o movimento cambial
+   entre ontem e hoje). **Edge case não resolvido, documentado no código:**
+   ativo internacional com preço atualizado MANUALMENTE (não Yahoo) — não
+   há como saber com certeza em que moeda o usuário digitou, fica sem
+   conversão (mesmo comportamento de antes, nunca pior). **Cripto não
+   entra nessa correção** — o formulário nunca expôs campo de moeda/câmbio
+   pra `tipo === 'cripto'`, então não há dado nenhum de conversão a
+   recuperar; fica como gap conhecido, não corrigido aqui.
+2. **Clamp de venda inconsistente** — `lib/ativos/posicao-calculo.ts#aplicarTransacaoNaPosicao`:
+   quando uma venda excede o saldo disponível (ex.: sob filtro de
+   corretora, um sub-livro que não tem quantidade suficiente pra cobrir a
+   venda registrada), a quantidade já era corretamente limitada
+   (`Math.min(t.quantidade, estado.quantidade)`) pra `quantidade`/
+   `custoTotal`/`lucroRealizado`, mas `totalVendidoLiquido` usava a
+   quantidade CRUA da transação — inflava o "total vendido" (e por
+   consequência o retorno acumulado) nesse cenário. Agora os 4 campos usam
+   sempre a quantidade limitada.
+3. **Ordem intradiária usando só `created_at`** — `ordenarTransacoes`
+   desempatava transações do mesmo dia pela ordem de INSERÇÃO no banco
+   (`created_at`), não pela ordem real do negócio — um compra+venda do
+   mesmo dia lançado/importado fora de ordem cronológica podia inverter o
+   custo médio daquele dia. O formulário já captura `horario_negociacao`
+   (campo opcional de "Detalhes fiscais") pra este fim exato, mas nunca era
+   usado pro desempate. Agora `horario_negociacao` é o desempate PRIMÁRIO
+   quando presente nos dois lados do empate, caindo pra `created_at` nos
+   demais casos. Aplicado em `posicao-calculo.ts#ordenarTransacoes` (usado
+   por `lib/carteira/posicao.ts`, `lib/ativos/actions.ts` e
+   `lib/ativos/preco-historico.ts`). **Mesmo gap existe em
+   `ordenarEventosLedgerFiscal` (lib/ir/ledger/construir-ledger.ts)** —
+   deliberadamente NÃO tocado: motor fiscal é mudança de maior risco (afeta
+   cálculo de IR já declarado), fora do escopo desta revisão de Carteira.
+4. **Paginação faltando em `obterPosicaoConsolidada`** — mesma classe de
+   bug já corrigida em Livro-razão/Proventos (§8.59): a query de
+   `transacoes` não usava `.range()`, então acima de ~1000 lançamentos
+   (teto do PostgREST) a Posição ignorava o resto em silêncio. Corrigido
+   reaproveitando o helper `buscarTodasLinhas` (`lib/supabase/paginacao.ts`).
+   Mesma correção aplicada também em `lib/ativos/actions.ts#obterAtivosComPosicao`
+   (mesmo bug lá, não documentado antes).
+
+**3) Correção 3 — fórmula de retorno: "retorno simples acumulado" → XIRR
+para o `%`.** A fórmula antiga (`calcularRetornoSimplesAcumulado`,
+`posicao-calculo.ts`) soma bruta sem olhar QUANDO o dinheiro entrou/saiu —
+vender e recomprar o mesmo ativo pelo mesmo preço distorcia o `%` mesmo
+com o mesmo lucro em R$ (exemplo testado: compra 100@10, vende 100@20,
+recompra 100@20, preço parado — fórmula antiga dava +33,3% ao inflar o
+denominador "total investido bruto" com os dois aportes, ignorando que o
+segundo aporte é o MESMO capital reciclado). Perguntei ao Guilherme XIRR
+(MWR) vs TWR — escolheu XIRR pela simplicidade de implementação (reaproveita
+datas/valores que já existem) e por ser a métrica mais intuitiva pra "quanto
+rendeu meu dinheiro" num app de investidor pessoa física (TWR exigiria uma
+infraestrutura nova de "fotografia da carteira antes de cada fluxo de
+caixa", que hoje não existe).
+
+- `calcularXIRR` (novo, `posicao-calculo.ts`) — Newton-Raphson com busca
+  binária como segunda tentativa se não convergir; `null` quando não há
+  solução matematicamente estável (menos de 2 fluxos, todos com o mesmo
+  sinal, ou nenhuma tentativa numérica converge). Testado contra uma
+  implementação independente em Python (bisseção de alta precisão) pra um
+  conjunto de fluxos irregulares — bateu em 13,332...% nos dois lados.
+- `construirFluxosCaixaXIRR` (novo) — monta a lista de fluxos (compra =
+  saída negativa, venda = entrada positiva, JÁ usando a quantidade
+  LIMITADA da correção 2 acima) a partir de uma sequência de transações
+  ordenadas; eventos societários não geram fluxo (sem caixa de verdade).
+- O `valor` em R$ do retorno (aritmética de caixa simples: patrimônio +
+  vendido − investido) continua correto e usado como estava — só o `%`
+  mudou. Migrado nos 5 pontos de chamada: por ativo, por grupo (tipo), por
+  grupo (Alocação — este último tinha uma CÓPIA INLINE da fórmula antiga
+  que nem passava pela função compartilhada, um 7º lugar que o §8.59 não
+  pegou), total da carteira (`lib/carteira/posicao.ts`), e o stat
+  equivalente da página do Ativo (`lib/ativos/actions.ts#obterAtivosComPosicao`).
+  **`lib/ativos/preco-historico.ts` (série dia a dia do Dashboard,
+  "Evolução do patrimônio" em %) NÃO foi migrado** — é uma série temporal
+  (não um stat pontual), recalcular XIRR em cada dia de um histórico de
+  anos é uma mudança de escopo/performance maior, e o Dashboard não fazia
+  parte do pedido desta rodada; continua na fórmula antiga.
+- Testes novos: `src/lib/ativos/posicao-calculo.test.ts` (10 casos —
+  clamp de venda, desempate por horário, XIRR simples/irregular/reinvestimento/
+  edge cases, construção de fluxos).
+
+**4) Cards/animação** — `.card-interactive` (novo, `globals.css`, classe
+ADITIVA que nunca substitui `.card`): hover com borda mais forte + sombra
+sutil, aplicada só nos cards clicáveis/expansíveis da Posição e nos 4 cards
+de resumo do Livro-razão (não no `.card` base do resto do app — evita
+efeito colateral). Expand/collapse dos grupos da Posição e de "Ativos
+encerrados" trocado do corte instantâneo (`{!colapsado && (...)}`,
+desmontava o conteúdo) pro truque de CSS grid `grid-template-rows: 0fr → 1fr`
+(anima a altura sem JS, mantém o conteúdo sempre montado — aceitável porque
+cada grupo já pagina no máximo 100 linhas). Feedback de carregamento: o
+filtro de corretora na Posição não dava nenhuma pista visual de que algo
+estava recarregando — agora a lista de grupos fica com opacidade reduzida +
+`animate-pulse` enquanto `carregando === true`.
+
+**Verificação final:** `tsc --noEmit` limpo, suíte Vitest 69/69 (10 novos),
+`wc -l -c` + contagem de bytes nulos em todos os arquivos tocados = 0 em
+todos.
+
+**Arquivos tocados:** `src/lib/ativos/posicao-calculo.ts` (clamp, ordem,
+XIRR, fluxos — + testes novos), `src/lib/ativos/cambio.ts` (novo),
+`src/lib/carteira/posicao.ts`, `src/lib/ativos/actions.ts`,
+`src/lib/ativos/preco-historico.ts` (só `horario_negociacao` no select, pra
+consistência do desempate — fórmula de rentabilidade não tocada),
+`src/app/(app)/carteira/page.tsx`, `src/app/(app)/carteira/PosicaoView.tsx`,
+`src/app/(app)/carteira/LivroRazaoView.tsx`, `src/app/globals.css`.
+
+**Deliberadamente fora do escopo desta rodada (não são bugs, são decisões
+de produto ou mudanças de risco/escopo maior):**
+
+- TWR como métrica alternativa/adicional ao XIRR — Guilherme decidiu não
+  fazer por ora.
+- Recalibrar a grade densa do Livro-razão pra `text-sm` (precisa de
+  verificação visual antes).
+- `ordenarEventosLedgerFiscal` (motor fiscal de IR) com o mesmo desempate
+  por horário de negociação — mudança de maior risco, sessão dedicada.
+- Conversão de câmbio pra ativos `tipo === 'cripto'` — formulário nunca
+  capturou moeda/câmbio pra esse tipo, precisaria de decisão de produto
+  nova (schema + formulário) antes de qualquer correção de cálculo.
+- Migrar `preco-historico.ts` (série "Evolução do patrimônio" do
+  Dashboard) pro XIRR — escopo de Dashboard, não de Carteira.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
