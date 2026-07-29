@@ -7899,6 +7899,34 @@ nos 3 arquivos editados sem sinal de corrupção.
 `src/components/TradingViewChart.tsx`,
 `src/app/(app)/ativos/[id]/AtivoDetalheView.tsx`.
 
+### 8.62 Escala 1920x1080 — Dashboard (2026-07-29)
+
+Continuação do rollout página a página combinado em §8.61 (Guilherme
+escolheu esse ritmo, com checkpoint de revisão entre páginas, em vez de
+fazer o app inteiro numa leva só). Dashboard é o segundo da fila.
+
+- `src/app/(app)/dashboard/page.tsx`: container `max-w-3xl` (768px) →
+  `max-w-[1600px]`, `px-6`→`px-10` (mesmo valor padrão de Carteira/Ativo);
+  título "Olá, {nome}" `text-2xl`→`text-3xl`, subtítulo `text-sm`→`text-base`.
+- `src/app/(app)/dashboard/EvolucaoCarteiraBlock.tsx`: cabeçalho "Evolução do
+  patrimônio" `text-sm`→`text-base`.
+- **Sem mudança em `SerieLinhaChart.tsx`** (o gráfico de evolução do
+  patrimônio): o componente usa SVG puro com `viewBox` fixo (900×260) e
+  `className="w-full h-auto"` — a altura já escala proporcionalmente à
+  largura do container automaticamente. Alargar o container já amplia o
+  gráfico sem precisar tocar no componente (diferente do
+  `TradingViewChart`, que tinha altura fixa em pixel).
+- Toggle R$/% (`text-xs`) e legenda explicativa abaixo do gráfico
+  (`text-xs text-faint`) mantidos no tamanho atual — são rótulos de UI
+  pequenos por design, não texto de leitura corrida.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e contagem de bytes nulos
+nos 2 arquivos editados sem sinal de corrupção.
+
+**Próxima da fila (rollout página a página):** a definir com o Guilherme —
+candidatas: Ativos (lista), Alocação, Proventos, Indicadores, Imposto de
+Renda, Comparar, Configurações (todas ainda em `max-w-3xl` a `max-w-6xl`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

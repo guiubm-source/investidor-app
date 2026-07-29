@@ -30,7 +30,7 @@ export default function EvolucaoCarteiraBlock({ pontos }: { pontos: PontoEvoluca
   return (
     <div className="card p-5">
       <div className="flex items-center justify-between mb-1">
-        <h2 className="text-sm font-medium text-ink">Evolução do patrimônio</h2>
+        <h2 className="text-base font-medium text-ink">Evolução do patrimônio</h2>
         <div className="flex gap-1">
           <button
             onClick={() => setModo("valor")}

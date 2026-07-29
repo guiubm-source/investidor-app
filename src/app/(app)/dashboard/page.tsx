@@ -29,13 +29,16 @@ export default async function DashboardPage() {
   ]);
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-3xl mx-auto space-y-5">
+    // Escala 1920x1080 (§8.62, 2026-07-29): container trocado de max-w-3xl
+    // (768px) pra max-w-[1600px], mesmo valor já usado na Carteira (§8.60) e
+    // no Ativo (§8.61) — mantém um único "container largo" padrão no app.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto space-y-5">
         <div className="card p-8">
-          <h1 className="text-2xl font-medium text-ink mb-1">
+          <h1 className="text-3xl font-medium text-ink mb-1">
             Olá, {profile.full_name?.split(" ")[0] ?? "investidor"}
           </h1>
-          <p className="text-sm text-muted mb-6">Este é o painel do seu app de investimentos.</p>
+          <p className="text-base text-muted mb-6">Este é o painel do seu app de investimentos.</p>
 
           {suitability && (
             <div className="rounded-md bg-surface-2 border border-border px-4 py-3 text-sm text-muted">
