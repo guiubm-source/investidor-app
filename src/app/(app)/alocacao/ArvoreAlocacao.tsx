@@ -72,7 +72,7 @@ export default function ArvoreAlocacao({
                 onSelecionar({ tipo: "naoClassificado", id: null });
               }
             }}
-            className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 border-dashed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
+            className={`flex items-center gap-2 pr-3 py-2 text-sm cursor-pointer border-l-2 border-dashed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
               selecao.tipo === "naoClassificado"
                 ? "bg-accent/10 border-l-accent"
                 : "border-l-border hover:bg-surface-2"
@@ -81,10 +81,10 @@ export default function ArvoreAlocacao({
           >
             <span className="w-2.5 shrink-0" />
             <span className="flex-1 truncate italic text-faint">Não classificado</span>
-            <span className="text-faint text-xs w-14 text-right shrink-0">
+            <span className="text-faint text-xs w-16 text-right shrink-0">
               {estrutura.naoClassificado.ativos.length} ativo(s)
             </span>
-            <span className="text-faint text-[10px] w-16 text-right shrink-0" title="Peso na carteira (global)">
+            <span className="text-faint text-[10px] w-20 text-right shrink-0" title="Peso na carteira (global)">
               {(estrutura.patrimonioTotalInvestido > 0
                 ? (estrutura.naoClassificado.valorAtual / estrutura.patrimonioTotalInvestido) * 100
                 : 0
@@ -199,7 +199,7 @@ function LinhaNo({
           onClick();
         }
       }}
-      className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
+      className={`flex items-center gap-2 pr-3 py-2 text-sm cursor-pointer border-l-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
         ativo ? "bg-accent/10 border-l-accent" : "border-l-transparent hover:bg-surface-2"
       }`}
       style={{ paddingLeft: `${12 + nivel * 16}px` }}
@@ -221,8 +221,8 @@ function LinhaNo({
       )}
       <span className={`flex-1 truncate ${destaqueMacro ? "font-semibold text-ink" : "text-ink"}`}>{nome}</span>
       {statusFilhos && <Badge status={statusFilhos} />}
-      <span className="text-faint text-xs w-14 text-right shrink-0">{pesoAlvo.toFixed(0)}%</span>
-      <span className="text-faint text-[10px] w-16 text-right shrink-0" title="Peso na carteira (global)">
+      <span className="text-faint text-xs w-16 text-right shrink-0">{pesoAlvo.toFixed(0)}%</span>
+      <span className="text-faint text-[10px] w-20 text-right shrink-0" title="Peso na carteira (global)">
         {pesoRealGlobal.toFixed(1)}% cart.
       </span>
       {temReordenar && (
@@ -419,7 +419,7 @@ function NoSetor({
             role="button"
             tabIndex={0}
             aria-current={selecao.tipo === "ativo" && selecao.id === ativo.id}
-            className={`flex items-center gap-2 pr-3 py-1.5 text-sm cursor-pointer border-l-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
+            className={`flex items-center gap-2 pr-3 py-2 text-sm cursor-pointer border-l-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px] ${
               selecao.tipo === "ativo" && selecao.id === ativo.id
                 ? "bg-accent/10 border-l-accent"
                 : "border-l-transparent hover:bg-surface-2"
@@ -435,8 +435,8 @@ function NoSetor({
           >
             <span className="w-2.5 shrink-0" />
             <span className="flex-1 truncate text-ink">{ativo.ticker}</span>
-            <span className="text-faint text-xs w-14 text-right shrink-0">{ativo.pesoAlvo.toFixed(0)}%</span>
-            <span className="text-faint text-[10px] w-16 text-right shrink-0" title="Peso na carteira (global)">
+            <span className="text-faint text-xs w-16 text-right shrink-0">{ativo.pesoAlvo.toFixed(0)}%</span>
+            <span className="text-faint text-[10px] w-20 text-right shrink-0" title="Peso na carteira (global)">
               {ativo.pesoRealGlobal.toFixed(1)}% cart.
             </span>
           </div>

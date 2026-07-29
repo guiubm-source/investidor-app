@@ -8008,6 +8008,26 @@ overflow que não dá pra verificar visualmente neste ambiente sem browser.
 seguir):** Alocação, Proventos, Indicadores, Imposto de Renda,
 Configurações, Comparar.
 
+**2) Alocação (`ArvoreAlocacao.tsx`) — feito:**
+
+- A árvore (coluna esquerda, ~60% do container já em 1600px desde §8.63)
+  usa `flex-1 truncate` pro nome de cada nó — cresce automaticamente com a
+  largura disponível, sem precisar editar nada (mesmo tipo de ganho
+  automático do `SerieLinhaChart` no Dashboard, §8.62).
+- Linhas (`LinhaNo`, nó "Não classificado", linha de Ativo-folha):
+  `py-1.5`→`py-2` — mais respiro vertical, mudança puramente aditiva, sem
+  risco.
+- Colunas fixas de peso-alvo/peso-real (`w-14`→`w-16`, `w-16`→`w-20`) —
+  só ganharam mais espaço, sem mudar o tamanho da fonte (`text-xs`/
+  `text-[10px]` mantidos): esses rótulos guardam strings curtas e fixas
+  (ex. "100%", "12.3% cart.") que já cabiam antes, agora com margem maior.
+- **Painel contextual (`PainelContextual.tsx`, 932 linhas) e os formulários
+  (`FormMacro`/`FormClasse`/`FormSetor`) ficaram de fora desta rodada** —
+  são formulários de edição, não grades densas de leitura; mesma decisão
+  já aplicada a `ConfiguracoesForm.tsx` em §8.63.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não
