@@ -7975,6 +7975,39 @@ em todos os 8 arquivos editados sem sinal de corrupção.
 `src/app/(app)/ativos/page.tsx`, `src/app/(app)/ativos/comparar/page.tsx`,
 `src/app/(app)/alocacao/page.tsx`.
 
+### 8.64 Escala 1920x1080 — conteúdo interno, tela a tela (em andamento, 2026-07-29)
+
+**Contexto:** depois de §8.63 (container + título de topo em todas as
+páginas), Guilherme pediu pra continuar entrando no conteúdo *interno* de
+cada tela (grades, tabelas, cards) — mas dessa vez confirmou ritmo **tela a
+tela com checkpoint** (diferente do §8.63, que foi feito numa leva só),
+justamente porque mudanças internas mexem em grades com risco real de
+overflow que não dá pra verificar visualmente neste ambiente sem browser.
+
+**1) `src/app/(app)/ativos/AtivosView.tsx` (lista de Ativos) — feito:**
+
+- A lista usa `grid-cols-[1.5fr_1fr_80px_100px_80px]` (colunas Ativo /
+  Classificação / Peso-alvo / Valor atual / Não realizado) — mesma classe
+  de risco já documentada pro Livro-razão e Resultados trimestrais: colunas
+  numéricas com largura fixa em pixel, calibradas pro tamanho de fonte
+  atual. Diferente daquelas, aqui optei por uma mudança **segura**: alarguei
+  as 3 colunas numéricas fixas (`80px`→`100px`, `100px`→`130px`,
+  `80px`→`100px`) e o espaçamento (`gap-2`→`gap-4`), sem tocar no tamanho
+  da fonte — dá mais folga pra valores em R$ maiores sem risco de
+  transbordar, já que só aumentei o espaço disponível, não o texto.
+  **Não** subi a fonte dos números (`text-xs`) por esse mesmo motivo de
+  risco; o texto principal (ticker) já usa `text-sm` por herança da linha,
+  sem mudança necessária.
+- As colunas `1.5fr`/`1fr` (Ativo/Classificação) crescem proporcionalmente
+  com a largura do container (já 1600px desde §8.63) — ganho automático,
+  sem precisar editar nada.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK.
+
+**Próximas telas da fila (aguardando checkpoint do Guilherme antes de
+seguir):** Alocação, Proventos, Indicadores, Imposto de Renda,
+Configurações, Comparar.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

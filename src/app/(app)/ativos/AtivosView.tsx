@@ -41,7 +41,7 @@ export default function AtivosView({ ativosIniciais }: { ativosIniciais: AtivoRe
   return (
     <div className="space-y-4">
       <div className="card overflow-hidden">
-        <div className="grid grid-cols-[1.5fr_1fr_80px_100px_80px] gap-2 px-4 py-2 text-xs text-faint border-b border-border">
+        <div className="grid grid-cols-[1.5fr_1fr_100px_130px_100px] gap-4 px-4 py-2 text-xs text-faint border-b border-border">
           <span>Ativo</span>
           <span>Classificação</span>
           <span className="text-right">Peso-alvo</span>
@@ -59,7 +59,7 @@ export default function AtivosView({ ativosIniciais }: { ativosIniciais: AtivoRe
             <Link
               key={ativo.id}
               href={`/ativos/${ativo.id}`}
-              className="grid grid-cols-[1.5fr_1fr_80px_100px_80px] gap-2 px-4 py-3 text-sm border-b border-border last:border-0 hover:bg-surface-2 transition-colors"
+              className="grid grid-cols-[1.5fr_1fr_100px_130px_100px] gap-4 px-4 py-3 text-sm border-b border-border last:border-0 hover:bg-surface-2 transition-colors"
             >
               <div className="min-w-0">
                 <span className="text-ink font-medium">{ativo.ticker}</span>
