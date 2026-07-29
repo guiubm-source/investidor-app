@@ -8114,7 +8114,36 @@ arquivos.
 **Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK nos 4
 arquivos.
 
-**Próximas telas da fila:** Configurações, Comparar.
+**6) Configurações e Comparar — feito (última leva, numa tacada só a pedido
+do Guilherme):**
+
+- **`ConfiguracoesForm.tsx` (1109 linhas) — nenhuma mudança de conteúdo
+  interno.** Essa tela já foi construída num padrão mais generoso desde o
+  início (`h2` em `text-lg`, corpo em `text-sm`, linhas de lista em `flex`
+  sem grid de largura fixa) — o mesmo patamar que as outras telas só
+  alcançaram *depois* do escalonamento desta rodada. Não havia nada de
+  `text-xs`/`text-lg` pra subir nem grade densa em pixel pra alargar; o
+  ganho de espaço já vem só do container (§8.63).
+- **`ComparativoView.tsx`** (tela "Comparar"): título `text-2xl`→`text-3xl`
+  e subtítulo `text-sm`→`text-base` (mesmo salto do resto do app — esse
+  `h1` mora no componente, não em `page.tsx`, por isso não foi pego em
+  §8.63); cabeçalho "Escolha os ativos" `text-sm`→`text-base`. A tabela
+  comparativa (`TabelaComparativa`) já estava em `text-sm` e tem no máximo
+  4 colunas (métrica + até 3 ativos, `MAX_COMPARACAO`) — sem risco de
+  overflow, não precisou de ajuste.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK.
+
+**Rollout "aprofundar 1920x1080 tela a tela" concluído** — todas as páginas
+do app (Carteira, Ativo, Dashboard, Ativos/lista, Alocação, Proventos,
+Indicadores, Imposto de Renda, Configurações, Comparar) passaram por
+container 1600px + escala de tipografia; as que tinham grades/tabelas
+densas com colunas fixas em pixel (Livro-razão, Resultados trimestrais,
+Grade de Proventos, reuniões da Selic, heatmap/histórico do IPCA, Relatório
+IR, Bens e Direitos) tiveram as larguras alargadas mas a fonte mantida,
+registrado individualmente em cada seção acima — futura verificação visual
+via screenshot é o único passo que falta pra considerar subir a fonte
+nelas também.
 
 ## 9. Convenções a preservar
 

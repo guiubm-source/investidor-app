@@ -65,8 +65,8 @@ export default function ComparativoView({
       </div>
 
       <div>
-        <h1 className="text-2xl font-medium text-ink mb-1">Comparar ativos</h1>
-        <p className="text-sm text-muted">
+        <h1 className="text-3xl font-medium text-ink mb-1">Comparar ativos</h1>
+        <p className="text-base text-muted">
           Escolha até {MAX_COMPARACAO} ativos do mesmo grupo para ver o checklist comparativo lado a
           lado (ver docs/MAPA-DE-DADOS.md §8.10).
         </p>
@@ -90,7 +90,7 @@ export default function ComparativoView({
       </div>
 
       <div className="card p-5">
-        <h2 className="text-sm font-medium text-ink mb-3">
+        <h2 className="text-base font-medium text-ink mb-3">
           Escolha os ativos ({selecionados.length}/{MAX_COMPARACAO})
         </h2>
         {lista.length === 0 ? (
