@@ -19,10 +19,11 @@ export default async function ProventosPage() {
   const ativos = ativosComPosicao.map((a) => ({ id: a.id, ticker: a.ticker }));
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-5xl mx-auto">
-        <h1 className="text-2xl font-medium text-ink mb-1">Proventos</h1>
-        <p className="text-sm text-muted mb-8">
+    // Escala 1920x1080 (§8.63, 2026-07-29): mesmo padrão de Carteira/Ativo/Dashboard.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto">
+        <h1 className="text-3xl font-medium text-ink mb-1">Proventos</h1>
+        <p className="text-base text-muted mb-8">
           Cadastre aqui os dividendos, JCP e rendimentos recebidos. Essa é a única aba onde
           proventos são registrados — Carteira e a página de cada ativo só exibem essa
           informação.

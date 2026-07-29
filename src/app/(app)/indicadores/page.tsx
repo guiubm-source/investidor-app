@@ -29,10 +29,11 @@ export default async function IndicadoresPage() {
   ]);
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-2xl font-medium text-ink mb-1">Indicadores</h1>
-        <p className="text-sm text-muted mb-8">
+    // Escala 1920x1080 (§8.63, 2026-07-29): mesmo padrão de Carteira/Ativo/Dashboard.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto">
+        <h1 className="text-3xl font-medium text-ink mb-1">Indicadores</h1>
+        <p className="text-base text-muted mb-8">
           Selic, IPCA, Dólar e Fluxo estrangeiro — dado compartilhado (igual para qualquer usuário do
           app), lançamento manual. A Visão Geral é só leitura.
         </p>

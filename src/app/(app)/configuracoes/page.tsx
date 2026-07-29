@@ -21,10 +21,11 @@ export default async function ConfiguracoesPage() {
   ]);
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-3xl mx-auto">
-        <h1 className="text-2xl font-medium text-ink mb-1">Configurações</h1>
-        <p className="text-sm text-muted mb-8">
+    // Escala 1920x1080 (§8.63, 2026-07-29): mesmo padrão de Carteira/Ativo/Dashboard.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto">
+        <h1 className="text-3xl font-medium text-ink mb-1">Configurações</h1>
+        <p className="text-base text-muted mb-8">
           Organizado em sub-abas: Dados pessoais (cadastro, perfil de investidor e segurança da
           conta), Selic (diretoria do Bacen e presidentes do Brasil) e IPCA (pesos por grupo e
           metas de inflação).

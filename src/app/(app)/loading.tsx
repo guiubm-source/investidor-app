@@ -11,8 +11,11 @@
  */
 export default function AppLoading() {
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-3xl mx-auto space-y-5">
+    // Escala 1920x1080 (§8.63, 2026-07-29): alargado pra max-w-[1600px] pra
+    // bater com o container das páginas reais — senão o esqueleto de
+    // carregamento pisca mais estreito que o conteúdo que vem em seguida.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto space-y-5">
         <div className="card p-8 animate-pulse">
           <div className="h-6 w-48 rounded bg-surface-2 mb-3" />
           <div className="h-4 w-72 rounded bg-surface-2" />

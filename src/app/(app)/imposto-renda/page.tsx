@@ -29,16 +29,17 @@ export default async function ImpostoRendaPage() {
   ]);
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-5xl mx-auto">
-        <h1 className="text-2xl font-medium text-ink mb-1">Imposto de Renda</h1>
+    // Escala 1920x1080 (§8.63, 2026-07-29): mesmo padrão de Carteira/Ativo/Dashboard.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto">
+        <h1 className="text-3xl font-medium text-ink mb-1">Imposto de Renda</h1>
         {declaracaoComPerfil && (
           <p className="text-xs text-faint mb-1">
             Exercício {declaracaoComPerfil.declaracao.exercicio} — ano-calendário{" "}
             {declaracaoComPerfil.declaracao.anoCalendario}
           </p>
         )}
-        <p className="text-sm text-muted mb-2">
+        <p className="text-base text-muted mb-2">
           Relatório auxiliar para a declaração — ações, FIIs, renda fixa, cripto e ativos
           internacionais, a partir da Carteira.
         </p>

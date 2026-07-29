@@ -7927,6 +7927,54 @@ nos 2 arquivos editados sem sinal de corrupção.
 candidatas: Ativos (lista), Alocação, Proventos, Indicadores, Imposto de
 Renda, Comparar, Configurações (todas ainda em `max-w-3xl` a `max-w-6xl`).
 
+### 8.63 Escala 1920x1080 — resto do app numa leva só (2026-07-29)
+
+**Contexto:** depois do Dashboard (§8.62), o Guilherme pediu pra fazer
+"todas elas" de uma vez em vez de continuar página a página com checkpoint
+— mudança de ritmo explícita em relação ao combinado em §8.61, adotada
+diretamente (não é uma decisão de produto nova, só o ritmo de execução do
+que já estava clarificado). Container e escala de título seguem
+exatamente o mesmo padrão de Carteira/Ativo/Dashboard: `max-w-[1600px]`,
+`px-6`→`px-10`, título `text-2xl`→`text-3xl`, subtítulo
+`text-sm`→`text-base` (onde existiam).
+
+**Páginas alteradas** (container + título/subtítulo, quando presentes):
+Ativos (lista), Ativos › Comparar (sem h1 próprio — só o container, título
+fica dentro de `ComparativoView`, não tocado), Alocação, Proventos,
+Imposto de Renda, Indicadores, Configurações. Também `src/app/(app)/
+loading.tsx` (esqueleto de carregamento do grupo `(app)`) — alargado pra
+bater com o container das páginas reais, senão o esqueleto piscava mais
+estreito que o conteúdo carregado em seguida.
+
+**Deliberadamente fora do escopo desta rodada:**
+
+- `src/app/(app)/error.tsx` — mantido em `max-w-md`: é uma mensagem de erro
+  centralizada e curta, não um conteúdo que se beneficie de 1600px de
+  largura (alargar deixaria o texto/botão perdidos no meio da tela).
+- Conteúdo *interno* de cada `View`/formulário (ex.: `ConfiguracoesForm.tsx`,
+  1109 linhas com sub-abas Selic/IPCA; `ComparativoView.tsx`;
+  `AlocacaoView.tsx`; `ProventosView.tsx`; `IndicadoresView.tsx`;
+  `ImpostoRendaView.tsx`) — só o container da página e o título/subtítulo de
+  topo foram escalados nesta rodada. Diferente da Carteira/Ativo/Dashboard
+  (onde entrei nos componentes internos: cabeçalhos de seção, grades de
+  métricas, tipografia de listas), aqui mantive as telas internas como
+  estavam por dois motivos: (1) são formulários/telas com grades e tabelas
+  densas específicas de cada domínio, mesmo tipo de risco de overflow sem
+  verificação visual já documentado pro Livro-razão e Resultados
+  trimestrais; (2) o pedido original do Guilherme era "todo o app... seja
+  dimensionado" — o alargamento do container já é o ganho principal de
+  espaço em 1920px; um retoque fino de tipografia interna por página fica
+  como próximo passo, se ele quiser, tela por tela.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e contagem de bytes nulos
+em todos os 8 arquivos editados sem sinal de corrupção.
+
+**Arquivos alterados:** `src/app/(app)/loading.tsx`,
+`src/app/(app)/configuracoes/page.tsx`, `src/app/(app)/proventos/page.tsx`,
+`src/app/(app)/imposto-renda/page.tsx`, `src/app/(app)/indicadores/page.tsx`,
+`src/app/(app)/ativos/page.tsx`, `src/app/(app)/ativos/comparar/page.tsx`,
+`src/app/(app)/alocacao/page.tsx`.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

@@ -25,8 +25,9 @@ export default async function CompararAtivosPage({
   const grupoInicial = grupo === "fiis" ? "fiis" : "acoes";
 
   return (
-    <div className="px-6 py-10">
-      <div className="max-w-5xl mx-auto">
+    // Escala 1920x1080 (§8.63, 2026-07-29): mesmo padrão de Carteira/Ativo/Dashboard.
+    <div className="px-10 py-10">
+      <div className="max-w-[1600px] mx-auto">
         <ComparativoView acoesInicial={acoes} fiisInicial={fiis} grupoInicial={grupoInicial} />
       </div>
     </div>
