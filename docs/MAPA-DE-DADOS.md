@@ -8028,6 +8028,41 @@ Configurações, Comparar.
 
 **Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK.
 
+**3) Proventos (`ProventosView.tsx` + `GradeProventosView.tsx`) — feito:**
+
+- Cabeçalhos de seção ("Recebido x Provisionado", "Proventos por
+  categoria", "Patrimônio por categoria", título de cada grupo colapsável
+  por categoria, "Geral — todos os anos" e "Por ano" na Grade)
+  `text-sm`→`text-base` — mesmo padrão do resto do app.
+- Os 6 cards de resumo (Total recebido/provisionado/período/6m/12m/24m):
+  valor `text-sm`→`text-2xl`, mesmo tratamento de "número-herói" do
+  `ResumoTotal` da Carteira (§8.60) — cabem à vontade num `lg:grid-cols-6`
+  dentro do container de 1600px.
+- **Duas tabelas nativas (`<table>`, não CSS grid com colunas fixas em
+  pixel) tiveram a fonte aumentada, diferente da decisão em Livro-razão/
+  Resultados trimestrais:** a tabela de lançamentos detalhados
+  (`text-xs`→`text-sm`, `min-w-[880px]`→`min-w-[960px]`) e a tabela por
+  ativo dentro de cada grupo (`text-xs`→`text-sm`). A distinção técnica:
+  tabelas HTML nativas com `table-layout: auto` não truncam conteúdo —
+  colunas crescem com o texto, e o wrapper já tem `overflow-x-auto` como
+  rede de segurança. O risco documentado pro Livro-razão era especificamente
+  sobre **CSS grid com `grid-cols-[...px_...px]`** calibrado pro tamanho de
+  fonte atual, que é uma categoria de risco diferente (aí sim, aumentar a
+  fonte pode fazer texto vazar da coluna). Essas duas tabelas de Proventos
+  não têm esse problema.
+- **`GradeProventosView.tsx` (aba "Grade mensal/anual") ficou de fora** —
+  essa sim é uma grade estilo planilha genuína (13 colunas: Categoria + 12
+  meses + Total, todas `whitespace-nowrap`, texto já em `text-[11px]`),
+  mesma categoria de risco do Livro-razão/Resultados trimestrais (precisa
+  verificação visual antes de aumentar fonte com tantas colunas lado a
+  lado). Só os cabeçalhos de seção foram escalados ali.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e bytes nulos OK nos 2
+arquivos.
+
+**Próximas telas da fila:** Indicadores, Imposto de Renda, Configurações,
+Comparar.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

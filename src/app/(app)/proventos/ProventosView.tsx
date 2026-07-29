@@ -236,7 +236,7 @@ export default function ProventosView({
 
           {/* ---- Gráfico mensal ---- */}
           <div className="card p-4">
-            <h3 className="text-sm font-medium text-ink mb-3">Recebido x Provisionado — últimos 12 meses</h3>
+            <h3 className="text-base font-medium text-ink mb-3">Recebido x Provisionado — últimos 12 meses</h3>
             {semGraficoDados ? (
               <p className="text-sm text-faint">Nenhum lançamento nos últimos 12 meses.</p>
             ) : (
@@ -264,7 +264,7 @@ export default function ProventosView({
           {/* ---- Categoria + donut ---- */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <div className="card p-4">
-              <h3 className="text-sm font-medium text-ink mb-3">Proventos por categoria</h3>
+              <h3 className="text-base font-medium text-ink mb-3">Proventos por categoria</h3>
               {livro.porCategoria.length === 0 ? (
                 <p className="text-sm text-faint">Nenhum provento registrado ainda.</p>
               ) : (
@@ -290,7 +290,7 @@ export default function ProventosView({
             </div>
 
             <div className="card p-4">
-              <h3 className="text-sm font-medium text-ink mb-3">Patrimônio por categoria</h3>
+              <h3 className="text-base font-medium text-ink mb-3">Patrimônio por categoria</h3>
               {livro.porCategoria.filter((c) => c.patrimonioAtual > 0).length === 0 ? (
                 <p className="text-sm text-faint">Sem posição atual pra distribuir.</p>
               ) : (
@@ -334,14 +334,14 @@ export default function ProventosView({
                   >
                     <div className="flex items-center gap-2">
                       <span className={`text-faint text-xs transition-transform ${aberto ? "rotate-90" : ""}`}>▶</span>
-                      <span className="text-sm font-medium text-ink">{LABEL_GRUPO[grupo]}</span>
+                      <span className="text-base font-medium text-ink">{LABEL_GRUPO[grupo]}</span>
                     </div>
                     <span className="text-xs text-faint">{formatarMoeda(totalGrupo)}</span>
                   </button>
 
                   {aberto && (
                     <div className="px-4 pb-4 overflow-x-auto">
-                      <table className="w-full text-xs">
+                      <table className="w-full text-sm">
                         <thead>
                           <tr className="text-faint">
                             <th className="text-left py-1">Ativo</th>
@@ -488,7 +488,7 @@ export default function ProventosView({
           )}
 
           <div className="card overflow-hidden overflow-x-auto">
-            <table className="w-full text-xs min-w-[880px]">
+            <table className="w-full text-sm min-w-[960px]">
               <thead>
                 <tr className="text-faint border-b border-border">
                   <th className="py-2 px-2">
@@ -591,9 +591,13 @@ export default function ProventosView({
 
 function CardResumo({ label, valor }: { label: string; valor: string }) {
   return (
+    // Escala 1920x1080 (§8.66): valor em destaque text-sm→text-2xl, mesmo
+    // tratamento de "número-herói" já usado no ResumoTotal da Carteira
+    // (§8.60) — 6 cards em lg:grid-cols-6 têm espaço de sobra num
+    // container de 1600px pra caber moeda formatada nesse tamanho.
     <div className="card p-3">
       <p className="text-xs text-faint">{label}</p>
-      <p className="text-sm font-medium text-ink">{valor}</p>
+      <p className="text-2xl font-medium text-ink">{valor}</p>
     </div>
   );
 }

@@ -75,14 +75,14 @@ export default function GradeProventosView() {
   return (
     <div className="space-y-4">
       <div className="card p-4">
-        <h3 className="text-sm font-medium text-ink mb-3">Geral — todos os anos, por categoria</h3>
+        <h3 className="text-base font-medium text-ink mb-3">Geral — todos os anos, por categoria</h3>
         <TabelaGrade grade={dados.geral} />
       </div>
 
       {dados.porAno.length > 0 && (
         <div className="card p-4">
           <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <h3 className="text-sm font-medium text-ink">Por ano</h3>
+            <h3 className="text-base font-medium text-ink">Por ano</h3>
             <div className="flex gap-1 flex-wrap">
               {dados.porAno.map((a) => (
                 <button
