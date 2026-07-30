@@ -591,7 +591,7 @@ export default function ProventosView({
 
 function CardResumo({ label, valor }: { label: string; valor: string }) {
   return (
-    // Escala 1920x1080 (§8.66): valor em destaque text-sm→text-2xl, mesmo
+    // Escala 1920x1080 (§8.64): valor em destaque text-sm→text-2xl, mesmo
     // tratamento de "número-herói" já usado no ResumoTotal da Carteira
     // (§8.60) — 6 cards em lg:grid-cols-6 têm espaço de sobra num
     // container de 1600px pra caber moeda formatada nesse tamanho.

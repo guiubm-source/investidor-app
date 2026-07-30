@@ -83,7 +83,7 @@ export default function AbaSelic({
 
 function BlocoCards({ selic }: { selic: SelicView }) {
   return (
-    // Escala 1920x1080 (§8.67): lg:grid-cols-6 — 6 cards fixos cabem numa
+    // Escala 1920x1080 (§8.64): lg:grid-cols-6 — 6 cards fixos cabem numa
     // linha só em 1600px (2 linhas de 3 antes).
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <div className="card p-3">

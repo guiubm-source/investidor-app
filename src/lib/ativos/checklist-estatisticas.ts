@@ -51,11 +51,11 @@ export type ChecklistAcao = {
   liquidezCorrente: number | null;
   cagrEbit5AnosPct: number | null;
   cagrLucro5AnosPct: number | null;
-  /** Preço Justo de Graham: √(22,5 × LPA × VPA) — ver docs/MAPA-DE-DADOS.md §8.66. */
+  /** Preço Justo de Graham: √(22,5 × LPA × VPA) — ver docs/MAPA-DE-DADOS.md §8.65. */
   precoJustoGraham: number | null;
-  /** Preço Justo de Bazin: dividendo anual por ação / 0,06 — ver docs/MAPA-DE-DADOS.md §8.66. */
+  /** Preço Justo de Bazin: dividendo anual por ação / 0,06 — ver docs/MAPA-DE-DADOS.md §8.65. */
   precoJustoBazin: number | null;
-  /** Dividendo anual por ação (12 meses) / preço — mesmo dividendoAnualPorAcao usado no Preço Justo de Bazin. Ver §8.66/§8.67. */
+  /** Dividendo anual por ação (12 meses) / preço — mesmo dividendoAnualPorAcao usado no Preço Justo de Bazin. Ver §8.65. */
   dividendYieldPct: number | null;
 };
 
@@ -191,16 +191,16 @@ export function calcularChecklistAcao(
   // o P/L máximo aceitável por Graham (15) pelo P/VP máximo aceitável (1,5).
   // Só faz sentido com LPA e VPA positivos (empresa lucrativa e patrimônio
   // líquido positivo) — negativo ou zero vira null, igual ao resto do
-  // checklist. Ver docs/MAPA-DE-DADOS.md §8.66.
+  // checklist. Ver docs/MAPA-DE-DADOS.md §8.65.
   const precoJustoGraham = lpaTTM !== null && lpaTTM > 0 && vpa !== null && vpa > 0 ? Math.sqrt(22.5 * lpaTTM * vpa) : null;
 
   // Preço Justo de Bazin: dividendo anual por ação / 0,06 (6% de yield "justo",
-  // premissa fixa do método — não se ajusta à Selic). Ver docs/MAPA-DE-DADOS.md §8.66.
+  // premissa fixa do método — não se ajusta à Selic). Ver docs/MAPA-DE-DADOS.md §8.65.
   const precoJustoBazin =
     dividendoAnualPorAcao !== null && dividendoAnualPorAcao > 0 ? dividendoAnualPorAcao / 0.06 : null;
 
   // Dividend Yield da ação (não existia no checklist até aqui — só o FII
-  // tinha; ver docs/MAPA-DE-DADOS.md §8.67). Mesmo insumo do Preço Justo de
+  // tinha; ver docs/MAPA-DE-DADOS.md §8.65). Mesmo insumo do Preço Justo de
   // Bazin, só que dividido pelo preço em vez de por 0,06.
   const dividendYieldPct =
     dividendoAnualPorAcao !== null && precoAtual !== null && precoAtual > 0
@@ -230,14 +230,20 @@ export function calcularChecklistAcao(
 /**
  * Checklist FIIs — ver docs/MAPA-DE-DADOS.md §8.10. Dividend Yield é a
  * única métrica que não vem de `ativo_resultado_trimestral`: é calculada a
- * partir dos proventos já existentes (tabela `proventos`, fonte única).
+ * partir dos proventos já existentes (tabela `proventos`, fonte única), com
+ * o mesmo critério usado em Ações desde a migração de 2026-07-30 (ver
+ * §8.65 item de assimetria DY): soma de `valor_por_cota` (não `valor_total`)
+ * dos últimos 12 meses — independente de o usuário ter aportado/resgatado
+ * cotas no período. `null` quando nenhum provento no período tem
+ * `valor_por_cota` preenchido (lançamentos antigos sem esse campo) — vira
+ * "—" na UI, nunca 0%, pra não passar a falsa impressão de "yield zero".
  * Cap Rate anualiza a receita imobiliária do trimestre mais recente (×4) —
  * aproximação documentada, já que só temos o dado trimestral, não o anual.
  */
 export function calcularChecklistFii(
   pontos: PontoTrimestralFii[],
   precoAtual: number | null,
-  proventosUltimos12Meses: number
+  proventosUltimos12Meses: number | null
 ): ChecklistFii {
   const desc = ordenarDesc(pontos);
   const ultimo = desc[0] as PontoTrimestralFii | undefined;
@@ -252,7 +258,10 @@ export function calcularChecklistFii(
       ? ((ultimo.receitaImobiliaria * 4) / ultimo.valorAvaliacaoImoveis) * 100
       : null;
 
-  const dividendYieldPct = precoAtual !== null && precoAtual > 0 ? (proventosUltimos12Meses / precoAtual) * 100 : null;
+  const dividendYieldPct =
+    proventosUltimos12Meses !== null && precoAtual !== null && precoAtual > 0
+      ? (proventosUltimos12Meses / precoAtual) * 100
+      : null;
 
   return {
     pvp,
@@ -312,7 +321,7 @@ export function calcularSerieChecklistAcao(pontos: PontoTrimestralAcao[]): Ponto
 }
 
 // ---------------------------------------------------------------------------
-// Histórico de P/L, P/VP, PEG Ratio e Dividend Yield (2026-07-30, §8.67) —
+// Histórico de P/L, P/VP, PEG Ratio e Dividend Yield (2026-07-30, §8.65) —
 // os 4 índices que calcularSerieChecklistAcao deixa de fora por dependerem do
 // preço. Diferente do resto do painel, aqui cruzamos o LPA/VPA de cada
 // trimestre com o preço de FECHAMENTO NO FIM DAQUELE TRIMESTRE (não o preço
@@ -412,7 +421,7 @@ export function calcularSerieChecklistFii(pontos: PontoTrimestralFii[]): PontoSe
   const desc = ordenarDesc(pontos);
   return desc
     .map((ponto, i) => {
-      const c = calcularChecklistFii(desc.slice(i), null, 0);
+      const c = calcularChecklistFii(desc.slice(i), null, null);
       return {
         anoTrimestre: ponto.anoTrimestre,
         numeroNegociosMes: c.numeroNegociosMes,
@@ -602,7 +611,7 @@ export function gerarInsightsFii(pontos: PontoTrimestralFii[]): Insight[] {
 }
 
 // ---------------------------------------------------------------------------
-// Aviso de yield inflado por evento atípico (2026-07-30, §8.68) — um
+// Aviso de yield inflado por evento atípico (2026-07-30, §8.65) — um
 // provento fora do padrão dentro da janela de 12 meses (ex.: venda de imóvel
 // de um FII, dividendo extraordinário de uma ação) pode inflar o Dividend
 // Yield mostrado sem isso ficar claro pro usuário. Ver docs/MAPA-DE-DADOS.md.

@@ -8251,6 +8251,147 @@ e contagem de bytes nulos OK nos 4 arquivos tocados
 (`checklist-estatisticas.ts`, `actions.ts`, `AtivoDetalheView.tsx`,
 `ComparativoView.tsx`).
 
+### 8.66 Refactor da página do Ativo: auditoria + correções de layout/fórmula/dados (2026-07-30)
+
+**Contexto:** logo após §8.65, Guilherme pediu uma revisão completa da
+página do Ativo (layout, fórmulas, caminhos de dados) com refatoração,
+seguindo o mesmo protocolo do CLAUDE.md — primeiro auditoria, depois uma
+pergunta de cada vez sobre cada achado, só then execução. A auditoria (via
+subagente, leitura completa de `AtivoDetalheView.tsx`, `actions.ts`,
+`checklist-estatisticas.ts`, `preco-historico.ts` + comparação com
+convenções já documentadas) encontrou 1 bug real de dado (câmbio) e 6
+melhorias de transparência/layout. Guilherme decidiu executar os 7 itens
+numa leva só (não um por vez com checkpoint, diferente da rodada de §8.65).
+
+**1) Bug de câmbio: Checklist/Preço Justo de ativo internacional — corrigido (rótulo, não conversão):**
+
+- Achado: `obterChecklistAtivo` lê `ativos.preco_atual` **sem** a conversão
+  USD→BRL que `obterAtivosComPosicao` já faz (via `cambio.ts`, §8.60) pra
+  ativos `internacional` cotados via Yahoo Finance — então o card "Posição"
+  mostrava o preço em BRL enquanto o Checklist/Preço Justo calculavam (e
+  formatavam com "R$") em cima do valor bruto em USD.
+- Decisão do Guilherme (perguntado antes de codar): ele **sempre** lança os
+  dados trimestrais (LPA, VPA, lucro líquido etc.) de ativos internacionais
+  em USD, copiando direto do relatório original da empresa — não existe
+  campo de moeda em `ativo_resultado_trimestral` (diferente de
+  `transacoes`/`proventos`, que já têm `moeda` BRL/USD) pra confirmar isso
+  por lançamento, então a resposta dele é a fonte da verdade aqui.
+- Correção: **não converter** (converter só o preço quebraria a proporção
+  dos índices, já que os dados trimestrais continuam em USD) — só rotular
+  certo. `ChecklistAtivoView` ganhou o campo `moeda: "BRL" | "USD"`
+  (`internacional` → `"USD"`, sempre; todo o resto → `"BRL"`), calculado em
+  `obterChecklistAtivo` (`actions.ts`). Nova função `formatarMoedaEm(valor,
+  moeda)` em `AtivoDetalheView.tsx` (usa `Intl`/`toLocaleString` com
+  `en-US`/`USD` quando `moeda === "USD"`) substitui `formatarMoeda` (sempre
+  BRL) em `PrecoJustoCard` (Graham e Bazin) e no novo aviso de idade do
+  preço na seção Checklist (ver item 2 abaixo).
+
+**2) Idade/fonte do preço no Checklist/Preço Justo — corrigido:**
+
+- Achado: o card "Posição" já mostra `formatarTempoRelativo(precoAtualizadoEm)`
+  e a fonte (Yahoo Finance/manual), mas a seção Checklist não tinha
+  nenhuma indicação disso — violava a convenção já escrita na seção 9 deste
+  documento ("qualquer feature que assuma preço 'ao vivo' precisa checar
+  `preco_atualizado_em` e `preco_fonte`"), já que P/L, P/VP, Preço Justo
+  etc. podem estar baseados num preço de dias atrás sem nenhum aviso ali.
+- Correção: `obterChecklistAtivo` agora seleciona `preco_atualizado_em` e
+  `preco_fonte` (antes só `preco_atual`) e expõe os dois em
+  `ChecklistAtivoView`. `SecaoChecklist` ganhou uma linha logo abaixo do
+  título ("Calculado com o preço R$/US$ X · atualizado há Y · fonte: Z"),
+  reaproveitando `formatarTempoRelativo` já existente.
+
+**3) Assimetria Dividend Yield Ações vs. FIIs — resolvida (migração):**
+
+- Achado: DY de Ações usa `valor_por_cota` (independente da posição do
+  usuário na época de cada pagamento, ver §8.65); DY de FII ainda usava
+  `valor_total` (sensível a aporte/resgate de cotas no período) — mesmo
+  motor, dois critérios diferentes.
+- Decisão do Guilherme: migrar FIIs pra `valor_por_cota` também, mesmo
+  critério de Ações.
+- Correção: nova função pura compartilhada
+  `agregarProventosPorCotaNaJanela` (`lib/ativos/proventos-janela.ts`, sem
+  `"use server"`) — centraliza o cálculo de janela de dias + soma de
+  `valor_por_cota` que antes estava duplicado (cada ramo com sua própria
+  cópia de `new Date()`/`setDate()`) entre Ações e FIIs em
+  `obterChecklistAtivo`. Usada agora pelos dois ramos, tanto pro Dividend
+  Yield/Preço Justo de Bazin quanto pro aviso de provento atípico (mesma
+  janela de pontos pros dois). `calcularChecklistFii` (`checklist-
+  estatisticas.ts`) teve o parâmetro `proventosUltimos12Meses` mudado pra
+  `number | null` — `null` (não mais `0`) quando nenhum provento no
+  período tem `valor_por_cota` preenchido, virando "—" na UI em vez de um
+  enganoso "0%" de yield.
+  - **Efeito colateral aceito conscientemente:** FIIs com lançamentos
+    antigos de proventos sem `valor_por_cota` preenchido vão mostrar "—"
+    no Dividend Yield (e não vão mais disparar o aviso de provento
+    atípico) até o Guilherme preencher esse campo retroativamente — não
+    foi feita nenhuma tentativa de inferir `valor_por_cota` a partir de
+    `valor_total` histórico (seria possível via
+    `obterQuantidadeDisponivelEmData`, mas foi deliberadamente deixado de
+    fora desta rodada por adicionar complexidade/risco não pedido).
+
+**4) Badge "Posição encerrada" — feito:**
+
+- Nova variável `posicaoEncerrada` (`quantidade === 0 &&
+  (proventosRecebidos > 0 || lucroRealizado !== 0)`) em
+  `AtivoDetalheView.tsx` — cobre exatamente o cenário do print que motivou
+  esta rodada (quantidade 0, preço médio R$0,00, mas Proventos recebidos e
+  Lucro realizado > 0, que sem indicação parecia bug visual). Badge
+  discreto ao lado do ticker, com tooltip explicando que os números abaixo
+  são histórico acumulado.
+
+**5) Reordenação das seções + hero numbers — feito:**
+
+- Ordem anterior (aba "Visão geral"): Gráfico → Classificação → Posição →
+  Rentabilidade histórica → Checklist → Transações → Proventos (Checklist
+  na 9ª de 11 seções contando a Identidade/CartaoEmpresa).
+- Nova ordem, escolhida pelo Guilherme: **Posição → Checklist/Preço Justo
+  → Gráfico → Classificação → Rentabilidade histórica → Transações →
+  Proventos** — a informação mais valiosa pra decidir comprar/vender fica
+  logo no topo.
+- Card "Posição": as 3 métricas mais importantes (Valor atual, Lucro não
+  realizado, Retorno total) viraram "hero numbers" (`text-2xl font-medium`,
+  mesmo padrão de `PosicaoView.tsx`/Carteira desde §8.60) num bloco
+  separado no topo do card; as 5 métricas de apoio (Quantidade, Preço
+  médio, Valor aplicado, Lucro realizado, Proventos recebidos) continuam
+  no grid `Metrica` de sempre, logo abaixo. Componente `MetricaPendente`
+  (usado só pelas 2 métricas que dependiam de preço não definido) foi
+  removido — o estado "preço pendente" agora é tratado inline no hero
+  (botão "Defina o preço atual" no lugar do valor).
+
+**6) Três agregações de proventos — centralizadas parcialmente:**
+
+- Ver item 3 acima (`agregarProventosPorCotaNaJanela`) — unifica as duas
+  agregações client-side dentro de `obterChecklistAtivo` (Ações e FIIs).
+- **Deliberadamente fora do escopo:** a soma "só pago" de
+  `obterAtivosComPosicao` (card Posição) usa filtro **na própria query**
+  (`.lte("data_pagamento", hojeStr")`), não um filtro client-side — unificar
+  com a nova função exigiria trocar essa query por "buscar tudo e filtrar
+  em JS", tocando um caminho de dado usado por Posição/Alocação/Carteira
+  (não só a página do Ativo) sem nenhum bug relatado ali. Risco maior que
+  o benefício pra esta rodada — registrado aqui como possível trabalho
+  futuro, não feito agora.
+
+**7) Numeração de seção `§8.66/§8.67/§8.68` corrigida:**
+
+- A auditoria encontrou que os comentários no código (da rodada §8.65)
+  referenciavam `§8.66`/`§8.67`/`§8.68` como se fossem headers reais — mas
+  todo o conteúdo estava dentro de um único `### 8.65` corrido. Pior:
+  `ProventosView.tsx` e `AbaDolar.tsx`/`AbaIpca.tsx`/`AbaSelic.tsx` (da
+  rodada §8.64, "Escala 1920x1080") já usavam `§8.66`/`§8.67` pra um
+  assunto completamente diferente (escala de fonte/grid), criando colisão.
+- Corrigido: as referências de `ProventosView.tsx`/`AbaDolar.tsx`/
+  `AbaIpca.tsx`/`AbaSelic.tsx` voltaram a apontar pra `§8.64` (onde o
+  conteúdo delas realmente está); as referências de tooltip/Preço
+  Justo/histórico/aviso (da rodada §8.65) foram todas unificadas pra
+  `§8.65`; as referências novas desta rodada (moeda, idade do preço, DY
+  FII, badge, hero numbers, proventos) apontam pra este `§8.66`, que agora
+  existe de verdade.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e contagem de bytes nulos
+OK em `checklist-estatisticas.ts`, `actions.ts`, `proventos-janela.ts`
+(novo), `AtivoDetalheView.tsx`, `ProventosView.tsx`, `AbaDolar.tsx`,
+`AbaIpca.tsx`, `AbaSelic.tsx`.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

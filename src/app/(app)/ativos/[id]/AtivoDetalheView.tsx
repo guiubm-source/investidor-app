@@ -74,6 +74,16 @@ const rotuloProvento = (valor: string) => TIPOS_PROVENTO.find((t) => t.valor ===
 const formatarMoeda = (valor: number) =>
   valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+/**
+ * Mesma formatação de `formatarMoeda`, mas respeitando a moeda de origem do
+ * Checklist (ver docs/MAPA-DE-DADOS.md §8.66) — ativo internacional nunca
+ * converte USD→BRL no Checklist/Preço Justo (o Guilherme lança os dados
+ * trimestrais sempre em USD), então precisa rotular certo em vez de sempre
+ * mostrar R$.
+ */
+const formatarMoedaEm = (valor: number, moeda: "BRL" | "USD") =>
+  valor.toLocaleString(moeda === "USD" ? "en-US" : "pt-BR", { style: "currency", currency: moeda });
+
 const formatarData = (iso: string) => {
   const [ano, mes, dia] = iso.split("-");
   return `${dia}/${mes}/${ano}`;
@@ -230,6 +240,13 @@ export default function AtivoDetalheView({
   const precoDefinido = ativo.precoAtualizadoEm !== null;
   const lucroPositivo = ativo.lucroNaoRealizado >= 0;
   const temChecklist = checklist !== null && checklist.grupo !== null;
+  // Ativo zerado com histórico (ver docs/MAPA-DE-DADOS.md, item "estado
+  // ativo encerrado") — quantidade 0 mas já recebeu proventos ou já teve
+  // lucro/prejuízo realizado em vendas. Sem isso, a grade de Posição mistura
+  // "R$ 0,00" de posição zerada com números reais de histórico, o que pode
+  // parecer um bug visual (era exatamente o cenário do print que motivou
+  // esta rodada de correções).
+  const posicaoEncerrada = ativo.quantidade === 0 && (ativo.proventosRecebidos > 0 || ativo.lucroRealizado !== 0);
 
   return (
     <div className="space-y-5">
@@ -264,7 +281,17 @@ export default function AtivoDetalheView({
             <div>
               {/* Escala 1920x1080 (§8.61): text-2xl→text-3xl e text-sm→text-base,
                   mesmo salto usado no título da Carteira (§8.60). */}
-              <h1 className="text-3xl font-medium text-ink">{ativo.ticker}</h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-3xl font-medium text-ink">{ativo.ticker}</h1>
+                {posicaoEncerrada && (
+                  <span
+                    title="Quantidade zerada — os números abaixo são histórico acumulado da posição já encerrada, não um erro."
+                    className="text-[11px] px-2 py-0.5 rounded-full bg-surface-2 border border-border text-faint cursor-help"
+                  >
+                    Posição encerrada
+                  </span>
+                )}
+              </div>
               <p className="text-base text-muted">
                 {rotuloTipo(ativo.tipo)}
                 {ativo.nome && ` · ${ativo.nome}`}
@@ -351,6 +378,131 @@ export default function AtivoDetalheView({
 
       {aba === "geral" && (
         <>
+          {/* Reordenado (ver docs/MAPA-DE-DADOS.md, item "reordenar seções +
+              hero numbers"): Posição e Checklist/Preço Justo (a informação
+              mais valiosa pra decidir comprar/vender) agora vêm logo no
+              topo, antes de Gráfico/Classificação/Rentabilidade histórica —
+              antes ficavam na 3ª e 9ª posição de 11 seções. */}
+          <div className="card p-5">
+            <h2 className="text-base font-medium text-ink mb-3">Posição</h2>
+
+            {!precoDefinido && (
+              <div className="rounded-md bg-surface-2 border border-border px-3 py-2 mb-3 text-xs text-muted">
+                Preço atual ainda não foi definido — os números de lucro abaixo ficam disponíveis assim
+                que você informar o preço atual do ativo.
+              </div>
+            )}
+
+            {/* Hero numbers — os 3 KPIs mais importantes da posição, mesmo
+                padrão "número-herói" (text-2xl) já usado em Carteira/
+                Proventos/Indicadores/IR desde §8.60-8.64; a página do Ativo
+                tinha ficado de fora desse rollout até agora. */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-4 pb-4 border-b border-border">
+              <div>
+                <p className="text-faint text-sm mb-1">Valor atual</p>
+                <p className="text-ink text-2xl font-medium">
+                  {precoDefinido ? formatarMoeda(ativo.valorAtual) : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-faint text-sm mb-1">Lucro não realizado</p>
+                {precoDefinido ? (
+                  <>
+                    <p className={`text-2xl font-medium ${lucroPositivo ? "text-success" : "text-danger"}`}>
+                      {formatarMoeda(ativo.lucroNaoRealizado)}
+                    </p>
+                    <p className={`text-sm ${lucroPositivo ? "text-success" : "text-danger"}`}>
+                      {lucroPositivo ? "+" : ""}
+                      {ativo.lucroNaoRealizadoPct.toFixed(1)}%
+                    </p>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setEditandoPreco(true)}
+                    className="text-faint hover:text-ink underline underline-offset-2 text-sm"
+                  >
+                    Defina o preço atual
+                  </button>
+                )}
+              </div>
+              <div>
+                <p className="text-faint text-sm mb-1">Retorno total</p>
+                {precoDefinido ? (
+                  <p className={`text-2xl font-medium ${ativo.retornoTotal >= 0 ? "text-success" : "text-danger"}`}>
+                    {formatarMoeda(ativo.retornoTotal)}
+                  </p>
+                ) : (
+                  <button
+                    onClick={() => setEditandoPreco(true)}
+                    className="text-faint hover:text-ink underline underline-offset-2 text-sm"
+                  >
+                    Defina o preço atual
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Métricas de apoio (mesmo componente Metrica de antes, agora
+                sem os 3 hero numbers acima pra não duplicar). */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm mb-3">
+              <Metrica label="Quantidade" valor={ativo.quantidade.toLocaleString("pt-BR")} />
+              <Metrica label="Preço médio" valor={formatarMoeda(ativo.precoMedio)} />
+              <Metrica label="Valor aplicado" valor={formatarMoeda(ativo.valorAplicado)} />
+              <Metrica
+                label="Lucro realizado"
+                valor={formatarMoeda(ativo.lucroRealizado)}
+                destaque={ativo.lucroRealizado >= 0 ? "success" : "danger"}
+              />
+              <Metrica label="Proventos recebidos" valor={formatarMoeda(ativo.proventosRecebidos)} />
+            </div>
+
+            {editandoPreco ? (
+              <FormPrecoAtual
+                valorInicial={ativo.precoAtual}
+                onCancelar={() => setEditandoPreco(false)}
+                onSalvo={async (dados) => {
+                  const resultado = await atualizarPrecoAtual(ativo.id, dados);
+                  if (resultado.error) throw new Error(resultado.error);
+                  await atualizarTudo();
+                  setEditandoPreco(false);
+                  toast.success("Preço atual atualizado.");
+                }}
+              />
+            ) : (
+              <div className="flex items-center gap-3 flex-wrap">
+                <button onClick={() => setEditandoPreco(true)} className="text-xs text-faint hover:text-ink">
+                  Preço atual: {formatarMoeda(ativo.precoAtual)} · {formatarTempoRelativo(ativo.precoAtualizadoEm)}
+                  {ativo.precoFonte === "yahoo_finance" && " · fonte: Yahoo Finance"}
+                  {ativo.precoFonte === "manual" && " · fonte: manual"} (editar)
+                </button>
+                {ativo.cotacaoAutomatica && (
+                  <button
+                    disabled={atualizandoCotacao}
+                    onClick={async () => {
+                      setAtualizandoCotacao(true);
+                      const resultado = await atualizarCotacaoAgora(ativo.id);
+                      if (resultado.error) {
+                        setAtualizandoCotacao(false);
+                        toast.error(resultado.error);
+                        return;
+                      }
+                      await atualizarTudo();
+                      setAtualizandoCotacao(false);
+                      toast.success("Cotação atualizada.");
+                    }}
+                    className="text-xs text-accent hover:underline disabled:opacity-50"
+                  >
+                    {atualizandoCotacao ? "Buscando cotação..." : "Atualizar agora"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {checklist && checklist.grupo && (
+            <SecaoChecklist ativoId={ativo.id} checklist={checklist} onAtualizado={atualizarChecklist} />
+          )}
+
           <div className="card p-5">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-base font-medium text-ink">Gráfico</h2>
@@ -442,96 +594,6 @@ export default function AtivoDetalheView({
             )}
           </div>
 
-          <div className="card p-5">
-            <h2 className="text-base font-medium text-ink mb-3">Posição</h2>
-
-            {!precoDefinido && (
-              <div className="rounded-md bg-surface-2 border border-border px-3 py-2 mb-3 text-xs text-muted">
-                Preço atual ainda não foi definido — os números de lucro abaixo ficam disponíveis assim
-                que você informar o preço atual do ativo.
-              </div>
-            )}
-
-            {/* Escala 1920x1080 (§8.61): lg:grid-cols-7 aproveita a largura
-                maior do container pra caber as 7 métricas numa linha só;
-                text-xs→text-sm acompanha o resto da página. */}
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-sm mb-3">
-              <Metrica label="Quantidade" valor={ativo.quantidade.toLocaleString("pt-BR")} />
-              <Metrica label="Preço médio" valor={formatarMoeda(ativo.precoMedio)} />
-              <Metrica label="Valor aplicado" valor={formatarMoeda(ativo.valorAplicado)} />
-              <Metrica label="Valor atual" valor={precoDefinido ? formatarMoeda(ativo.valorAtual) : "—"} />
-
-              {precoDefinido ? (
-                <Metrica
-                  label="Lucro não realizado"
-                  valor={`${formatarMoeda(ativo.lucroNaoRealizado)} (${lucroPositivo ? "+" : ""}${ativo.lucroNaoRealizadoPct.toFixed(1)}%)`}
-                  destaque={lucroPositivo ? "success" : "danger"}
-                />
-              ) : (
-                <MetricaPendente label="Lucro não realizado" onClick={() => setEditandoPreco(true)} />
-              )}
-
-              <Metrica
-                label="Lucro realizado"
-                valor={formatarMoeda(ativo.lucroRealizado)}
-                destaque={ativo.lucroRealizado >= 0 ? "success" : "danger"}
-              />
-              <Metrica label="Proventos recebidos" valor={formatarMoeda(ativo.proventosRecebidos)} />
-
-              {precoDefinido ? (
-                <Metrica
-                  label="Retorno total"
-                  valor={formatarMoeda(ativo.retornoTotal)}
-                  destaque={ativo.retornoTotal >= 0 ? "success" : "danger"}
-                />
-              ) : (
-                <MetricaPendente label="Retorno total" onClick={() => setEditandoPreco(true)} />
-              )}
-            </div>
-
-            {editandoPreco ? (
-              <FormPrecoAtual
-                valorInicial={ativo.precoAtual}
-                onCancelar={() => setEditandoPreco(false)}
-                onSalvo={async (dados) => {
-                  const resultado = await atualizarPrecoAtual(ativo.id, dados);
-                  if (resultado.error) throw new Error(resultado.error);
-                  await atualizarTudo();
-                  setEditandoPreco(false);
-                  toast.success("Preço atual atualizado.");
-                }}
-              />
-            ) : (
-              <div className="flex items-center gap-3 flex-wrap">
-                <button onClick={() => setEditandoPreco(true)} className="text-xs text-faint hover:text-ink">
-                  Preço atual: {formatarMoeda(ativo.precoAtual)} · {formatarTempoRelativo(ativo.precoAtualizadoEm)}
-                  {ativo.precoFonte === "yahoo_finance" && " · fonte: Yahoo Finance"}
-                  {ativo.precoFonte === "manual" && " · fonte: manual"} (editar)
-                </button>
-                {ativo.cotacaoAutomatica && (
-                  <button
-                    disabled={atualizandoCotacao}
-                    onClick={async () => {
-                      setAtualizandoCotacao(true);
-                      const resultado = await atualizarCotacaoAgora(ativo.id);
-                      if (resultado.error) {
-                        setAtualizandoCotacao(false);
-                        toast.error(resultado.error);
-                        return;
-                      }
-                      await atualizarTudo();
-                      setAtualizandoCotacao(false);
-                      toast.success("Cotação atualizada.");
-                    }}
-                    className="text-xs text-accent hover:underline disabled:opacity-50"
-                  >
-                    {atualizandoCotacao ? "Buscando cotação..." : "Atualizar agora"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
           {ativo.transacoes.length > 0 && (
             <div className="card p-5">
               <h2 className="text-base font-medium text-ink mb-1">Rentabilidade histórica</h2>
@@ -550,10 +612,6 @@ export default function AtivoDetalheView({
                 mostrarLinhaZero
               />
             </div>
-          )}
-
-          {checklist && checklist.grupo && (
-            <SecaoChecklist ativoId={ativo.id} checklist={checklist} onAtualizado={atualizarChecklist} />
           )}
 
           <div className="card p-5">
@@ -713,17 +771,20 @@ function Metrica({
   );
 }
 
-/** Card do Preço Justo (Graham/Bazin) — ver docs/MAPA-DE-DADOS.md §8.66. */
+/** Card do Preço Justo (Graham/Bazin) — ver docs/MAPA-DE-DADOS.md §8.65. */
 function PrecoJustoCard({
   label,
   formula,
   precoJusto,
   precoAtual,
+  moeda,
 }: {
   label: string;
   formula: string;
   precoJusto: number | null;
   precoAtual: number;
+  /** Moeda do checklist do ativo (ver docs/MAPA-DE-DADOS.md §8.66) — internacional nunca converte, só rotula US$ em vez de R$. */
+  moeda: "BRL" | "USD";
 }) {
   const upside = precoJusto !== null && precoAtual > 0 ? ((precoJusto - precoAtual) / precoAtual) * 100 : null;
   return (
@@ -738,23 +799,14 @@ function PrecoJustoCard({
           ?
         </span>
       </p>
-      <p className="text-ink text-base font-medium mt-0.5">{precoJusto !== null ? formatarMoeda(precoJusto) : "—"}</p>
+      <p className="text-ink text-base font-medium mt-0.5">
+        {precoJusto !== null ? formatarMoedaEm(precoJusto, moeda) : "—"}
+      </p>
       {upside !== null && (
         <p className={`text-xs mt-0.5 ${upside >= 0 ? "text-success" : "text-danger"}`}>
           {upside >= 0 ? "↑" : "↓"} {Math.abs(upside).toFixed(1)}% vs. preço atual
         </p>
       )}
-    </div>
-  );
-}
-
-function MetricaPendente({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <div>
-      <p className="text-faint">{label}</p>
-      <button onClick={onClick} className="text-faint hover:text-ink underline underline-offset-2">
-        Defina o preço atual
-      </button>
     </div>
   );
 }
@@ -779,7 +831,7 @@ function SecaoChecklist({
 
   return (
     <div className="card p-5">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-1">
         <h2 className="text-base font-medium text-ink">
           Checklist comparativo {checklist.grupo === "acoes" ? "— Ações/ETF" : "— FIIs"}
         </h2>
@@ -790,6 +842,18 @@ function SecaoChecklist({
           Comparar com outros →
         </Link>
       </div>
+
+      {/* Idade/fonte do preço usado no cálculo (ver docs/MAPA-DE-DADOS.md
+          §8.66) — mesma informação já mostrada no card Posição, reaproveitada
+          aqui pra não deixar P/L, P/VP, Preço Justo etc. baseados num preço
+          desatualizado sem aviso nesta seção. */}
+      <p className="text-xs text-faint mb-3">
+        Calculado com o preço {formatarMoedaEm(checklist.precoAtual, checklist.moeda)} ·{" "}
+        {formatarTempoRelativo(checklist.precoAtualizadoEm)}
+        {checklist.precoFonte === "yahoo_finance" && " · fonte: Yahoo Finance"}
+        {checklist.precoFonte === "manual" && " · fonte: manual"}
+        {checklist.moeda === "USD" && " · ativo internacional: valores em dólar, sem conversão"}
+      </p>
 
       {checklist.resultados.length === 0 && (
         <div className="rounded-md bg-surface-2 border border-border px-3 py-2 mb-3 text-xs text-muted">
@@ -843,19 +907,21 @@ function SecaoChecklist({
 
       {checklist.grupo === "acoes" && checklist.checklistAcao && (
         <div className="pt-3 border-t border-border mb-4">
-          <p className="text-faint text-xs mb-2">Preço Justo (métodos clássicos de valuation — ver docs/MAPA-DE-DADOS.md §8.66)</p>
+          <p className="text-faint text-xs mb-2">Preço Justo (métodos clássicos de valuation — ver docs/MAPA-DE-DADOS.md §8.65)</p>
           <div className="grid grid-cols-2 gap-3">
             <PrecoJustoCard
               label="Graham"
               formula="√(22,5 × LPA × VPA)"
               precoJusto={checklist.checklistAcao.precoJustoGraham}
               precoAtual={checklist.precoAtual}
+              moeda={checklist.moeda}
             />
             <PrecoJustoCard
               label="Bazin"
               formula="Dividendo anual por ação (últimos 12 meses) / 0,06"
               precoJusto={checklist.checklistAcao.precoJustoBazin}
               precoAtual={checklist.precoAtual}
+              moeda={checklist.moeda}
             />
           </div>
           <p className="text-[11px] text-faint mt-2 leading-relaxed">
@@ -895,7 +961,7 @@ function SecaoChecklist({
           O Dividend Yield acima pode estar inflado: o pagamento de {formatarData(checklist.avisoYieldAtipico.data)}
           {" "}({formatarMoeda(checklist.avisoYieldAtipico.valor)}) foi mais que o dobro da mediana dos demais
           pagamentos dos últimos 12 meses ({formatarMoeda(checklist.avisoYieldAtipico.medianaDemais)}) — pode ser
-          um provento extraordinário, não o pagamento recorrente do ativo (ver docs/MAPA-DE-DADOS.md §8.68).
+          um provento extraordinário, não o pagamento recorrente do ativo (ver docs/MAPA-DE-DADOS.md §8.65).
         </div>
       )}
 
@@ -1180,7 +1246,7 @@ function PainelMonitoramento({
 }: {
   grupo: "acoes" | "fiis";
   resultados: ResultadoTrimestralItem[];
-  /** P/L, P/VP, PEG Ratio e Dividend Yield históricos — só ações, calculado no servidor (precisa do preço na época). Ver §8.67. */
+  /** P/L, P/VP, PEG Ratio e Dividend Yield históricos — só ações, calculado no servidor (precisa do preço na época). Ver §8.65. */
   serieChecklistComPreco?: PontoSerieAcaoComPreco[] | null;
 }) {
   if (resultados.length < 2) return null;
@@ -1201,7 +1267,7 @@ function PainelMonitoramento({
             { label: "Dívida Bruta/EBITDA", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dividaBrutaEbitda })), formatar: (v: number) => `${v.toFixed(2)}x` },
             { label: "Liquidez Corrente", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.liquidezCorrente })), formatar: (v: number) => `${v.toFixed(2)}x` },
           ];
-          // P/L, P/VP, PEG Ratio e Dividend Yield históricos (§8.67) —
+          // P/L, P/VP, PEG Ratio e Dividend Yield históricos (§8.65) —
           // dependem do preço na época, por isso vêm prontos do servidor em
           // vez de recalculados aqui (calcularSerieChecklistAcao não tem
           // acesso à série de preço diário).

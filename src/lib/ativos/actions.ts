@@ -24,6 +24,7 @@ import {
   type AvisoProventoAtipico,
 } from "./checklist-estatisticas";
 import { obterSeriePrecoAtivo } from "./preco-historico";
+import { agregarProventosPorCotaNaJanela } from "./proventos-janela";
 import type {
   AtivoForm,
   ClassificacaoForm,
@@ -954,14 +955,27 @@ export type ChecklistAtivoView = {
   tipo: TipoAtivo;
   ticker: string;
   precoAtual: number;
+  /**
+   * Moeda em que `precoAtual` (e, por consequência, P/L, P/VP, Dividend
+   * Yield e Preço Justo) estão expressos — ver docs/MAPA-DE-DADOS.md §8.66.
+   * `internacional` nunca é convertido pra BRL aqui (diferente do
+   * `precoAtual` de `AtivoResumo`/Posição, que já converte via `cambio.ts`):
+   * o Guilherme sempre lança os dados trimestrais (LPA/VPA/lucro etc.) de
+   * ativos internacionais em USD, então converter só o preço quebraria a
+   * proporção dos índices — a correção certa é rotular, não converter.
+   */
+  moeda: "BRL" | "USD";
+  /** Idade/fonte do preço usado no Checklist — mesmos campos já mostrados no card Posição (ver §8.66), pra não deixar P/L/Preço Justo baseados em preço velho sem aviso nesta seção. */
+  precoAtualizadoEm: string | null;
+  precoFonte: "yahoo_finance" | "manual" | null;
   grupo: GrupoChecklist;
   checklistAcao: ChecklistAcao | null;
   checklistFii: ChecklistFii | null;
   saldoAcionistas: string;
   resultados: ResultadoTrimestralItem[];
-  /** Histórico de P/L, P/VP, PEG Ratio e Dividend Yield por trimestre — só ações/ETF/internacional. Ver §8.67. */
+  /** Histórico de P/L, P/VP, PEG Ratio e Dividend Yield por trimestre — só ações/ETF/internacional. Ver §8.65. */
   serieChecklistComPreco: PontoSerieAcaoComPreco[] | null;
-  /** Aviso quando um provento fora do padrão está inflando o Dividend Yield mostrado. Ver §8.68. */
+  /** Aviso quando um provento fora do padrão está inflando o Dividend Yield mostrado. Ver §8.65. */
   avisoYieldAtipico: AvisoProventoAtipico | null;
 };
 
@@ -1033,7 +1047,7 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
   const [{ data: ativo }, { data: resultadosRaw }, { data: checklistRaw }, { data: proventosRaw }] = await Promise.all([
     supabase
       .from("ativos")
-      .select("id, ticker, tipo, preco_atual")
+      .select("id, ticker, tipo, preco_atual, preco_atualizado_em, preco_fonte")
       .eq("id", ativoId)
       .eq("profile_id", user.id)
       .maybeSingle(),
@@ -1080,32 +1094,22 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
       dividaBruta: r.dividaBruta,
       numeroAcoes: r.numeroAcoes,
     }));
-    // Dividendo anual por ação, só pro Preço Justo de Bazin (§8.66) — soma
-    // `valor_por_cota` (não `valor_total`, que depende de quanto o usuário
-    // tinha na época) dos proventos com data de pagamento nos últimos 12
-    // meses. Registros antigos sem valor_por_cota preenchido são ignorados
-    // nessa soma (o campo é opcional — ver comentário na coluna, schema.sql).
-    const hojeAcao = new Date();
-    const hojeAcaoStr = hojeAcao.toISOString().slice(0, 10);
-    const umAnoAtrasAcao = new Date(hojeAcao);
-    umAnoAtrasAcao.setDate(umAnoAtrasAcao.getDate() - 365);
-    const cutoffAcao = umAnoAtrasAcao.toISOString().slice(0, 10);
-    const proventosComValorPorCota = (proventosRaw ?? []).filter(
-      (p): p is typeof p & { valor_por_cota: number } =>
-        p.valor_por_cota !== null && p.data >= cutoffAcao && p.data <= hojeAcaoStr
+    // Dividendo anual por ação, só pro Preço Justo de Bazin e pro Dividend
+    // Yield (§8.65) — soma `valor_por_cota` (não `valor_total`, que
+    // depende de quanto o usuário tinha na época) dos proventos pagos nos
+    // últimos 12 meses. Centralizado em `proventos-janela.ts` (§8.65/§8.66) —
+    // mesma função usada pelo ramo de FIIs logo abaixo, já que os dois
+    // grupos passaram a usar o mesmo critério.
+    const { total: dividendoAnualPorAcao, pontos: pontosJanelaAcao } = agregarProventosPorCotaNaJanela(
+      proventosRaw ?? [],
+      365
     );
-    const dividendoAnualPorAcao =
-      proventosComValorPorCota.length > 0
-        ? proventosComValorPorCota.reduce((s, p) => s + Number(p.valor_por_cota), 0)
-        : null;
     checklistAcao = calcularChecklistAcao(pontos, precoAtual, dividendoAnualPorAcao);
-    // Aviso de yield inflado (§8.68) — mesma janela/valores do Dividend
+    // Aviso de yield inflado (§8.65) — mesma janela/valores do Dividend
     // Yield acima (valor_por_cota, não valor_total).
-    avisoYieldAtipico = detectarProventoAtipico(
-      proventosComValorPorCota.map((p) => ({ data: p.data, valor: Number(p.valor_por_cota) }))
-    );
+    avisoYieldAtipico = detectarProventoAtipico(pontosJanelaAcao);
 
-    // Histórico de P/L, P/VP, PEG Ratio e Dividend Yield (§8.67) — reaproveita
+    // Histórico de P/L, P/VP, PEG Ratio e Dividend Yield (§8.65) — reaproveita
     // a série de preço diário que o app já guarda por ativo (mesma fonte do
     // gráfico de rentabilidade histórica, `obterSeriePrecoAtivo`), sem
     // depender de nenhuma API paga nova. Só calculamos com pelo menos 2
@@ -1128,21 +1132,20 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
       valorAvaliacaoImoveis: r.valorAvaliacaoImoveis,
       valorM2Aluguel: r.valorM2Aluguel,
     }));
-    const hoje = new Date();
-    const hojeStr = hoje.toISOString().slice(0, 10);
-    const umAnoAtras = new Date(hoje);
-    umAnoAtras.setDate(umAnoAtras.getDate() - 365);
-    const cutoff = umAnoAtras.toISOString().slice(0, 10);
-    // Ver docs/MAPA-DE-DADOS.md §8.23: sem o limite superior (`<= hojeStr`),
-    // um provento provisionado (data_pagamento no futuro) contaria como
-    // "recebido nos últimos 12 meses" — DY do FII inflado por dinheiro que
-    // ainda não caiu na conta.
-    const pagamentosFii = (proventosRaw ?? []).filter((p) => p.data >= cutoff && p.data <= hojeStr);
-    const proventosUltimos12Meses = pagamentosFii.reduce((s, p) => s + Number(p.valor_total), 0);
-    checklistFii = calcularChecklistFii(pontos, precoAtual, proventosUltimos12Meses);
-    // Aviso de yield inflado (§8.68) — mesma janela/valores do Dividend
-    // Yield do FII acima (valor_total, a base já usada por esse cálculo).
-    avisoYieldAtipico = detectarProventoAtipico(pagamentosFii.map((p) => ({ data: p.data, valor: Number(p.valor_total) })));
+    // Dividend Yield do FII (§8.65/§8.66): migrado pra `valor_por_cota`, mesmo
+    // critério de Ações (antes usava `valor_total`, sensível a aporte/resgate
+    // de cotas no período — ver docs/MAPA-DE-DADOS.md, item "assimetria DY
+    // Ações vs FIIs"). Mesma função centralizada do ramo de Ações acima.
+    // Lançamentos antigos sem `valor_por_cota` preenchido fazem o DY (e o
+    // aviso de atípico) virarem "—" em vez de usar `valor_total` como antes
+    // — efeito colateral aceito conscientemente na migração, documentado no
+    // mapa de dados.
+    const { total: proventosUltimos12MesesPorCota, pontos: pontosJanelaFii } = agregarProventosPorCotaNaJanela(
+      proventosRaw ?? [],
+      365
+    );
+    checklistFii = calcularChecklistFii(pontos, precoAtual, proventosUltimos12MesesPorCota);
+    avisoYieldAtipico = detectarProventoAtipico(pontosJanelaFii);
   }
 
   return {
@@ -1150,6 +1153,11 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
     tipo,
     ticker: ativo.ticker,
     precoAtual,
+    // Ativo internacional nunca converte aqui (ver comentário do tipo
+    // ChecklistAtivoView, §8.66) — só rotulamos.
+    moeda: tipo === "internacional" ? "USD" : "BRL",
+    precoAtualizadoEm: ativo.preco_atualizado_em,
+    precoFonte: (ativo.preco_fonte as "yahoo_finance" | "manual" | null) ?? null,
     grupo,
     checklistAcao,
     checklistFii,

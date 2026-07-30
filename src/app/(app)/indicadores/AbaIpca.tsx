@@ -102,7 +102,7 @@ export default function AbaIpca({ ipca, onAtualizar }: { ipca: IpcaView; onAtual
 
 function BlocoCards({ ipca }: { ipca: IpcaView }) {
   return (
-    // Escala 1920x1080 (§8.67): lg:grid-cols-6 — 6 cards fixos numa linha só.
+    // Escala 1920x1080 (§8.64): lg:grid-cols-6 — 6 cards fixos numa linha só.
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <div className="card p-3">
         <p className="text-xs text-faint">IPCA do mês</p>

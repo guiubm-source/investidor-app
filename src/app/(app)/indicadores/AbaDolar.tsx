@@ -79,7 +79,7 @@ function BlocoCards({ dolar, onAtualizar }: { dolar: DolarView; onAtualizar: () 
         </button>
       </div>
 
-      {/* Escala 1920x1080 (§8.67): lg:grid-cols-6 — 12 cards fixos, 6 cabem
+      {/* Escala 1920x1080 (§8.64): lg:grid-cols-6 — 12 cards fixos, 6 cabem
           numa linha só sem sobra em 1600px, ficando em 2 linhas de 6 em vez
           de 4 linhas de 3. */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
