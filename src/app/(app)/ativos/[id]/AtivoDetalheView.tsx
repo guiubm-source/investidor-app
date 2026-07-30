@@ -65,6 +65,7 @@ import {
   gerarInsightsAcao,
   gerarInsightsFii,
   type Insight,
+  type PontoSerieAcaoComPreco,
 } from "@/lib/ativos/checklist-estatisticas";
 
 const rotuloTipo = (valor: string) => TIPOS_ATIVO.find((t) => t.valor === valor)?.label ?? valor;
@@ -664,7 +665,11 @@ export default function AtivoDetalheView({
             resultados={checklist.resultados}
             onAtualizado={atualizarChecklist}
           />
-          <PainelMonitoramento grupo={checklist.grupo} resultados={checklist.resultados} />
+          <PainelMonitoramento
+            grupo={checklist.grupo}
+            resultados={checklist.resultados}
+            serieChecklistComPreco={checklist.serieChecklistComPreco}
+          />
         </>
       )}
     </div>
@@ -675,14 +680,28 @@ function Metrica({
   label,
   valor,
   destaque,
+  formula,
 }: {
   label: string;
   valor: string;
   destaque?: "success" | "danger";
+  /** Fórmula do indicador, mostrada em tooltip nativo (title) — ver docs/MAPA-DE-DADOS.md §8.65. */
+  formula?: string;
 }) {
   return (
     <div>
-      <p className="text-faint">{label}</p>
+      <p className="text-faint flex items-center gap-1">
+        {label}
+        {formula && (
+          <span
+            title={`FÓRMULA: ${formula}`}
+            className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-border text-faint text-[9px] leading-none cursor-help shrink-0"
+            aria-label={`Fórmula de ${label}: ${formula}`}
+          >
+            ?
+          </span>
+        )}
+      </p>
       <p
         className={
           destaque === "success" ? "text-success" : destaque === "danger" ? "text-danger" : "text-ink"
@@ -690,6 +709,41 @@ function Metrica({
       >
         {valor}
       </p>
+    </div>
+  );
+}
+
+/** Card do Preço Justo (Graham/Bazin) — ver docs/MAPA-DE-DADOS.md §8.66. */
+function PrecoJustoCard({
+  label,
+  formula,
+  precoJusto,
+  precoAtual,
+}: {
+  label: string;
+  formula: string;
+  precoJusto: number | null;
+  precoAtual: number;
+}) {
+  const upside = precoJusto !== null && precoAtual > 0 ? ((precoJusto - precoAtual) / precoAtual) * 100 : null;
+  return (
+    <div className="rounded-md border border-border p-3">
+      <p className="text-faint flex items-center gap-1">
+        Preço Justo ({label})
+        <span
+          title={`FÓRMULA: ${formula}`}
+          className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-border text-faint text-[9px] leading-none cursor-help shrink-0"
+          aria-label={`Fórmula: ${formula}`}
+        >
+          ?
+        </span>
+      </p>
+      <p className="text-ink text-base font-medium mt-0.5">{precoJusto !== null ? formatarMoeda(precoJusto) : "—"}</p>
+      {upside !== null && (
+        <p className={`text-xs mt-0.5 ${upside >= 0 ? "text-success" : "text-danger"}`}>
+          {upside >= 0 ? "↑" : "↓"} {Math.abs(upside).toFixed(1)}% vs. preço atual
+        </p>
+      )}
     </div>
   );
 }
@@ -745,35 +799,103 @@ function SecaoChecklist({
       )}
 
       {checklist.grupo === "acoes" && checklist.checklistAcao && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-sm mb-4">
-          <Metrica label="P/L" valor={formatarRatio(checklist.checklistAcao.pl)} />
-          <Metrica label="PEG Ratio" valor={formatarRatio(checklist.checklistAcao.pegRatio)} />
-          <Metrica label="P/VP" valor={formatarRatio(checklist.checklistAcao.pvp)} />
-          <Metrica label="ROE" valor={formatarPct(checklist.checklistAcao.roePct)} />
-          <Metrica label="ROA" valor={formatarPct(checklist.checklistAcao.roaPct)} />
-          <Metrica label="ROIC" valor={formatarPct(checklist.checklistAcao.roicPct)} />
-          <Metrica label="Mg. Bruta" valor={formatarPct(checklist.checklistAcao.margemBrutaPct)} />
-          <Metrica label="Mg. Lucro" valor={formatarPct(checklist.checklistAcao.margemLucroPct)} />
-          <Metrica label="DL/PL" valor={formatarRatio(checklist.checklistAcao.dlPl)} />
-          <Metrica label="Dívida Bruta/EBITDA" valor={formatarRatio(checklist.checklistAcao.dividaBrutaEbitda)} />
-          <Metrica label="Liq. Corrente" valor={formatarRatio(checklist.checklistAcao.liquidezCorrente)} />
-          <Metrica label="CAGR EBIT (5 anos)" valor={formatarPct(checklist.checklistAcao.cagrEbit5AnosPct)} />
-          <Metrica label="CAGR Lucro (5 anos)" valor={formatarPct(checklist.checklistAcao.cagrLucro5AnosPct)} />
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-sm mb-4">
+          <Metrica label="P/L" valor={formatarRatio(checklist.checklistAcao.pl)} formula="Preço atual / LPA (lucro por ação, 12 meses)" />
+          <Metrica
+            label="PEG Ratio"
+            valor={formatarRatio(checklist.checklistAcao.pegRatio)}
+            formula="P/L / [(LPA últimos 4 trimestres / LPA dos 4 trimestres anteriores) − 1] × 100"
+          />
+          <Metrica label="P/VP" valor={formatarRatio(checklist.checklistAcao.pvp)} formula="Preço atual / VPA (valor patrimonial por ação)" />
+          <Metrica
+            label="Dividend Yield"
+            valor={formatarPct(checklist.checklistAcao.dividendYieldPct)}
+            formula="Dividendo por ação pago nos últimos 12 meses / Preço atual"
+          />
+          <Metrica label="ROE" valor={formatarPct(checklist.checklistAcao.roePct)} formula="Lucro líquido (12 meses) / Patrimônio líquido" />
+          <Metrica label="ROA" valor={formatarPct(checklist.checklistAcao.roaPct)} formula="Lucro líquido (12 meses) / Ativo total" />
+          <Metrica
+            label="ROIC"
+            valor={formatarPct(checklist.checklistAcao.roicPct)}
+            formula="(EBIT − Impostos, 12 meses) / (Dívida líquida + Patrimônio líquido) — aproximação com alíquota efetiva padrão de 34%"
+          />
+          <Metrica label="Mg. Bruta" valor={formatarPct(checklist.checklistAcao.margemBrutaPct)} formula="Lucro bruto (12 meses) / Receita líquida (12 meses)" />
+          <Metrica label="Mg. Lucro" valor={formatarPct(checklist.checklistAcao.margemLucroPct)} formula="Lucro líquido (12 meses) / Receita líquida (12 meses)" />
+          <Metrica label="DL/PL" valor={formatarRatio(checklist.checklistAcao.dlPl)} formula="Dívida líquida / Patrimônio líquido" />
+          <Metrica
+            label="Dívida Bruta/EBITDA"
+            valor={formatarRatio(checklist.checklistAcao.dividaBrutaEbitda)}
+            formula="Dívida bruta / EBITDA (12 meses)"
+          />
+          <Metrica label="Liq. Corrente" valor={formatarRatio(checklist.checklistAcao.liquidezCorrente)} formula="Ativo circulante / Passivo circulante" />
+          <Metrica
+            label="CAGR EBIT (5 anos)"
+            valor={formatarPct(checklist.checklistAcao.cagrEbit5AnosPct)}
+            formula="[(EBIT atual / EBIT de 5 anos atrás) ^ (1/5) − 1] × 100"
+          />
+          <Metrica
+            label="CAGR Lucro (5 anos)"
+            valor={formatarPct(checklist.checklistAcao.cagrLucro5AnosPct)}
+            formula="[(Lucro líquido atual / Lucro líquido de 5 anos atrás) ^ (1/5) − 1] × 100"
+          />
+        </div>
+      )}
+
+      {checklist.grupo === "acoes" && checklist.checklistAcao && (
+        <div className="pt-3 border-t border-border mb-4">
+          <p className="text-faint text-xs mb-2">Preço Justo (métodos clássicos de valuation — ver docs/MAPA-DE-DADOS.md §8.66)</p>
+          <div className="grid grid-cols-2 gap-3">
+            <PrecoJustoCard
+              label="Graham"
+              formula="√(22,5 × LPA × VPA)"
+              precoJusto={checklist.checklistAcao.precoJustoGraham}
+              precoAtual={checklist.precoAtual}
+            />
+            <PrecoJustoCard
+              label="Bazin"
+              formula="Dividendo anual por ação (últimos 12 meses) / 0,06"
+              precoJusto={checklist.checklistAcao.precoJustoBazin}
+              precoAtual={checklist.precoAtual}
+            />
+          </div>
+          <p className="text-[11px] text-faint mt-2 leading-relaxed">
+            Isso não é recomendação de compra/venda — são só duas fórmulas clássicas de valuation, não
+            uma previsão. Graham usa o valor patrimonial no cálculo, então tende a subestimar empresas
+            com pouco patrimônio físico (ex.: tecnologia). Bazin assume 6% de yield fixo como &quot;justo&quot;,
+            premissa que não se ajusta à Selic atual.
+          </p>
         </div>
       )}
 
       {checklist.grupo === "fiis" && checklist.checklistFii && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-sm mb-4">
-          <Metrica label="P/VP" valor={formatarRatio(checklist.checklistFii.pvp)} />
+          <Metrica label="P/VP" valor={formatarRatio(checklist.checklistFii.pvp)} formula="Preço atual / Valor patrimonial por cota" />
           <Metrica label="Nº Negócios/mês" valor={formatarNumero(checklist.checklistFii.numeroNegociosMes, 0)} />
           <Metrica label="Vacância Financeira" valor={formatarPct(checklist.checklistFii.vacanciaFinanceiraPct)} />
           <Metrica label="Vacância Física" valor={formatarPct(checklist.checklistFii.vacanciaFisicaPct)} />
-          <Metrica label="Cap Rate" valor={formatarPct(checklist.checklistFii.capRatePct)} />
-          <Metrica label="Dividend Yield (12m)" valor={formatarPct(checklist.checklistFii.dividendYieldPct)} />
+          <Metrica
+            label="Cap Rate"
+            valor={formatarPct(checklist.checklistFii.capRatePct)}
+            formula="(Receita imobiliária do trimestre × 4) / Valor de avaliação dos imóveis — anualização aproximada"
+          />
+          <Metrica
+            label="Dividend Yield (12m)"
+            valor={formatarPct(checklist.checklistFii.dividendYieldPct)}
+            formula="Proventos pagos nos últimos 12 meses (data-com) / Preço atual"
+          />
           <Metrica
             label="Valor m²/Aluguel"
             valor={checklist.checklistFii.valorM2Aluguel !== null ? formatarMoeda(checklist.checklistFii.valorM2Aluguel) : "—"}
           />
+        </div>
+      )}
+
+      {checklist.avisoYieldAtipico && (
+        <div className="rounded-md bg-danger-soft border border-border px-3 py-2 mb-4 text-xs text-danger">
+          O Dividend Yield acima pode estar inflado: o pagamento de {formatarData(checklist.avisoYieldAtipico.data)}
+          {" "}({formatarMoeda(checklist.avisoYieldAtipico.valor)}) foi mais que o dobro da mediana dos demais
+          pagamentos dos últimos 12 meses ({formatarMoeda(checklist.avisoYieldAtipico.medianaDemais)}) — pode ser
+          um provento extraordinário, não o pagamento recorrente do ativo (ver docs/MAPA-DE-DADOS.md §8.68).
         </div>
       )}
 
@@ -1054,9 +1176,12 @@ type GraficoMetrica = {
 function PainelMonitoramento({
   grupo,
   resultados,
+  serieChecklistComPreco,
 }: {
   grupo: "acoes" | "fiis";
   resultados: ResultadoTrimestralItem[];
+  /** P/L, P/VP, PEG Ratio e Dividend Yield históricos — só ações, calculado no servidor (precisa do preço na época). Ver §8.67. */
+  serieChecklistComPreco?: PontoSerieAcaoComPreco[] | null;
 }) {
   if (resultados.length < 2) return null;
 
@@ -1066,7 +1191,7 @@ function PainelMonitoramento({
     grupo === "acoes"
       ? (() => {
           const serie = calcularSerieChecklistAcao(resultados);
-          return [
+          const graficosBase: GraficoMetrica[] = [
             { label: "ROE", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roePct })), formatar: (v: number) => `${v.toFixed(1)}%` },
             { label: "ROA", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roaPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
             { label: "ROIC", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.roicPct })), formatar: (v: number) => `${v.toFixed(1)}%` },
@@ -1076,6 +1201,19 @@ function PainelMonitoramento({
             { label: "Dívida Bruta/EBITDA", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dividaBrutaEbitda })), formatar: (v: number) => `${v.toFixed(2)}x` },
             { label: "Liquidez Corrente", dados: serie.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.liquidezCorrente })), formatar: (v: number) => `${v.toFixed(2)}x` },
           ];
+          // P/L, P/VP, PEG Ratio e Dividend Yield históricos (§8.67) —
+          // dependem do preço na época, por isso vêm prontos do servidor em
+          // vez de recalculados aqui (calcularSerieChecklistAcao não tem
+          // acesso à série de preço diário).
+          if (serieChecklistComPreco && serieChecklistComPreco.length >= 2) {
+            graficosBase.push(
+              { label: "P/L", dados: serieChecklistComPreco.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.pl })), formatar: (v: number) => `${v.toFixed(2)}x` },
+              { label: "P/VP", dados: serieChecklistComPreco.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.pvp })), formatar: (v: number) => `${v.toFixed(2)}x` },
+              { label: "PEG Ratio", dados: serieChecklistComPreco.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.pegRatio })), formatar: (v: number) => `${v.toFixed(2)}x` },
+              { label: "Dividend Yield", dados: serieChecklistComPreco.map((p) => ({ anoTrimestre: p.anoTrimestre, valor: p.dividendYieldPct })), formatar: (v: number) => `${v.toFixed(1)}%` }
+            );
+          }
+          return graficosBase;
         })()
       : (() => {
           const serie = calcularSerieChecklistFii(resultados);
@@ -1091,9 +1229,9 @@ function PainelMonitoramento({
     <div className="card p-5">
       <h2 className="text-base font-medium text-ink mb-1">Painel de monitoramento</h2>
       <p className="text-xs text-muted mb-3">
-        Evolução dos índices independentes de preço + insights automáticos gerados a partir do histórico
-        lançado (sequências de alta/baixa e recordes). P/L, P/VP, PEG Ratio e Dividend Yield ficam de
-        fora por dependerem do preço atual, sem histórico de preço por trimestre.
+        Evolução dos índices do checklist + insights automáticos gerados a partir do histórico lançado
+        (sequências de alta/baixa e recordes). P/L, P/VP, PEG Ratio e Dividend Yield usam o preço de
+        fechamento no fim de cada trimestre (ou o último preço conhecido antes disso), não o preço de hoje.
       </p>
 
       {insights.length > 0 && (

@@ -8145,6 +8145,112 @@ registrado individualmente em cada seção acima — futura verificação visual
 via screenshot é o único passo que falta pra considerar subir a fonte
 nelas também.
 
+### 8.65 Análise competitiva + 4 melhorias baratas na página do Ativo (2026-07-30)
+
+**Contexto:** a pedido do Guilherme, foi feita uma análise competitiva de
+4 apps do setor (Status Invest, Meus Dividendos, MyProfit, Investidor10),
+primeiro em visão geral (`analise-competitiva.md`) e depois aprofundada em
+layout/cores/KPIs, fórmulas de cálculo e falhas conhecidas
+(`analise-competitiva-aprofundada.md`, ambos entregues como arquivos na raiz
+do repo, fora de `docs/`). A análise concluiu que o motor de cálculo do
+checklist já cobre quase todas as mesmas fórmulas dos concorrentes — a
+lacuna era de **transparência de UI** (sem fórmula visível) e de **2
+indicadores derivados ausentes** (Preço Justo, gráficos históricos
+dependentes de preço), não uma reformulação do motor. Guilherme pediu
+"EXECUTE" os 4 itens identificados como baratos/gratuitos, confirmando via
+pergunta única fazer **todos os 4, um de cada vez com checkpoint**.
+
+**1) Tooltip com fórmula nos indicadores do checklist — feito:**
+
+- `Metrica` (componente compartilhado da página do Ativo) ganhou prop
+  opcional `formula?: string`, renderizando um ícone de ajuda com `title`
+  nativo do HTML (sem biblioteca nova — mantém a restrição "de graça" do
+  pedido). Prop opcional e sem valor default quebra nada nos ~5 outros usos
+  do componente que não passam `formula` (ex.: seção Posição).
+- Todos os cards de Ações e FIIs no `SecaoChecklist` ganharam a fórmula
+  exata usada pelo motor (`checklist-estatisticas.ts`) como `formula=`.
+
+**2) Preço Justo (Graham e Bazin) — feito, só para Ações/ETF:**
+
+- `ChecklistAcao` (em `checklist-estatisticas.ts`) ganhou 3 campos:
+  `precoJustoGraham` (√(22,5 × LPA × VPA), onde 22,5 = P/L máx. (15) ×
+  P/VP máx. (1,5) — método clássico de Graham), `precoJustoBazin`
+  (dividendo anual por ação / 0,06 — premissa fixa de 6% de yield, método
+  clássico de Bazin, não se ajusta à Selic) e `dividendYieldPct` (novo
+  campo — Ações/ETF **não tinham** Dividend Yield no checklist antes desta
+  rodada, só FIIs; foi acrescentado porque o item 3, abaixo, precisava dele
+  histórico).
+- `calcularChecklistAcao` ganhou 3º parâmetro opcional
+  `dividendoAnualPorAcao`, calculado em `actions.ts` a partir da soma do
+  campo `valor_por_cota` dos proventos dos últimos 365 dias — **não** de
+  `valor_total`, porque `valor_total` é proporcional à posição do usuário
+  na época de cada pagamento (mudaria o yield calculado toda vez que ele
+  comprasse/vendesse), enquanto `valor_por_cota` é o valor por ação/cota
+  pago pela empresa, independente da posição do Guilherme.
+- UI: novo componente `PrecoJustoCard` (2 cards lado a lado + disclaimer
+  de que são heurísticas clássicas simplificadas, não recomendação) logo
+  abaixo da grade de checklist de Ações.
+
+**3) Gráfico histórico por indicador do checklist — feito, escopo
+estendido a pedido do Guilherme:**
+
+- O "Painel de Monitoramento" já existente cobria histórico só dos
+  indicadores **independentes de preço** (ROE, margens, DL/PL etc.). Ao
+  perceber isso no meio da implementação, perguntei se considerava o item
+  concluído ou queria estender a P/L, P/VP, PEG Ratio e Dividend Yield
+  históricos (dependentes de preço, mas viáveis de graça porque o app já
+  guarda série diária de preço via `obterSeriePrecoAtivo`). Guilherme
+  escolheu estender.
+- Nova função pura `calcularSerieChecklistAcaoComPreco` em
+  `checklist-estatisticas.ts`: para cada trimestre já calculado, busca o
+  preço na data de fim do trimestre (`precoEmOuAntes` — último preço
+  diário conhecido *na ou antes* da data, mesma aproximação que Status
+  Invest/Investidor10 usam) e o dividendo dos 12 meses anteriores àquela
+  data (`dividendoAnualEmData`), derivando P/L, P/VP, PEG Ratio e DY
+  históricos "como teriam sido calculados na época".
+- `actions.ts`: `obterChecklistAtivo` passa a chamar essa função (só pra
+  Ações/ETF/internacional, só quando há ≥2 pontos de resultado trimestral)
+  e expõe `serieChecklistComPreco` em `ChecklistAtivoView`.
+- UI: `PainelMonitoramento` ganhou os 4 gráficos extras quando a série tem
+  ≥2 pontos; texto explicativo atualizado (antes dizia que esses 4 índices
+  "ficam de fora", agora descreve a aproximação de preço de fim de
+  trimestre).
+- **Efeito colateral desejado:** como Dividend Yield passou a existir pra
+  Ações, também foi adicionado como linha na tela de Comparar
+  (`ComparativoView.tsx`, `TabelaAcoes`).
+
+**4) Aviso de yield inflado por evento atípico — feito, Ações e FIIs:**
+
+- Nova função pura `detectarProventoAtipico` em `checklist-estatisticas.ts`:
+  heurística estatística **inventada para este app** (não há padrão de
+  mercado documentado nos concorrentes analisados) — mediana dos
+  pagamentos dos últimos 12 meses; se o pagamento mais recente for mais do
+  que o dobro da mediana dos demais (exige ≥3 pagamentos no período pra
+  ter mediana confiável), retorna um aviso com a data, o valor do
+  pagamento e a mediana dos demais.
+- `actions.ts`: chamado tanto pro ramo de Ações (usando `valor_por_cota`,
+  mesmo motivo do item 2 — não distorcer por mudança de posição) quanto
+  pro de FIIs (usando `valor_total`, já que FIIs não tinham distinção
+  `valor_por_cota`/`valor_total` no cálculo de DY prévio). Resultado exposto
+  como `avisoYieldAtipico` em `ChecklistAtivoView`.
+- UI: banner de aviso (reaproveita os tokens `bg-danger-soft`/`text-danger`
+  já existentes — não foi criado token novo de "warning" depois de
+  confirmar por grep que não existe um em `globals.css`) logo após a grade
+  de checklist, aplicável tanto a Ações quanto a FIIs.
+
+**Deliberadamente fora do escopo desta rodada** (identificados na análise
+mas não escolhidos por Guilherme para esta execução — todos exigem decisão
+dele antes de qualquer trabalho): metas financeiras, rebalanceamento com
+sugestão de ação, agenda de proventos (calendário futuro), alerta de preço,
+arquivo de declaração IR importável na Receita, isentômetro (widget
+dedicado), alocação histórica (linha do tempo), integração automática com
+corretora/B3, multi-carteira, dashboard customizável, chat IA.
+
+**Verificação:** `tsc --noEmit` limpo após cada um dos 4 itens; `wc -l -c`
+e contagem de bytes nulos OK nos 4 arquivos tocados
+(`checklist-estatisticas.ts`, `actions.ts`, `AtivoDetalheView.tsx`,
+`ComparativoView.tsx`).
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

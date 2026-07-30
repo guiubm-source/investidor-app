@@ -140,6 +140,7 @@ function TabelaAcoes({ dados }: { dados: ChecklistAtivoView[] }) {
     { label: "P/L", valor: (c) => formatarRatio(c.checklistAcao?.pl ?? null) },
     { label: "PEG Ratio", valor: (c) => formatarRatio(c.checklistAcao?.pegRatio ?? null) },
     { label: "P/VP", valor: (c) => formatarRatio(c.checklistAcao?.pvp ?? null) },
+    { label: "Dividend Yield", valor: (c) => formatarPct(c.checklistAcao?.dividendYieldPct ?? null) },
     { label: "ROE", valor: (c) => formatarPct(c.checklistAcao?.roePct ?? null) },
     { label: "ROA", valor: (c) => formatarPct(c.checklistAcao?.roaPct ?? null) },
     { label: "ROIC", valor: (c) => formatarPct(c.checklistAcao?.roicPct ?? null) },

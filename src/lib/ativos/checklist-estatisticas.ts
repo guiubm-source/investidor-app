@@ -51,6 +51,12 @@ export type ChecklistAcao = {
   liquidezCorrente: number | null;
   cagrEbit5AnosPct: number | null;
   cagrLucro5AnosPct: number | null;
+  /** Preço Justo de Graham: √(22,5 × LPA × VPA) — ver docs/MAPA-DE-DADOS.md §8.66. */
+  precoJustoGraham: number | null;
+  /** Preço Justo de Bazin: dividendo anual por ação / 0,06 — ver docs/MAPA-DE-DADOS.md §8.66. */
+  precoJustoBazin: number | null;
+  /** Dividendo anual por ação (12 meses) / preço — mesmo dividendoAnualPorAcao usado no Preço Justo de Bazin. Ver §8.66/§8.67. */
+  dividendYieldPct: number | null;
 };
 
 export type ChecklistFii = {
@@ -110,7 +116,12 @@ function valorTrimestresAtras<T extends { anoTrimestre: string }>(
  * "DL/EBIT" = Dívida Bruta/EBITDA, TTM = 4 trimestres mais recentes, CAGR
  * = 20 trimestres de distância exata).
  */
-export function calcularChecklistAcao(pontos: PontoTrimestralAcao[], precoAtual: number | null): ChecklistAcao {
+export function calcularChecklistAcao(
+  pontos: PontoTrimestralAcao[],
+  precoAtual: number | null,
+  /** Soma dos proventos por ação (campo `valor_por_cota`) pagos nos últimos 12 meses — só usado pro Preço Justo de Bazin. */
+  dividendoAnualPorAcao: number | null = null
+): ChecklistAcao {
   const desc = ordenarDesc(pontos);
   const ultimo = desc[0] as PontoTrimestralAcao | undefined;
 
@@ -176,6 +187,26 @@ export function calcularChecklistAcao(pontos: PontoTrimestralAcao[], precoAtual:
       ? (Math.pow(lucroAtual / lucroAtras20, 1 / 5) - 1) * 100
       : null;
 
+  // Preço Justo de Graham: VI = √(22,5 × LPA × VPA). O 22,5 vem de multiplicar
+  // o P/L máximo aceitável por Graham (15) pelo P/VP máximo aceitável (1,5).
+  // Só faz sentido com LPA e VPA positivos (empresa lucrativa e patrimônio
+  // líquido positivo) — negativo ou zero vira null, igual ao resto do
+  // checklist. Ver docs/MAPA-DE-DADOS.md §8.66.
+  const precoJustoGraham = lpaTTM !== null && lpaTTM > 0 && vpa !== null && vpa > 0 ? Math.sqrt(22.5 * lpaTTM * vpa) : null;
+
+  // Preço Justo de Bazin: dividendo anual por ação / 0,06 (6% de yield "justo",
+  // premissa fixa do método — não se ajusta à Selic). Ver docs/MAPA-DE-DADOS.md §8.66.
+  const precoJustoBazin =
+    dividendoAnualPorAcao !== null && dividendoAnualPorAcao > 0 ? dividendoAnualPorAcao / 0.06 : null;
+
+  // Dividend Yield da ação (não existia no checklist até aqui — só o FII
+  // tinha; ver docs/MAPA-DE-DADOS.md §8.67). Mesmo insumo do Preço Justo de
+  // Bazin, só que dividido pelo preço em vez de por 0,06.
+  const dividendYieldPct =
+    dividendoAnualPorAcao !== null && precoAtual !== null && precoAtual > 0
+      ? (dividendoAnualPorAcao / precoAtual) * 100
+      : null;
+
   return {
     pl,
     pegRatio,
@@ -190,6 +221,9 @@ export function calcularChecklistAcao(pontos: PontoTrimestralAcao[], precoAtual:
     liquidezCorrente,
     cagrEbit5AnosPct,
     cagrLucro5AnosPct,
+    precoJustoGraham,
+    precoJustoBazin,
+    dividendYieldPct,
   };
 }
 
@@ -272,6 +306,94 @@ export function calcularSerieChecklistAcao(pontos: PontoTrimestralAcao[]): Ponto
         dlPl: c.dlPl,
         dividaBrutaEbitda: c.dividaBrutaEbitda,
         liquidezCorrente: c.liquidezCorrente,
+      };
+    })
+    .reverse();
+}
+
+// ---------------------------------------------------------------------------
+// Histórico de P/L, P/VP, PEG Ratio e Dividend Yield (2026-07-30, §8.67) —
+// os 4 índices que calcularSerieChecklistAcao deixa de fora por dependerem do
+// preço. Diferente do resto do painel, aqui cruzamos o LPA/VPA de cada
+// trimestre com o preço de FECHAMENTO NO FIM DAQUELE TRIMESTRE (não o preço
+// de hoje), usando a série de preço diário que o app já guarda por ativo
+// (`obterSeriePrecoAtivo`) — sem nenhuma fonte de dado nova ou paga. Mesma
+// aproximação de "trimestre = data de fim de trimestre" que Status
+// Invest/Investidor10 usam nos gráficos históricos deles.
+// ---------------------------------------------------------------------------
+
+export type PontoSerieAcaoComPreco = PontoSerieAcao & {
+  pl: number | null;
+  pvp: number | null;
+  pegRatio: number | null;
+  dividendYieldPct: number | null;
+};
+
+const MES_DIA_FIM_TRIMESTRE: Record<string, string> = { "1": "03-31", "2": "06-30", "3": "09-30", "4": "12-31" };
+
+/** "2026-Q2" -> "2026-06-30". */
+function dataFimTrimestre(anoTrimestre: string): string {
+  const [anoStr, tStr] = anoTrimestre.split("-Q");
+  return `${anoStr}-${MES_DIA_FIM_TRIMESTRE[tStr]}`;
+}
+
+/** Último preço conhecido em ou antes de `data` (backward-fill) — null se a série só começar depois dela. Espera `precosAsc` já ordenado por data crescente. */
+function precoEmOuAntes(precosAsc: { data: string; preco: number }[], data: string): number | null {
+  let resultado: number | null = null;
+  for (const p of precosAsc) {
+    if (p.data > data) break;
+    resultado = p.preco;
+  }
+  return resultado;
+}
+
+/** Soma de `valorPorCota` pago nos 365 dias terminando em `dataFim` (inclusive) — null se não houver nenhum provento nessa janela. */
+function dividendoAnualEmData(proventos: { data: string; valorPorCota: number }[], dataFim: string): number | null {
+  const fim = new Date(`${dataFim}T00:00:00Z`);
+  const inicio = new Date(fim);
+  inicio.setUTCDate(inicio.getUTCDate() - 365);
+  const inicioStr = inicio.toISOString().slice(0, 10);
+  const soma = proventos
+    .filter((p) => p.data > inicioStr && p.data <= dataFim)
+    .reduce((s, p) => s + p.valorPorCota, 0);
+  return soma > 0 ? soma : null;
+}
+
+/**
+ * Evolução trimestral de P/L, P/VP, PEG Ratio e Dividend Yield — ver
+ * cabeçalho da seção acima. `precosDiarios` e `proventosPorAcao` vêm de
+ * `obterSeriePrecoAtivo` e da tabela `proventos` (campo `valor_por_cota`,
+ * não `valor_total` — precisamos do valor POR AÇÃO, não do total recebido
+ * pelo usuário, que varia com quanto ele tinha guardado na época).
+ */
+export function calcularSerieChecklistAcaoComPreco(
+  pontos: PontoTrimestralAcao[],
+  precosDiarios: { data: string; preco: number }[],
+  proventosPorAcao: { data: string; valorPorCota: number }[]
+): PontoSerieAcaoComPreco[] {
+  const desc = ordenarDesc(pontos);
+  const precosAsc = [...precosDiarios].sort((a, b) => (a.data < b.data ? -1 : 1));
+
+  return desc
+    .map((ponto, i) => {
+      const dataFim = dataFimTrimestre(ponto.anoTrimestre);
+      const precoNaData = precoEmOuAntes(precosAsc, dataFim);
+      const dividendoNaData = dividendoAnualEmData(proventosPorAcao, dataFim);
+      const c = calcularChecklistAcao(desc.slice(i), precoNaData, dividendoNaData);
+      return {
+        anoTrimestre: ponto.anoTrimestre,
+        roePct: c.roePct,
+        roaPct: c.roaPct,
+        roicPct: c.roicPct,
+        margemBrutaPct: c.margemBrutaPct,
+        margemLucroPct: c.margemLucroPct,
+        dlPl: c.dlPl,
+        dividaBrutaEbitda: c.dividaBrutaEbitda,
+        liquidezCorrente: c.liquidezCorrente,
+        pl: c.pl,
+        pvp: c.pvp,
+        pegRatio: c.pegRatio,
+        dividendYieldPct: c.dividendYieldPct,
       };
     })
     .reverse();
@@ -477,4 +599,40 @@ export function gerarInsightsFii(pontos: PontoTrimestralFii[]): Insight[] {
       (v) => v.toFixed(0)
     ),
   ].slice(0, 6);
+}
+
+// ---------------------------------------------------------------------------
+// Aviso de yield inflado por evento atípico (2026-07-30, §8.68) — um
+// provento fora do padrão dentro da janela de 12 meses (ex.: venda de imóvel
+// de um FII, dividendo extraordinário de uma ação) pode inflar o Dividend
+// Yield mostrado sem isso ficar claro pro usuário. Ver docs/MAPA-DE-DADOS.md.
+// ---------------------------------------------------------------------------
+
+export type AvisoProventoAtipico = {
+  data: string;
+  valor: number;
+  medianaDemais: number;
+};
+
+/**
+ * Detecta um pagamento muito maior que os demais dentro da janela de 12
+ * meses usada pro Dividend Yield. Heurística própria deste app, documentada
+ * aqui (não é uma convenção de mercado): exige pelo menos 3 pagamentos na
+ * janela — com menos que isso não dá pra separar "atípico" de "normal" com
+ * alguma confiança — e o maior precisa ser mais que o dobro da MEDIANA dos
+ * demais (mediana, não média, pra não deixar o próprio maior valor puxar a
+ * régua de comparação pra cima).
+ */
+export function detectarProventoAtipico(pagamentos: { data: string; valor: number }[]): AvisoProventoAtipico | null {
+  if (pagamentos.length < 3) return null;
+  const ordenadosDesc = [...pagamentos].sort((a, b) => b.valor - a.valor);
+  const maior = ordenadosDesc[0];
+  const demaisAsc = ordenadosDesc
+    .slice(1)
+    .map((p) => p.valor)
+    .sort((a, b) => a - b);
+  const meio = Math.floor(demaisAsc.length / 2);
+  const medianaDemais = demaisAsc.length % 2 === 0 ? (demaisAsc[meio - 1] + demaisAsc[meio]) / 2 : demaisAsc[meio];
+  if (medianaDemais <= 0 || maior.valor <= medianaDemais * 2) return null;
+  return { data: maior.data, valor: maior.valor, medianaDemais };
 }
