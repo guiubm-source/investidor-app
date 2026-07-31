@@ -25,6 +25,7 @@ import {
 } from "./checklist-estatisticas";
 import { obterSeriePrecoAtivo } from "./preco-historico";
 import { agregarProventosPorCotaNaJanela } from "./proventos-janela";
+import type { IndicadoresStatusInvest } from "./status-invest";
 import type {
   AtivoForm,
   ClassificacaoForm,
@@ -977,6 +978,16 @@ export type ChecklistAtivoView = {
   serieChecklistComPreco: PontoSerieAcaoComPreco[] | null;
   /** Aviso quando um provento fora do padrão está inflando o Dividend Yield mostrado. Ver §8.65. */
   avisoYieldAtipico: AvisoProventoAtipico | null;
+  /**
+   * Indicadores de mercado do Status Invest (EV/EBITDA, EV/EBIT, P/EBITDA,
+   * P/EBIT, P/Ativo, P/SR, P/Cap. Giro, P/Ativo Circ. Líq., Passivos/Ativos,
+   * Giro Ativos, CAGR Receita 5 anos) — fase 1, só `tipo = 'acao'` (ver
+   * docs/MAPA-DE-DADOS.md §8.67). `null` quando o ativo não é Ação ainda não
+   * classificação coberta, ou quando o cron ainda não rodou pra esse ticker.
+   */
+  indicadoresMercado: IndicadoresStatusInvest | null;
+  /** Data (AAAA-MM-DD) da linha mais recente usada em `indicadoresMercado` — pra mostrar "atualizado há X dias" com `formatarTempoRelativo`. */
+  indicadoresMercadoData: string | null;
 };
 
 /** Tipos que usam o template de checklist "Ações/ETF/Internacional". */
@@ -1077,6 +1088,8 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
   let checklistFii: ChecklistFii | null = null;
   let serieChecklistComPreco: PontoSerieAcaoComPreco[] | null = null;
   let avisoYieldAtipico: AvisoProventoAtipico | null = null;
+  let indicadoresMercado: IndicadoresStatusInvest | null = null;
+  let indicadoresMercadoData: string | null = null;
 
   if (grupo === "acoes") {
     const pontos: PontoTrimestralAcao[] = resultados.map((r) => ({
@@ -1120,6 +1133,44 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
         .filter((p): p is typeof p & { valor_por_cota: number } => p.valor_por_cota !== null)
         .map((p) => ({ data: p.data, valorPorCota: Number(p.valor_por_cota) }));
       serieChecklistComPreco = calcularSerieChecklistAcaoComPreco(pontos, precosDiarios, proventosPorAcao);
+    }
+
+    // Indicadores de mercado do Status Invest (§8.67) — fase 1, só
+    // tipo=acao (não etf/internacional, que também caem no grupo "acoes"
+    // do checklist manual mas têm páginas/estrutura diferentes no Status
+    // Invest, fora do escopo desta fase). Lê a linha mais recente gravada
+    // pelo cron diário — nunca busca ao vivo aqui dentro da Server Action,
+    // mesmo padrão de `precoAtual` (que também só lê o que o cron gravou).
+    if (tipo === "acao") {
+      const { data: linhaIndicador } = await supabase
+        .from("ativo_indicador_status_invest_diario")
+        .select(
+          "data, ev_ebitda, ev_ebit, p_ebitda, p_ebit, p_ativo, psr, p_capital_giro, p_ativo_circulante_liq, passivos_ativos, giro_ativos, cagr_receita_5anos_pct"
+        )
+        .eq("tipo", "acao")
+        .eq("ticker", ativo.ticker)
+        .order("data", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (linhaIndicador) {
+        indicadoresMercado = {
+          evEbitda: linhaIndicador.ev_ebitda !== null ? Number(linhaIndicador.ev_ebitda) : null,
+          evEbit: linhaIndicador.ev_ebit !== null ? Number(linhaIndicador.ev_ebit) : null,
+          pEbitda: linhaIndicador.p_ebitda !== null ? Number(linhaIndicador.p_ebitda) : null,
+          pEbit: linhaIndicador.p_ebit !== null ? Number(linhaIndicador.p_ebit) : null,
+          pAtivo: linhaIndicador.p_ativo !== null ? Number(linhaIndicador.p_ativo) : null,
+          psr: linhaIndicador.psr !== null ? Number(linhaIndicador.psr) : null,
+          pCapitalGiro: linhaIndicador.p_capital_giro !== null ? Number(linhaIndicador.p_capital_giro) : null,
+          pAtivoCirculanteLiq:
+            linhaIndicador.p_ativo_circulante_liq !== null ? Number(linhaIndicador.p_ativo_circulante_liq) : null,
+          passivosAtivos: linhaIndicador.passivos_ativos !== null ? Number(linhaIndicador.passivos_ativos) : null,
+          giroAtivos: linhaIndicador.giro_ativos !== null ? Number(linhaIndicador.giro_ativos) : null,
+          cagrReceita5AnosPct:
+            linhaIndicador.cagr_receita_5anos_pct !== null ? Number(linhaIndicador.cagr_receita_5anos_pct) : null,
+        };
+        indicadoresMercadoData = linhaIndicador.data;
+      }
     }
   } else if (grupo === "fiis") {
     const pontos: PontoTrimestralFii[] = resultados.map((r) => ({
@@ -1165,6 +1216,8 @@ export async function obterChecklistAtivo(ativoId: string): Promise<ChecklistAti
     resultados: resultados.sort((a, b) => (a.anoTrimestre < b.anoTrimestre ? 1 : -1)),
     serieChecklistComPreco,
     avisoYieldAtipico,
+    indicadoresMercado,
+    indicadoresMercadoData,
   };
 }
 

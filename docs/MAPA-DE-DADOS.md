@@ -8392,6 +8392,129 @@ OK em `checklist-estatisticas.ts`, `actions.ts`, `proventos-janela.ts`
 (novo), `AtivoDetalheView.tsx`, `ProventosView.tsx`, `AbaDolar.tsx`,
 `AbaIpca.tsx`, `AbaSelic.tsx`.
 
+### 8.67 Indicadores de mercado do Status Invest — fase 1, Ações (2026-07-31)
+
+**Contexto:** Guilherme pediu pra investigar se dava pra puxar dados de
+`statusinvest.com.br` (telas de busca avançada e de indicador individual,
+ex. `acoes/wege3`) e aplicar na página do Ativo. Fez sentido em cima do
+checklist comparativo (§8.10): o Status Invest expõe 11 indicadores de
+mercado que o app ainda não calcula porque dependem de linhas de
+balanço que o usuário não lança manualmente (EV/EBITDA, EV/EBIT, P/EBITDA,
+P/EBIT, P/Ativo, P/SR, P/Cap. Giro, P/Ativo Circ. Líq., Passivos/Ativos,
+Giro Ativos, CAGR Receita 5 anos) — ao contrário do resto do checklist
+(P/L, P/VP, ROE, ROIC...), que é sempre recalculado a partir de
+`ativo_resultado_trimestral` lançado à mão.
+
+**Investigação técnica (antes de decidir a arquitetura):**
+
+1. Testou-se se a grade "INDICADORES DA WEGE3" está no HTML puro (sem JS)
+   via fetch simples, ou só aparece depois de hidratação client-side — isso
+   decide se um `fetch()` simples no cron da Vercel basta (mesmo padrão do
+   Yahoo Finance, §8.10) ou se seria preciso um browser headless (infra bem
+   mais pesada). Resultado: **confirmado ao vivo, via `fetch()` executado
+   dentro do próprio Chrome na página real** — a grade vem pronta no HTML,
+   com os valores exatos dentro de `<strong class="value ...">`, e cada
+   indicador tem um botão de gráfico histórico com atributo
+   `data-key="{chave}"` (ex. `ev_ebitda`, `p_sr`, `giro_ativos`,
+   `receitas_cagr5`) logo depois do valor — chave estável e mais confiável
+   pra parsing do que casar pelo texto do rótulo. Duas chaves têm erro de
+   digitação no PRÓPRIO Status Invest (`p_ebita` em vez de `p_ebitda`,
+   `p_capitlgiro` em vez de `p_capitalgiro`) — mantidas assim de propósito no
+   parser, é a chave real usada no site.
+2. A página de FII (testada em `hglg11`) tem estrutura bem diferente —
+   cards soltos em vez de uma grade única, seção "DEMONSTRAÇÕES
+   TRIMESTRAIS" bem mais granular que o checklist simplificado de FII do
+   app. Guilherme confirmou (`"Ainda os dois, mas em fases separadas"`) que
+   FIIs ficam pra depois, só depois do parser de Ações validado.
+
+**Decisões (perguntas 1 a 1, protocolo §1):**
+
+- **Cadência:** automática via cron periódico, diário, junto com o horário
+  da cotação (não em toda visita à página, não sob demanda do usuário).
+- **Escopo temporal:** Guilherme queria inicialmente guardar o valor "de
+  cada trimestre" pra comparação histórica — não é diretamente possível de
+  graça (o Status Invest só expõe o TTM/anual atual, não isola trimestres
+  passados de graça). Renegociado pra **Opção A: TTM ao longo do tempo** —
+  o cron grava uma linha NOVA por dia (não sobrescreve), então mesmo só
+  tendo o valor "de hoje" em cada execução, a série ao longo dos dias vira
+  o histórico de comparação que ele queria.
+- **Escopo de tipo:** fase 1 só Ações (`tipo = 'acao'`) — ETF/internacional
+  também caem no grupo "acoes" do checklist manual, mas têm páginas/estrutura
+  diferentes no Status Invest, fora do escopo desta fase. FIIs em fase
+  separada (ver item 2 acima).
+- **Escopo de indicadores:** só os 11 que o app ainda não tem (não duplicar
+  P/L, P/VP, ROE, ROIC etc., que já vêm do motor manual do checklist).
+- **Onde guardar:** tabela **compartilhada por (tipo, ticker)** — mesmo
+  padrão de `ativo_preco_diario_mercado` (§8.12) — porque é dado de mercado
+  objetivo (o EV/EBITDA de WEGE3 é o mesmo pra qualquer usuário que tenha
+  WEGE3), não pessoal. Evita duplicar a mesma linha pra cada usuário com o
+  mesmo ativo.
+- **Onde exibir:** dentro do `SecaoChecklist` já existente na página do
+  Ativo (não um card novo separado) — um sub-bloco logo após a grade
+  principal de indicadores, com rótulo "Indicadores de mercado (Status
+  Invest)" + idade da última atualização, mesmo padrão de proveniência já
+  usado no preço (`precoFonte`/`formatarTempoRelativo`, §8.66).
+
+**Implementação:**
+
+- `supabase/schema.sql` seção 28 — nova tabela
+  `ativo_indicador_status_invest_diario` (`tipo` restrito a `'acao'` por
+  enquanto, `ticker`, `data`, os 11 campos numéricos, `unique(tipo, ticker,
+  data)`). RLS: só SELECT pra autenticados: escrita só via service role
+  (cron). Índice em `(tipo, ticker, data)`.
+- `lib/ativos/status-invest.ts` (novo) — `buscarIndicadoresStatusInvest(ticker)`:
+  faz `fetch()` simples em `statusinvest.com.br/acoes/{ticker}` (sem
+  browser headless), acha cada indicador buscando a última tag
+  `<strong class="value...">` que aparece ANTES do
+  `data-key="{chave}"` correspondente no HTML, e faz parse do formato
+  numérico brasileiro (`31,42` → `31.42`, remove separador de milhar,
+  tolera sufixo `%`). Nunca lança exceção — cada campo ausente vira `null`
+  isoladamente (empresa sem dívida, por exemplo, pode não ter um indicador
+  de endividamento), e a função inteira só retorna erro se NENHUM dos 11
+  foi reconhecido (sinal de que o layout do Status Invest mudou). Mesmo
+  espírito de tolerância a falha de `yahoo-finance.ts`.
+- `lib/ativos/atualizar-indicadores-status-invest.ts` (novo) — motor do
+  cron: lista tickers únicos de `tipo=acao` de todos os usuários, busca
+  indicadores um a um (pausa de 300ms entre requisições — cautela extra
+  porque, ao contrário do endpoint do Yahoo, isso é scraping de HTML de um
+  site sem API pública, mais sensível a bloqueio por bot), e faz upsert por
+  `(tipo, ticker, data=hoje)` — uma linha nova por dia, nunca sobrescreve
+  dias anteriores.
+- `app/api/cron/status-invest/route.ts` (novo) — mesmo esquema de auth
+  (`CRON_SECRET`) e formato de resposta do cron de cotações
+  (`api/cron/cotacoes/route.ts`, §8.49). **Não** entrou no `vercel.json`
+  nativo (o plano Hobby já usa o único slot nativo pro cron do Dólar) — mesmo
+  esquema do cron de cotações, precisa ser agendado externamente via cron-job.org
+  (Guilherme configura na conta dele, apontando pra
+  `/api/cron/status-invest?secret=SEU_CRON_SECRET`, 1x/dia).
+- `lib/ativos/actions.ts` — `ChecklistAtivoView` ganhou `indicadoresMercado:
+  IndicadoresStatusInvest | null` e `indicadoresMercadoData: string | null`.
+  `obterChecklistAtivo`, dentro do ramo `tipo === "acao"`, lê a linha mais
+  recente de `ativo_indicador_status_invest_diario` pro ticker do ativo
+  (nunca busca ao vivo dentro da Server Action — só lê o que o cron já
+  gravou, mesmo padrão de `preco_atual`).
+- `AtivoDetalheView.tsx` — novo sub-bloco dentro do `SecaoChecklist`
+  (grupo "acoes", só quando `tipo === "acao"` e há dado), logo após a grade
+  principal de indicadores e antes do bloco de Preço Justo: título
+  "Indicadores de mercado (Status Invest)" + `formatarTempoRelativo`, e uma
+  grade com os 11 `Metrica` (CAGR Receita formatado como `%`, os outros 10
+  como razão `Nx`).
+
+**Limitação assumida conscientemente:** o parser depende da estrutura
+exata do HTML do Status Invest (nomes de classe, atributo `data-key`) — se
+o site mudar o layout, o cron passa a falhar silenciosamente pra aquele
+ticker (registra a falha em `falhas[]`, não quebra os outros). Não há
+teste automatizado de regressão de parsing (scraping de terceiro não dá
+pra fixar com `expect toBe`) — a mitigação é o cron reportar `falhas` na
+resposta JSON, auditável manualmente se o Guilherme notar indicadores
+sumindo.
+
+**Verificação:** `tsc --noEmit` limpo; `wc -l -c` e contagem de bytes nulos
+OK em `schema.sql`, `status-invest.ts` (novo),
+`atualizar-indicadores-status-invest.ts` (novo),
+`api/cron/status-invest/route.ts` (novo), `actions.ts`,
+`AtivoDetalheView.tsx`.
+
 ## 9. Convenções a preservar
 
 - Toda action em arquivo `"use server"` precisa ser **async** mesmo que não

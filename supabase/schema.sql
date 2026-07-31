@@ -1786,3 +1786,62 @@ create policy "empresas_all_own" on public.empresas
 
 alter table public.ativos add column if not exists empresa_id uuid references public.empresas (id) on delete set null;
 create index if not exists idx_ativos_empresa_id on public.ativos (empresa_id);
+
+-- =====================================================================
+-- 28. Indicadores externos do Status Invest (fase 1 — Ações) — decisões em
+--     docs/MAPA-DE-DADOS.md §8.67 (2026-07-31). Guilherme pediu pra puxar os
+--     indicadores de mercado que o checklist manual ainda não cobre
+--     (EV/EBITDA, EV/EBIT, P/EBITDA, P/EBIT, P/Ativo, P/SR, P/Cap. Giro,
+--     P/Ativo Circ. Líq., Passivos/Ativos, Giro Ativos, CAGR Receita 5 anos)
+--     direto do statusinvest.com.br/acoes/{ticker}, via cron diário (mesmo
+--     horário da cotação).
+--
+--     COMPARTILHADA por (tipo, ticker) — mesmo padrão de
+--     ativo_preco_diario_mercado (seção 15) e indicador_dolar_diario: esses
+--     11 números são dado de mercado objetivo (o EV/EBITDA de WEGE3 é o
+--     mesmo pra qualquer usuário que tenha WEGE3), não pessoal — uma tabela
+--     por ticker evita duplicar o mesmo dado pra cada usuário que tem o
+--     mesmo ativo. Escrita só via cron (service role, bypassa RLS); leitura
+--     liberada pra qualquer usuário autenticado.
+--
+--     Fase 1 cobre só `tipo = 'acao'` — a página de Ações do Status Invest
+--     tem uma grade única de indicadores que carrega pronta no HTML (sem
+--     JS), confirmado via teste ao vivo em wege3. FIIs ficam pra uma fase
+--     separada (Guilherme confirmou): a página de FII tem estrutura
+--     diferente (cards soltos, não uma grade única) e por isso não reaproveita
+--     o mesmo parser sem adaptação.
+--
+--     Guarda uma linha por dia (não sobrescreve o dia anterior) de propósito
+--     — Guilherme pediu explicitamente pra manter histórico pra comparação/
+--     monitoramento ao longo do tempo (não só o valor mais recente).
+-- =====================================================================
+create table if not exists public.ativo_indicador_status_invest_diario (
+  id                     uuid primary key default gen_random_uuid(),
+  tipo                   text not null check (tipo in ('acao')),
+  ticker                 text not null,
+  data                   date not null,
+  ev_ebitda              numeric(14,4),
+  ev_ebit                numeric(14,4),
+  p_ebitda               numeric(14,4),
+  p_ebit                 numeric(14,4),
+  p_ativo                numeric(14,4),
+  psr                    numeric(14,4),
+  p_capital_giro         numeric(14,4),
+  p_ativo_circulante_liq numeric(14,4),
+  passivos_ativos        numeric(14,4),
+  giro_ativos            numeric(14,4),
+  cagr_receita_5anos_pct numeric(14,4),
+  created_at             timestamptz not null default now(),
+  unique (tipo, ticker, data)
+);
+
+comment on table public.ativo_indicador_status_invest_diario is 'Série diária de indicadores de mercado extraídos do statusinvest.com.br por (tipo, ticker) — compartilhada entre todos os usuários que têm o mesmo ativo, mesmo padrão de ativo_preco_diario_mercado (ver docs/MAPA-DE-DADOS.md §8.67). Fase 1: só tipo=acao. Escrita só via cron (service role); leitura liberada pra usuários autenticados. Qualquer coluna pode ficar null quando o Status Invest não expõe aquele indicador pro ativo (ex.: empresas sem dívida têm Dív. líquida/EBITDA indefinido) — o parser tolera ausência campo a campo, não falha a linha inteira.';
+
+alter table public.ativo_indicador_status_invest_diario enable row level security;
+
+drop policy if exists "ativo_indicador_status_invest_diario_select_authenticated" on public.ativo_indicador_status_invest_diario;
+create policy "ativo_indicador_status_invest_diario_select_authenticated" on public.ativo_indicador_status_invest_diario
+  for select using (auth.role() = 'authenticated');
+
+create index if not exists idx_ativo_indicador_status_invest_diario_lookup
+  on public.ativo_indicador_status_invest_diario (tipo, ticker, data);

@@ -905,6 +905,36 @@ function SecaoChecklist({
         </div>
       )}
 
+      {/* Indicadores de mercado do Status Invest (fase 1 — Ações, ver
+          docs/MAPA-DE-DADOS.md §8.67) — complementam o checklist manual
+          acima com indicadores que dependem de linhas de balanço que o app
+          ainda não pede pra lançar à mão (EV/EBITDA, EV/EBIT, P/EBITDA,
+          P/EBIT, P/Ativo, P/SR, P/Cap. Giro, P/Ativo Circ. Líq.,
+          Passivos/Ativos, Giro Ativos, CAGR Receita 5 anos). Só aparece pra
+          tipo=acao (não etf/internacional) e só depois que o cron diário
+          já rodou pelo menos 1x pra esse ticker. */}
+      {checklist.grupo === "acoes" && checklist.tipo === "acao" && checklist.indicadoresMercado && (
+        <div className="pt-3 border-t border-border mb-4">
+          <p className="text-faint text-xs mb-2">
+            Indicadores de mercado (Status Invest) ·{" "}
+            {formatarTempoRelativo(checklist.indicadoresMercadoData)}
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-sm">
+            <Metrica label="EV/EBITDA" valor={formatarRatio(checklist.indicadoresMercado.evEbitda)} />
+            <Metrica label="EV/EBIT" valor={formatarRatio(checklist.indicadoresMercado.evEbit)} />
+            <Metrica label="P/EBITDA" valor={formatarRatio(checklist.indicadoresMercado.pEbitda)} />
+            <Metrica label="P/EBIT" valor={formatarRatio(checklist.indicadoresMercado.pEbit)} />
+            <Metrica label="P/Ativo" valor={formatarRatio(checklist.indicadoresMercado.pAtivo)} />
+            <Metrica label="P/SR" valor={formatarRatio(checklist.indicadoresMercado.psr)} />
+            <Metrica label="P/Cap. Giro" valor={formatarRatio(checklist.indicadoresMercado.pCapitalGiro)} />
+            <Metrica label="P/Ativo Circ. Líq." valor={formatarRatio(checklist.indicadoresMercado.pAtivoCirculanteLiq)} />
+            <Metrica label="Passivos/Ativos" valor={formatarRatio(checklist.indicadoresMercado.passivosAtivos)} />
+            <Metrica label="Giro Ativos" valor={formatarRatio(checklist.indicadoresMercado.giroAtivos)} />
+            <Metrica label="CAGR Receita (5 anos)" valor={formatarPct(checklist.indicadoresMercado.cagrReceita5AnosPct)} />
+          </div>
+        </div>
+      )}
+
       {checklist.grupo === "acoes" && checklist.checklistAcao && (
         <div className="pt-3 border-t border-border mb-4">
           <p className="text-faint text-xs mb-2">Preço Justo (métodos clássicos de valuation — ver docs/MAPA-DE-DADOS.md §8.65)</p>
